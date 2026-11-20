@@ -44,13 +44,14 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from nox.node.gate import NodeGate
-from nox.node.hands import NodeHands, hand_tools
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.protocol import NoxCallMeta
-from nox.node.receipts import ReceiptSigner, ReceiptVerifier, normalize_arguments
-from nox.node.registry import NodeEntry, NodeRegistry
-from nox.node.tools import NoArgs, NodeRefusal, NodeTool, default_tools
+from nox.node.device.gate import NodeGate
+from nox.node.device.hands import NodeHands, hand_tools
+from nox.node.device.tools import NodeRefusal, NodeTool, default_tools
+from nox.node.hub.registry import NodeEntry, NodeRegistry
+from nox.node.wire.arguments import NoArgs
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
+from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier, normalize_arguments
 from nox.sandbox import Result, SandboxMode
 from nox.tools.executor import CALL_DECISION, CallDecision
 
@@ -381,7 +382,7 @@ class SimulatedNode:
         """The screen, desktop and media tools with fakes behind them (none on an old checkout)."""
         try:
             from nox.desktop.computer_use import DryRunSender  # noqa: PLC0415
-            from nox.node.world import GameLock, World, default_games, world_tools  # noqa: PLC0415
+            from nox.node.device.world import GameLock, World, default_games, world_tools  # noqa: PLC0415
         except ImportError:
             return {}
         profile = self.profile
@@ -489,7 +490,7 @@ class SimulatedNode:
 
     def _confirm_here(self, name: str, meta: NoxCallMeta) -> str | None:
         """High risk: the person at the device decides; a headless device trusts only a person's
-        yes on the core, and only when its manifest says so (as `nox.node.agent` does)."""
+        yes on the core, and only when its manifest says so (as `nox.node.device.agent` does)."""
         if self.profile.confirmer:
             self.dialogs.append(name)
             return "denied_on_device"  # the person at the device in this world always says no

@@ -10,7 +10,7 @@ What it serves, and nothing else:
   * `POST /api/node/pair` - a new `nox node` redeems a one-time code for a client certificate
     (`nox.node`). Not a browser route: a request with an `Origin` header is refused.
   * `/pet/` - the built pet page (static files, no credential in them), for a paired node's
-    overlay relay (`nox.node.overlay`).
+    overlay relay (`nox.node.device.overlay`).
 
 **Unclaimed Nox-OS** (`ClaimSurface`, `nox.noxos.claim`): a Raspberry Pi image that has no owner
 yet serves nothing but its claim - `/claim/` (a small page of its own), `GET`/`POST /api/claim`,
@@ -71,7 +71,7 @@ from nox.core.logging import get_logger
 from nox.ipc.server import LAN_BRIDGE_HEADER, LAN_PEER_HEADER, WS_PATH
 from nox.lan.devices import CLIENT_PREFIX, LanDevices
 from nox.lan.tls import TlsMaterial, permitted_address
-from nox.node.protocol import NodePairRequest
+from nox.node.wire.protocol import NodePairRequest
 
 log = get_logger(__name__)
 

@@ -222,7 +222,7 @@ export function nodeKind(node: NodeInfo): 'board' | 'computer' {
 
 /**
  * The calls this device's audit rows stand for: the core writes `device:<id> ...` into the target
- * of every call it routed there (`nox.node.router`).
+ * of every call it routed there (`nox.node.hub.router`).
  */
 export function isNodeTarget(target: string, nodeId: string): boolean {
   return target === `device:${nodeId}` || target.startsWith(`device:${nodeId} `);

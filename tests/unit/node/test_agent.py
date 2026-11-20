@@ -15,14 +15,14 @@ from pydantic import BaseModel, ConfigDict
 
 from nox.lan.tls import TlsMaterial
 from nox.mcp.client import McpClientError
-from nox.node.agent import NodeAgent
-from nox.node.gate import NodeGate
-from nox.node.home import NodeHome, NodeIdentity
-from nox.node.keystore import NodeKeyStore
-from nox.node.listener import NodeListener, NodeSession
-from nox.node.manifest import NodeManifest, save_manifest
-from nox.node.pairing import NodePairing
-from nox.node.tools import NodeTool, default_tools
+from nox.node.device.agent import NodeAgent
+from nox.node.device.gate import NodeGate
+from nox.node.device.home import NodeHome, NodeIdentity
+from nox.node.device.keystore import NodeKeyStore
+from nox.node.device.tools import NodeTool, default_tools
+from nox.node.hub.listener import NodeListener, NodeSession
+from nox.node.hub.pairing import NodePairing
+from nox.node.wire.manifest import NodeManifest, save_manifest
 from nox.security.audit import SqliteAuditLog
 from tests.unit.node.support import key_pem, pair_node
 
@@ -320,7 +320,7 @@ async def test_an_outdated_core_protocol_offers_only_system_info(
 def test_max_risk_in_node_yaml_lowers_the_ceiling(tmp_path: Path) -> None:
     path = tmp_path / "node.yaml"
     save_manifest(path, NodeManifest(max_risk="read"))
-    from nox.node.manifest import load_manifest
+    from nox.node.wire.manifest import load_manifest
 
     gate = NodeGate(default_tools(FakeNotifier()), load_manifest(path), None)
     assert [t.name for t in gate.offered()] == ["system.info"]

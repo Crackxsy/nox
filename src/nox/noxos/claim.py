@@ -385,7 +385,7 @@ def revoke_everything(
 
     Kept: what Nox knows and the owner configured - memory, conversations, settings, stored
     secrets of the owner's accounts. Returns what was revoked, per store (never a secret)."""
-    from nox.node.repo import NodeRepository  # noqa: PLC0415 - only a reclaim needs it
+    from nox.node.hub.repo import NodeRepository  # noqa: PLC0415 - only a reclaim needs it
     from nox.remote.repo import RemoteRepository  # noqa: PLC0415
 
     remote, nodes, now = RemoteRepository(db), NodeRepository(db), clock()

@@ -1,6 +1,7 @@
 """Importing and installing the release extensions.
 
-Each extension is a module `nox.<name>.install` with an `install(core)` function; see
+Each extension is a module `nox.<name>.install` with an `install(core)` function (`MODULE_OF`
+names the few that live elsewhere); see
 `nox.core.extension` for the contract. The import is the expensive half - one of them pulls in an
 image-processing stack and takes seconds on a cold start - and it is plain blocking work, so it
 runs in a worker thread. `install(core)` itself stays on the loop, because it wires bus
@@ -22,7 +23,13 @@ from nox.core.logging import get_logger
 
 log = get_logger(__name__)
 
-__all__ = ["DEFAULT_EXTENSIONS", "install_extensions", "stop_extensions"]
+__all__ = [
+    "DEFAULT_EXTENSIONS",
+    "MODULE_OF",
+    "extension_module",
+    "install_extensions",
+    "stop_extensions",
+]
 
 #: The extensions the core installs, in installation order. A name here is a module
 #: `nox.<name>.install`; whether an extension does anything is its own decision, taken from the
@@ -68,6 +75,15 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "mcp",
 )
 
+#: Extensions whose module is not `nox.<name>.install`: the node code is split by where it runs,
+#: and the core's side is `nox.node.hub`.
+MODULE_OF: dict[str, str] = {"node": "nox.node.hub.install"}
+
+
+def extension_module(name: str) -> str:
+    """The module that holds the extension `name` and its `install(core)`."""
+    return MODULE_OF.get(name, f"nox.{name}.install")
+
 
 async def install_extensions(
     core: Any, names: Sequence[str] = DEFAULT_EXTENSIONS
@@ -76,7 +92,7 @@ async def install_extensions(
     installed: dict[str, ExtensionRuntime] = {}
     for name in names:
         try:
-            module = await asyncio.to_thread(importlib.import_module, f"nox.{name}.install")
+            module = await asyncio.to_thread(importlib.import_module, extension_module(name))
             installed[name] = module.install(core)
             log.info("extension.installed", extension=name)
         except Exception as exc:  # noqa: BLE001 - one extension degrades, the core still starts

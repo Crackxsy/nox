@@ -13,17 +13,15 @@ import pytest
 
 from nox.ipc.overlay_tokens import OverlayTokenStore
 from nox.ipc.tokens import TokenStore
-from nox.node import protocol as p
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.obs import NodeObs, ObsSettings, obs_tools
-from nox.node.pairing import NodePairing
-from nox.node.protocol import NoxCallMeta
-from nox.node.receipts import ReceiptSigner
-from nox.node.repo import NodeRepository
-from nox.node.satellites import node_overlay_label
-from nox.node.voice import (
-    voice_tools,
-)
+from nox.node.device.obs import NodeObs, ObsSettings, obs_tools
+from nox.node.device.voice import voice_tools
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
+from nox.node.hub.satellites import node_overlay_label
+from nox.node.wire import protocol as p
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
+from nox.node.wire.receipts import ReceiptSigner
 from tests.unit.node.support import signed
 from tests.unit.node.support_voice import (
     PI,
@@ -157,7 +155,7 @@ async def test_obs_on_a_node_uses_loopback_its_own_password_and_redacts(tmp_path
 
 
 async def test_the_privacy_scene_and_its_contents_cannot_be_changed(tmp_path: Path) -> None:
-    from nox.node.tools import NodeRefusal
+    from nox.node.device.tools import NodeRefusal
 
     obs, seen = await _obs_ready(tmp_path)
     with pytest.raises(NodeRefusal) as refused:
@@ -176,7 +174,7 @@ async def _obs_ready(tmp_path: Path) -> tuple[NodeObs, dict[str, Any]]:
 async def test_the_panic_button_switches_and_latches_until_this_device_resumes(
     tmp_path: Path,
 ) -> None:
-    from nox.node.tools import NodeRefusal
+    from nox.node.device.tools import NodeRefusal
 
     obs, seen = _obs_world(tmp_path)
     assert await obs.panic("panic") is True
@@ -204,7 +202,7 @@ def test_only_a_node_label_passes_even_with_a_permissive_check(tmp_path: Path) -
 
 
 async def test_a_never_possible_request_reaches_no_obs(tmp_path: Path) -> None:
-    from nox.node.tools import NodeRefusal
+    from nox.node.device.tools import NodeRefusal
 
     obs, seen = _obs_world(tmp_path)
     for kind in ("StopStream", "GetStreamServiceSettings"):
@@ -215,8 +213,8 @@ async def test_a_never_possible_request_reaches_no_obs(tmp_path: Path) -> None:
 
 
 async def test_resume_in_a_terminal_lifts_the_latch_of_the_running_node(tmp_path: Path) -> None:
-    from nox.node.home import NodeHome
-    from nox.node.satellite_cli import obs_resume
+    from nox.node.device.home import NodeHome
+    from nox.node.device.satellite_cli import obs_resume
 
     home = NodeHome(tmp_path)
     home.ensure()
@@ -244,8 +242,8 @@ async def test_the_record_folder_stays_on_the_node(tmp_path: Path) -> None:
 async def test_a_node_connecting_during_a_panic_gets_it(
     nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
 ) -> None:
-    from nox.node.install import NodeRuntime, install_satellites
-    from nox.node.registry import NodeRegistry
+    from nox.node.hub.install import NodeRuntime, install_satellites
+    from nox.node.hub.registry import NodeRegistry
     from tests.unit.node.support import pair_node
 
     registry = NodeRegistry(pairing, nodes)

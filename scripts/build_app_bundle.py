@@ -1,10 +1,11 @@
-"""Build `nox-app-<tag>.zip`, the bundle a `nox node` updates itself from (`nox.node.update`).
+"""Build `nox-app-<tag>.zip`, the bundle a `nox node` updates itself from
+(`nox.node.device.update`).
 
     python scripts/build_app_bundle.py --tag v0.7.1 --out files/
 
 Standard library only (the release workflow runs it before anything is installed). The bundle holds
 Nox's own code and configuration - `nox/` (from `src/nox`) and `config/` - and `BUNDLE.json`
-(`nox.node.bundle`): the version, the node protocol this code speaks, the SHA-256 of the
+(`nox.node.device.bundle`): the version, the node protocol this code speaks, the SHA-256 of the
 `uv.lock` it belongs to (a node applies it only on exactly those libraries) and the SHA-256 of
 every file (checked when unpacking and again at every start). No libraries, no compiled code:
 those come only with an installer.
@@ -40,10 +41,10 @@ def version_of(repo: Path) -> str:
 
 def node_protocol_of(repo: Path) -> int:
     """`NODE_PROTOCOL` of this checkout: the protocol its `nox node` speaks."""
-    text = (repo / "src" / "nox" / "node" / "protocol.py").read_text(encoding="utf-8")
+    text = (repo / "src" / "nox" / "node" / "wire" / "protocol.py").read_text(encoding="utf-8")
     match = re.search(r"^NODE_PROTOCOL = (\d+)$", text, re.MULTILINE)
     if match is None:
-        raise SystemExit("src/nox/node/protocol.py has no NODE_PROTOCOL")
+        raise SystemExit("src/nox/node/wire/protocol.py has no NODE_PROTOCOL")
     return int(match[1])
 
 

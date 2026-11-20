@@ -14,11 +14,11 @@ from typing import Any
 import pytest
 
 from nox.lan.tls import TlsMaterial
-from nox.node import confirm
-from nox.node.confirm import MAC_DIALOG, PlatformConfirmer, answer_of, kdialog_text
-from nox.node.listener import NodeListener
-from nox.node.manifest import NodeManifest
-from nox.node.pairing import NodePairing
+from nox.node.device import confirm
+from nox.node.device.confirm import MAC_DIALOG, PlatformConfirmer, answer_of, kdialog_text
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.wire.manifest import NodeManifest
 from tests.unit.node.support import Confirmer, call, session_of, start_node
 
 # ---- the Linux dialog is zenity only, default "No", no markup ------------------------------------
@@ -29,7 +29,7 @@ async def test_zenity_first_kdialog_on_kde_and_always_no_by_default(
 ) -> None:
     """Kdialog is the KDE fallback - its `--warningyesno` has "No" as
     the default button; zenity, where it is there, is still preferred."""
-    from nox.node import confirm as confirm_module
+    from nox.node.device import confirm as confirm_module
 
     monkeypatch.setattr(confirm_module.sys, "platform", "linux")
     monkeypatch.setattr(confirm_module, "has_screen", lambda: True)
@@ -63,7 +63,7 @@ async def test_zenity_first_kdialog_on_kde_and_always_no_by_default(
 async def test_a_notice_always_says_nox_and_uses_the_systems_powershell(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from nox.node import tools as node_tools
+    from nox.node.device import tools as node_tools
 
     shown: list[tuple[str, str]] = []
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from nox.node.home import NodeHome
+from nox.node.device.home import NodeHome
 from tests.unit.node.support_hands import write_file, write_refusal
 
 # ---- app workspaces ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ async def test_a_repository_or_vault_around_the_allowed_folder_takes_no_writes(
 
 
 def test_allowing_a_folder_inside_a_repository_or_vault_is_refused(tmp_path: Path) -> None:
-    from nox.node import cli as node_cli
+    from nox.node.device import cli as node_cli
 
     home = NodeHome(tmp_path / "h")
     yes = {"interactive": lambda: True, "confirm": lambda _p: True}

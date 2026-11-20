@@ -16,8 +16,8 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from nox.node.bundle import BUNDLE_SCHEMA, bundle_name
-from nox.node.update import NodeUpdater
+from nox.node.device.bundle import BUNDLE_SCHEMA, bundle_name
+from nox.node.device.update import NodeUpdater
 from nox.release.keys import TrustedKey, describe_public_key
 from nox.release.manifest import Asset, build_manifest
 

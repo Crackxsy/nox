@@ -9,7 +9,7 @@
 # The node belongs to the graphical session: started with it where the desktop starts
 # graphical-session.target (GNOME, KDE Plasma and others), stopped when the session ends (PartOf),
 # and at login (default.target) everywhere else. It reads the session's display when it needs it
-# (DISPLAY / WAYLAND_DISPLAY from the user manager, nox.node.confirm.has_screen), so a node that
+# (DISPLAY / WAYLAND_DISPLAY from the user manager, nox.node.device.confirm.has_screen), so a node that
 # started before the session still asks its questions on the screen once the session is there.
 
 [Unit]

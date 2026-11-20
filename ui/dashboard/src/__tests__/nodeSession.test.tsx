@@ -16,7 +16,7 @@ import { PermissionPromptDialog } from '../PermissionPrompt';
 
 const t = translator('de');
 
-// The core's sentences today (`nox.node.world_routes`), made up nowhere else.
+// The core's sentences today (`nox.node.hub.world_routes`), made up nowhere else.
 const NO_PIN =
   'Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs the security PIN, and none is set - deny, stop, or set a PIN first';
 

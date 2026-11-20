@@ -10,9 +10,9 @@ import pytest
 from cryptography import x509
 
 from nox.lan.tls import TlsMaterial
-from nox.node.pairing import NodePairing
-from nox.node.protocol import NodePairRequest
-from nox.node.repo import NodeRepository
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
+from nox.node.wire.protocol import NodePairRequest
 from nox.remote.repo import RemoteRepository
 from tests.unit.node.support import make_csr, make_key, pair_node
 

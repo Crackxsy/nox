@@ -14,8 +14,8 @@ from xml.etree import ElementTree
 
 import pytest
 
-from nox.node.home import default_home
-from nox.node.update import RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE, UpdateState
+from nox.node.device.home import default_home
+from nox.node.device.update import RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE, UpdateState
 
 REPO = Path(__file__).resolve().parents[3]
 TASK_NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}

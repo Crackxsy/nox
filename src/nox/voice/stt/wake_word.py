@@ -34,8 +34,8 @@ KILL_PHRASES: tuple[tuple[str, ...], ...] = (
 #: cases - an upper-case "ΝΟΧ" looks like "NOX" though its lower case "νοχ" does not. Whatever
 #: is compared here is a transcript, and a transcript with lookalikes in it should still match
 #: the wake word and above all the kill phrase. (What Nox itself says on a speaker is stripped
-#: of every non-Latin letter instead, `nox.node.voice.latin_only`: a speech engine reads letters
-#: by their sound, not by their look.) Deliberately small, not a full confusables table.
+#: of every non-Latin letter instead, `nox.node.wire.speech.latin_only`: a speech engine reads
+#: letters by their sound, not by their look.) Deliberately small, not a full confusables table.
 _LOOKALIKES = {
     # Cyrillic, lower case
     "а": "a", "в": "b", "е": "e", "ё": "e", "г": "r", "һ": "h", "і": "i", "ї": "i",

@@ -13,16 +13,12 @@ from typing import Any
 import numpy as np
 
 from nox.ipc.tokens import TokenStore
-from nox.node import protocol as p
-from nox.node.gate import NodeGate
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.receipts import ReceiptSigner, ReceiptVerifier
-from nox.node.satellites import SatelliteHub
-from nox.node.voice import (
-    VoiceEngines,
-    VoiceSatellite,
-    VoiceSettings,
-)
+from nox.node.device.gate import NodeGate
+from nox.node.device.voice import VoiceEngines, VoiceSatellite, VoiceSettings
+from nox.node.hub.satellites import SatelliteHub
+from nox.node.wire import protocol as p
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 
 PI = "a" * 32
 

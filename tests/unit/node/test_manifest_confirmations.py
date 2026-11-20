@@ -14,7 +14,7 @@ from tests.unit.node.support import node_home
 
 
 def _yes(home: Any, group: str) -> None:
-    from nox.node import cli as node_cli
+    from nox.node.device import cli as node_cli
 
     node_cli.allow(
         home, group, True, say=lambda _t: None, interactive=lambda: True, confirm=lambda _p: True
@@ -22,8 +22,8 @@ def _yes(home: Any, group: str) -> None:
 
 
 def test_allowing_needs_an_interactive_terminal_and_a_yes(tmp_path: Path) -> None:
-    from nox.node import cli as node_cli
-    from nox.node.manifest import load_manifest
+    from nox.node.device import cli as node_cli
+    from nox.node.wire.manifest import load_manifest
 
     home = node_home(tmp_path)
     quiet = dict(say=lambda _t: None)
@@ -43,13 +43,13 @@ def test_allowing_needs_an_interactive_terminal_and_a_yes(tmp_path: Path) -> Non
 
 
 def _effective(home: Any) -> Any:
-    from nox.node import cli as node_cli
+    from nox.node.device import cli as node_cli
 
     return node_cli.build(home, notifier=None).gate.manifest
 
 
 def test_an_edit_of_node_yaml_widens_nothing(tmp_path: Path) -> None:
-    from nox.node.manifest import load_manifest, save_manifest
+    from nox.node.wire.manifest import load_manifest, save_manifest
 
     home = node_home(tmp_path)
     _yes(home, "notify")
@@ -64,9 +64,9 @@ def test_an_edit_of_node_yaml_widens_nothing(tmp_path: Path) -> None:
 def test_a_forged_confirmation_is_not_trusted(tmp_path: Path) -> None:
     import json as _json
 
-    from nox.node import cli as node_cli
-    from nox.node.confirmed import CONFIRM_ACTION
-    from nox.node.manifest import GROUPS, NodeManifest, save_manifest
+    from nox.node.device import cli as node_cli
+    from nox.node.device.confirmed import CONFIRM_ACTION
+    from nox.node.wire.manifest import GROUPS, NodeManifest, save_manifest
 
     home = node_home(tmp_path)
     _yes(home, "notify")
@@ -88,7 +88,7 @@ def test_a_forged_confirmation_is_not_trusted(tmp_path: Path) -> None:
 
 
 def test_a_broken_audit_chain_trusts_no_confirmation(tmp_path: Path) -> None:
-    from nox.node import cli as node_cli
+    from nox.node.device import cli as node_cli
 
     home = node_home(tmp_path)
     _yes(home, "notify")
@@ -114,9 +114,9 @@ def test_without_its_key_no_confirmation_counts(tmp_path: Path) -> None:
 
 
 async def test_deny_takes_effect_in_the_running_node(tmp_path: Path) -> None:
-    from nox.node import cli as node_cli
-    from nox.node.agent import NodeAgent
-    from nox.node.keystore import NodeKeyStore
+    from nox.node.device import cli as node_cli
+    from nox.node.device.agent import NodeAgent
+    from nox.node.device.keystore import NodeKeyStore
 
     home = node_home(tmp_path)
     _yes(home, "notify")
@@ -157,9 +157,9 @@ def test_the_node_folder_is_owner_only_on_windows(tmp_path: Path) -> None:
 
 def test_an_old_wider_confirmation_appended_again_is_rejected(tmp_path: Path) -> None:
     """Review follow-up: a once valid confirmation appended again (old place, old counter)."""
-    from nox.node import cli as node_cli
-    from nox.node.confirmed import CONFIRM_ACTION
-    from nox.node.manifest import load_manifest, save_manifest
+    from nox.node.device import cli as node_cli
+    from nox.node.device.confirmed import CONFIRM_ACTION
+    from nox.node.wire.manifest import load_manifest, save_manifest
 
     home = node_home(tmp_path)
     _yes(home, "shell")  # a wide confirmation ...
@@ -185,8 +185,8 @@ def test_an_old_wider_confirmation_appended_again_is_rejected(tmp_path: Path) ->
 
 
 def test_pairing_never_adopts_a_widened_file(tmp_path: Path) -> None:
-    from nox.node import cli as node_cli
-    from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
+    from nox.node.device import cli as node_cli
+    from nox.node.wire.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 
     home = node_home(tmp_path, paired=False)
     save_manifest(
@@ -204,9 +204,9 @@ def test_a_confirmation_with_the_right_counter_but_a_made_up_mac_is_rejected(
 ) -> None:
     import json as _json
 
-    from nox.node import cli as node_cli
-    from nox.node.confirmed import CONFIRM_ACTION, manifest_key
-    from nox.node.manifest import GROUPS, NodeManifest, save_manifest
+    from nox.node.device import cli as node_cli
+    from nox.node.device.confirmed import CONFIRM_ACTION, manifest_key
+    from nox.node.wire.manifest import GROUPS, NodeManifest, save_manifest
 
     home = node_home(tmp_path)
     loaded = manifest_key(home.path, None).load()
@@ -234,8 +234,8 @@ def test_an_older_copy_of_the_audit_trail_restored_is_rejected(tmp_path: Path) -
     but its counter is behind the one kept with the key."""
     import shutil
 
-    from nox.node import cli as node_cli
-    from nox.node.manifest import load_manifest, save_manifest
+    from nox.node.device import cli as node_cli
+    from nox.node.wire.manifest import load_manifest, save_manifest
 
     home = node_home(tmp_path)
     _yes(home, "shell")

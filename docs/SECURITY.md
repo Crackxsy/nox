@@ -688,7 +688,7 @@ two gates - the core's permission engine with a device-bound target, then the no
   certificate is known only the handshake timeout and the listen backlog bound a connection -
   a flood from the home network can cost CPU, never access.
 - **Role `node`** never reaches the hub (`HUBLESS_ROLES`, no events). On its listener a node may
-  send only `nox.node.protocol.NODE_TO_CORE`; the first message must be `initialize`, models
+  send only `nox.node.wire.protocol.NODE_TO_CORE`; the first message must be `initialize`, models
   forbid unknown fields, a frame is at most 1 MiB and a chunked result 8 MiB. Five refused
   messages close the connection. A node's `security.kill` always engages the kill switch while
   Nox runs - stopping is always safe, so a compromised node can at worst stop Nox until
@@ -700,7 +700,7 @@ two gates - the core's permission engine with a device-bound target, then the no
 
 On the node itself (`nox node`, [`NODES.md`](NODES.md)) - a compromised core can send
 well-formed calls with valid receipts, so **for its hard limits the node treats the core as
-untrusted** and decides on its own authority (`nox.node.gate.NodeGate`). A disabled group, a hard
+untrusted** and decides on its own authority (`nox.node.device.gate.NodeGate`). A disabled group, a hard
 prohibition, the game lock and the device's own dialog for high risk are refused or asked on the
 node even when the core is patched to allow everything (tested with a deliberately
 permissive core in `tests/unit/node/test_agent.py`). `game.input.send` is
@@ -777,7 +777,7 @@ voice satellites included (`nox.home.boundary`).
   widens nothing, narrowing applies at once (also to a running node). A missing key, a broken
   chain or a forged confirmation leave the node with system values only until it is confirmed
   again locally.
-- **The dashboard only narrows** (`node.narrow`, `nox.node.policy`): switching a group off needs
+- **The dashboard only narrows** (`node.narrow`, `nox.node.hub.policy`): switching a group off needs
   no PIN on the core machine (from a paired device the PIN); the core then routes nothing of that
   group - by its own tool-to-group mapping, never the node's word, and a tool of no known group
   is dropped - and sends `nox/policy` on every connection. Clearing that narrowing needs the PIN
@@ -808,7 +808,7 @@ voice satellites included (`nox.home.boundary`).
   (`computer.session_start/pointer/keys`, `desktop.type_text`) and every change to windows and
   programs (`desktop.window_*`, `desktop.process_stop`) - before the stop state, the capability
   or the receipt are even looked at - while any of these holds, each read fresh on every call
-  (`nox.node.world.GameLock`, `nox.desktop.anticheat`): a watched game runs (the core's default
+  (`nox.node.device.world.GameLock`, `nox.desktop.anticheat`): a watched game runs (the core's default
   list, the device's own `node.yaml` `games` - `nox node games add` adds at once, removing is
   asked in a terminal and recorded like a widening, an edit of the file can only add - and the
   core's list, pushed as `nox/games`, an addition only); an anti-cheat process (also by family
@@ -897,7 +897,7 @@ voice satellites included (`nox.home.boundary`).
   cannot read or erase it. `nox/revoked` deletes the key and the certificate. The chain shows
   tampering, it does not prevent it ([accepted limit](#accepted-limits-nodes)). A notice always
   starts with "Nox"; Windows PowerShell is started by its absolute path.
-- **Self-update only from the signed release** (`nox.node.update`, docs/NODES.md#updates): the
+- **Self-update only from the signed release** (`nox.node.device.update`, docs/NODES.md#updates): the
   signature against the keys of the installed version (none configured: no update at all), no
   downgrade below the highest version that ran, **no replay** of a validly signed but older
   manifest (`created` must not go back), bundle size and SHA-256 from the manifest, every file
@@ -920,7 +920,7 @@ voice satellites included (`nox.home.boundary`).
   a node; they do not defend a device whose user account is already compromised
   ([accepted limit](#accepted-limits-nodes)).
 
-**Routing on the core** (`nox.node.registry`, `nox.node.router`): a node's tool list is
+**Routing on the core** (`nox.node.hub.registry`, `nox.node.hub.router`): a node's tool list is
 filtered (only tools the core routes, never a hard-prohibited name, at most 64) and its reported
 risk can only raise the core's risk, never lower it. The device is resolved once, in the call's
 permission scope and travels in its own field (`PermissionRequest.device`, `CallScope.device`,
@@ -941,7 +941,7 @@ A typed name that breaks a rule is refused before the code is spent - and only c
 valid code, so nobody without one can probe which names exist. The model and the dashboard
 always see the name with a short id the device cannot choose ("Laptop · 3f2a").
 
-**The hands on a node** (`nox.node.hands`, `nox.node.safe_fs`) - each one holds its own
+**The hands on a node** (`nox.node.device.hands`, `nox.node.device.safe_fs`) - each one holds its own
 boundary *after* `NodeGate`, the device's confirmation and the receipt:
 
 - `file.list/read/write` open only inside folders confirmed on the device
@@ -1053,8 +1053,8 @@ device's dialog. Negative tests: `tests/unit/node/` (a deliberately permissive c
 
 ## Satellites: voice, OBS and the pet overlay on a node
 
-What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.node.obs`,
-`nox.node.overlay`, core side `nox.node.satellites`):
+What leaves a node, and what a node may send the core (`nox.node.device.voice`, `nox.node.device.obs`,
+`nox.node.device.overlay`, core side `nox.node.hub.satellites`):
 
 - **Only between a core and a node that agreed.** The core names the satellite methods it
   understands in its `initialize` answer (`features`); a node sends `nox/voice/heard`,

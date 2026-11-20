@@ -15,11 +15,11 @@ import pytest
 from nox.ipc.overlay_tokens import OverlayTokenStore
 from nox.ipc.tokens import TokenStore
 from nox.lan.tls import TlsMaterial
-from nox.node import protocol as p
-from nox.node.overlay import PLACEHOLDER, OverlayRelay, local_origin, overlay_url, swap_token
-from nox.node.pairing import NodePairing
-from nox.node.repo import NodeRepository
-from nox.node.satellites import node_overlay_label
+from nox.node.device.overlay import PLACEHOLDER, OverlayRelay, local_origin, overlay_url, swap_token
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
+from nox.node.hub.satellites import node_overlay_label
+from nox.node.wire import protocol as p
 from tests.unit.node.support_voice import PC, PI, fake_session, lan_accepts, voice_hub
 
 pytestmark = pytest.mark.usefixtures("a_screen")
@@ -63,7 +63,7 @@ def _relay(
     token: str | None = "n" * 43,
     ca_file: Path | None = None,
 ) -> tuple[OverlayRelay, dict[str, Any]]:
-    from nox.node.home import NodeIdentity
+    from nox.node.device.home import NodeIdentity
 
     seen: dict[str, Any] = {"upstream": [], "credentials": 0, "fetched": []}
     identity = NodeIdentity(
@@ -247,7 +247,7 @@ async def test_a_restarted_core_sweeps_stale_node_credentials(tmp_path: Path) ->
 async def test_narrowing_obs_or_removing_the_node_revokes_its_overlay_while_offline(
     nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
 ) -> None:
-    from nox.node.registry import NodeRegistry
+    from nox.node.hub.registry import NodeRegistry
     from tests.unit.node.support import pair_node
 
     store = OverlayTokenStore(tmp_path / "overlay_tokens.json")

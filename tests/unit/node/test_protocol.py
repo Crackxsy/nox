@@ -7,8 +7,8 @@ from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
-from nox.node import protocol as p
-from nox.node.protocol import NodeHello, NoxCallMeta, PairLink, PairLinkError
+from nox.node.wire import protocol as p
+from nox.node.wire.protocol import NodeHello, NoxCallMeta, PairLink, PairLinkError
 
 FP = "ab" * 32
 FP_COLONS = ":".join(["AB"] * 32)

@@ -473,9 +473,9 @@ async def test_wire_guards_puts_the_real_remote_probe_into_the_policy(
     through a remote session is refused for talking to Nox, one used at the console is not."""
     from types import SimpleNamespace
 
-    import nox.node.install as install_module
+    import nox.node.hub.install as install_module
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.world_routes import NodeControl
+    from nox.node.hub.world_routes import NodeControl
 
     answers: list[bool | None] = [False]
     monkeypatch.setattr(install_module, "console_is_remote", lambda: answers[0])
@@ -497,8 +497,8 @@ async def test_the_real_locks_speak_in_a_fixed_order() -> None:
     from types import SimpleNamespace
 
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.install import wire_guards
-    from nox.node.world_routes import NodeControl
+    from nox.node.hub.install import wire_guards
+    from nox.node.hub.world_routes import NodeControl
 
     for lock_first in (True, False):
         core = SimpleNamespace(registry=RequestRegistry())

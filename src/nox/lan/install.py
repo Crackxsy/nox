@@ -125,7 +125,7 @@ class LanRuntime:
     #: Why the last certificate check failed while the listener kept serving the old one.
     warning: str = ""
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
-    #: Set by `nox.node.install`: redeems `POST /api/node/pair`. None: no such route.
+    #: Set by `nox.node.hub.install`: redeems `POST /api/node/pair`. None: no such route.
     node_pair: Any = None
     _core: Any = None
 

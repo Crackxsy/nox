@@ -2,7 +2,7 @@
 folder and Nox folder), each running a real `sleep 60` in its real sandbox (bwrap) through the
 real `NodeAgent`, `NodeGate` and `shell.run`. The core side is a real `NodeListener` in this test
 process; the kill switch (`KillSwitchService`, with the listener as its "nodes" stop hook, wired
-as `nox.node.install` wires it) is engaged, and each round is timed from `engage()` until the
+as `nox.node.hub.install` wires it) is engaged, and each round is timed from `engage()` until the
 last node's `nox/killed` arrived: the p99 stays under a second, every call is answered
 `stopped`, and no sandboxed process outlives the kill.
 
@@ -32,11 +32,11 @@ import pytest
 
 from nox.data.db import Database
 from nox.lan.tls import TlsMaterial, ensure_tls
-from nox.node.home import HOME_ENV, NodeHome, NodeIdentity
-from nox.node.listener import NodeListener
-from nox.node.pairing import NodePairing
-from nox.node.receipts import ReceiptSigner
-from nox.node.repo import NodeRepository
+from nox.node.device.home import HOME_ENV, NodeHome, NodeIdentity
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
+from nox.node.wire.receipts import ReceiptSigner
 from nox.remote.repo import RemoteRepository
 from tests.unit.ipc.conftest import SimpleBus
 from tests.unit.node.support import (
@@ -71,13 +71,13 @@ import asyncio, os, sqlite3, sys, threading
 from pathlib import Path
 
 from nox.node import agent as agent_module
-from nox.node.agent import NodeAgent
-from nox.node.gate import NodeGate
-from nox.node.hands import NodeHands, default_sandbox, hand_tools
-from nox.node.home import NodeHome
-from nox.node.keystore import NodeKeyStore
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.tools import NodeRefusal, default_tools
+from nox.node.device.agent import NodeAgent
+from nox.node.device.gate import NodeGate
+from nox.node.device.hands import NodeHands, default_sandbox, hand_tools
+from nox.node.device.home import NodeHome
+from nox.node.device.keystore import NodeKeyStore
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.device.tools import NodeRefusal, default_tools
 from nox.security.audit import SqliteAuditLog
 
 agent_module.MIN_DECISION_S = 0.0

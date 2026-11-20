@@ -15,20 +15,16 @@ from typing import Any
 import pytest
 
 from nox.lan.tls import TlsMaterial
-from nox.node.agent import NodeAgent
-from nox.node.gate import NodeGate
-from nox.node.hands import NodeHands, WriteArgs, hand_tools
-from nox.node.home import NodeHome, NodeIdentity
-from nox.node.keystore import NodeKeyStore
-from nox.node.listener import NodeListener
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.safe_fs import (
-    Folders,
-    OutsideFolders,
-    open_existing,
-)
-from nox.node.tools import NodeRefusal
+from nox.node.device.agent import NodeAgent
+from nox.node.device.gate import NodeGate
+from nox.node.device.hands import NodeHands, WriteArgs, hand_tools
+from nox.node.device.home import NodeHome, NodeIdentity
+from nox.node.device.keystore import NodeKeyStore
+from nox.node.device.safe_fs import Folders, OutsideFolders, open_existing
+from nox.node.device.tools import NodeRefusal
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.sandbox import Result, SandboxMode, SandboxUnavailable
 from nox.security.audit import SqliteAuditLog
 from tests.unit.node.support import Confirmer, current_receipt_target, key_pem, pair_node

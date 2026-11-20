@@ -405,7 +405,7 @@ class CoreHandlers:
             # While Nox controls a paired PC, a message from there may have been typed by Nox
             # itself: the conversation counts as holding unreadable untrusted content, so no
             # lookup in it counts as the user's own (`TaintLedger.user_directed`) and every
-            # off-machine call asks (`nox.node.session_access`).
+            # off-machine call asks (`nox.node.hub.session_access`).
             conversation = self._core.orchestrator.conversation_for(f"chat:{ctx.client_id}")
             self._core.security.engine.mark_tainted(conversation, None)
         with turn_origin("chat"):  # facts learned from it count as the user's own words

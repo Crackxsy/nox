@@ -14,7 +14,7 @@ pairing without the PIN. Those stay with the shell and the dashboard on this mac
 
 `remote` (the Telegram companion) and `pet` are no UI roles at all; they have their own, much
 narrower surfaces. Neither is `node` (`nox node` on another PC): it never reaches the hub, may send
-only `nox.node.protocol.NODE_TO_CORE` on its own listener, and never answers a prompt.
+only `nox.node.wire.protocol.NODE_TO_CORE` on its own listener, and never answers a prompt.
 """
 
 from __future__ import annotations

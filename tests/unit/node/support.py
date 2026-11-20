@@ -27,17 +27,17 @@ from pydantic import BaseModel, ConfigDict
 from websockets.asyncio.client import ClientConnection, connect
 
 from nox.lan.tls import TlsMaterial
-from nox.node.agent import NodeAgent
-from nox.node.gate import NodeGate
-from nox.node.home import NodeHome, NodeIdentity
-from nox.node.keystore import NodeKeyStore
-from nox.node.listener import NodeListener, NodeSession
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.protocol import NODE_PATH, NodePairRequest, NoxCallMeta
-from nox.node.receipts import ReceiptSigner, ReceiptVerifier
-from nox.node.registry import NodeEntry
-from nox.node.tools import NodeTool, default_tools
+from nox.node.device.agent import NodeAgent
+from nox.node.device.gate import NodeGate
+from nox.node.device.home import NodeHome, NodeIdentity
+from nox.node.device.keystore import NodeKeyStore
+from nox.node.device.tools import NodeTool, default_tools
+from nox.node.hub.listener import NodeListener, NodeSession
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.registry import NodeEntry
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NODE_PATH, NodePairRequest, NoxCallMeta
+from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 from nox.security.audit import SqliteAuditLog
 
 NAMES = ("localhost", "wohnzimmer-pi.local")
@@ -401,7 +401,7 @@ def percentile(values: list[float], pct: float) -> float:
 
 def kill_switch_for(listener: NodeListener) -> tuple[Any, list[float], list[dict[str, bool]]]:
     """A `KillSwitchService` whose "nodes" stop hook is the listener's `broadcast_kill` (and its
-    resume hook `broadcast_resume`), wired as `nox.node.install` wires them. Also returns when
+    resume hook `broadcast_resume`), wired as `nox.node.hub.install` wires them. Also returns when
     each kill's last `nox/killed` came in (`broadcast_kill` returns once every node answered or
     its wait ran out) and which nodes answered."""
     from nox.security.killswitch import KillSwitchService
@@ -476,8 +476,8 @@ def call_meta(signer: ReceiptSigner, name: str, args: Any, **kw: Any) -> NoxCall
 
 def node_home(tmp_path: Path, *, paired: bool = True) -> Any:
     """A node folder; `paired` records the defaults a pairing confirms on the device."""
-    from nox.node import cli as node_cli
-    from nox.node.home import NodeHome
+    from nox.node.device import cli as node_cli
+    from nox.node.device.home import NodeHome
 
     home = NodeHome(tmp_path / "node-home")
     home.ensure()

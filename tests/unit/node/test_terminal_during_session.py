@@ -16,7 +16,7 @@ from tests.unit.node.support_sessions import plain_node_home
 
 
 def _session(home: Any, *, until: float | None = None, raw: str | None = None) -> None:
-    from nox.node.world import SESSION_MARKER
+    from nox.node.device.world import SESSION_MARKER
 
     marker = home.path / SESSION_MARKER
     if raw is not None:
@@ -29,8 +29,8 @@ def _session(home: Any, *, until: float | None = None, raw: str | None = None) -
 def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
     tmp_path: Path, raw: str | None
 ) -> None:
-    from nox.node import cli, satellite_cli
-    from nox.node.voice import MUTE_FILE
+    from nox.node.device import cli, satellite_cli
+    from nox.node.device.voice import MUTE_FILE
 
     home = plain_node_home(tmp_path)
     _session(home, raw=raw)
@@ -61,7 +61,7 @@ def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
 
 def test_shell_is_not_available_on_a_mac(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`allow shell` on macOS says so plainly, whatever else is going on."""
-    from nox.node import cli, cli_text
+    from nox.node.device import cli, cli_text
 
     real = cli_text.unsupported_reason
     monkeypatch.setattr(cli, "unsupported_reason", lambda group: real(group, "darwin"))
@@ -73,7 +73,7 @@ def test_shell_is_not_available_on_a_mac(tmp_path: Path, monkeypatch: pytest.Mon
 def test_update_refuses_to_install_during_a_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import cli
+    from nox.node.device import cli
 
     home = plain_node_home(tmp_path)
     _session(home)
@@ -89,8 +89,8 @@ def test_update_refuses_to_install_during_a_session(
 
 
 def test_a_marker_whose_time_is_over_refuses_nothing(tmp_path: Path) -> None:
-    from nox.node import cli
-    from nox.node.world import clear_session_marker, session_marker_state
+    from nox.node.device import cli
+    from nox.node.device.world import clear_session_marker, session_marker_state
 
     home = plain_node_home(tmp_path)
     _session(home, until=time.time() - 1)
@@ -102,7 +102,7 @@ def test_a_marker_whose_time_is_over_refuses_nothing(tmp_path: Path) -> None:
 
 
 def test_the_world_keeps_the_marker_while_a_session_runs(tmp_path: Path) -> None:
-    from nox.node.world import SESSION_MARKER, World, session_marker_state
+    from nox.node.device.world import SESSION_MARKER, World, session_marker_state
 
     async def notice(_text: str) -> None:
         return None

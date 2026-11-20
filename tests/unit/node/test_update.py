@@ -1,6 +1,6 @@
-"""A node updates itself only from a signed release: every check of `nox.node.update` and
-`nox.node.bundle`, in the order it runs, and the switch around it. Keys are generated per test and
-never stored; nothing here touches the network or an installed copy."""
+"""A node updates itself only from a signed release: every check of `nox.node.device.update` and
+`nox.node.device.bundle`, in the order it runs, and the switch around it. Keys are generated per
+test and never stored; nothing here touches the network or an installed copy."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ from typing import Any
 
 import pytest
 
-from nox.node import bundle as bundle_module
-from nox.node.bundle import BUNDLE_SCHEMA, BundleError, verify_folder
-from nox.node.update import HttpsFetcher, NodeUpdater, UpdateState
+from nox.node.device import bundle as bundle_module
+from nox.node.device.bundle import BUNDLE_SCHEMA, BundleError, verify_folder
+from nox.node.device.update import HttpsFetcher, NodeUpdater, UpdateState
 from nox.release.manifest import build_manifest
 from tests.unit.node.support_update import (
     COMMIT,
@@ -493,7 +493,7 @@ def test_the_fetcher_only_speaks_https_and_only_release_paths() -> None:
 
 
 def test_a_redirect_away_from_https_is_refused() -> None:
-    from nox.node.update import _HttpsOnly
+    from nox.node.device.update import _HttpsOnly
 
     request = urllib.request.Request("https://github.com/Crackxsy/nox/releases/latest/download/x")
     with pytest.raises(urllib.error.HTTPError, match="away from HTTPS"):

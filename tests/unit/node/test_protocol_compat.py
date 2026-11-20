@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from nox.node.protocol import NodeHello, Ping
+from nox.node.wire.protocol import NodeHello, Ping
 
 # ---- protocol extensibility ----------------------------------------------------------------------
 

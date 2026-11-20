@@ -16,8 +16,8 @@ from tests.unit.node.support_sessions import plain_node_home
 
 
 def test_allowing_a_folder_switches_files_on_in_one_question(tmp_path: Path) -> None:
-    from nox.node import cli
-    from nox.node.manifest import load_manifest
+    from nox.node.device import cli
+    from nox.node.wire.manifest import load_manifest
 
     home = plain_node_home(tmp_path)
     cli.confirm_defaults(home, None)
@@ -45,7 +45,7 @@ def test_allowing_a_folder_switches_files_on_in_one_question(tmp_path: Path) -> 
 
 
 def test_allowing_files_without_a_folder_says_so(tmp_path: Path) -> None:
-    from nox.node import cli
+    from nox.node.device import cli
 
     home = plain_node_home(tmp_path)
     cli.confirm_defaults(home, None)
@@ -69,13 +69,13 @@ def test_allowing_files_without_a_folder_says_so(tmp_path: Path) -> None:
     ],
 )
 def test_what_exists_on_which_device(group: str, platform: str, reason: str | None) -> None:
-    from nox.node.cli_text import unsupported_reason
+    from nox.node.device.cli_text import unsupported_reason
 
     assert unsupported_reason(group, platform) == reason
 
 
 def test_allow_refuses_a_group_that_cannot_work_here(tmp_path: Path) -> None:
-    from nox.node import cli
+    from nox.node.device import cli
 
     home = plain_node_home(tmp_path)
     with pytest.raises(cli.NodeCliError, match="not available on devices yet"):
@@ -85,7 +85,7 @@ def test_allow_refuses_a_group_that_cannot_work_here(tmp_path: Path) -> None:
 
 
 def test_yes_and_no_in_both_languages() -> None:
-    from nox.node.cli_text import ask_yes
+    from nox.node.device.cli_text import ask_yes
 
     prompts: list[str] = []
 
@@ -105,7 +105,7 @@ def test_yes_and_no_in_both_languages() -> None:
 
 
 def test_the_command_is_named_as_the_device_needs_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.node import cli_text
+    from nox.node.device import cli_text
 
     monkeypatch.delenv("NOX_NODE_HOME", raising=False)
     monkeypatch.setattr(cli_text.getpass, "getuser", lambda: "alex")
@@ -117,7 +117,7 @@ def test_the_command_is_named_as_the_device_needs_it(monkeypatch: pytest.MonkeyP
 
 
 def test_german_words_and_labels_match_the_devices_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.node.cli_text import group_label, language, t
+    from nox.node.device.cli_text import group_label, language, t
 
     monkeypatch.setenv("NOX_LANG", "de")
     assert language() == "de"
@@ -136,7 +136,7 @@ def test_german_words_and_labels_match_the_devices_page(monkeypatch: pytest.Monk
 
 
 def test_pair_again_only_when_the_pairing_cannot_work(tmp_path: Path) -> None:
-    from nox.node import cli
+    from nox.node.device import cli
 
     home = plain_node_home(tmp_path)
     link = "nox-node://pair?h=192.168.1.20&p=47843&c=ABCDEFGH&fp=" + "ab" * 32

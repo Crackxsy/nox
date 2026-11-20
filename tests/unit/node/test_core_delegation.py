@@ -15,11 +15,11 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from nox.lan.tls import TlsMaterial
-from nox.node.listener import NodeListener
-from nox.node.manifest import NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.registry import NodeEntry, NodeRegistry
-from nox.node.router import ROUTED_TIMEOUT_S
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.registry import NodeEntry, NodeRegistry
+from nox.node.hub.router import ROUTED_TIMEOUT_S
+from nox.node.wire.manifest import NodeManifest
 from tests.unit.node.support import (
     Confirmer,
     FakeRegistry,
@@ -33,8 +33,8 @@ from tests.unit.node.support_sessions import LAPTOP, privacy_state, routed_specs
 
 
 def test_here_from_a_browser_on_a_node_means_that_node() -> None:
-    from nox.node.registry import NodeEntry
-    from nox.node.router import resolve
+    from nox.node.hub.registry import NodeEntry
+    from nox.node.hub.router import resolve
 
     laptop = NodeEntry(
         device_id="a" * 32,
@@ -67,9 +67,9 @@ def test_here_from_a_browser_on_a_node_means_that_node() -> None:
 
 
 async def test_the_core_delegates_only_to_a_node_that_can_ask() -> None:
-    from nox.node.registry import NodeEntry
-    from nox.node.router import routed_spec
-    from nox.node.tools import NotifyArgs
+    from nox.node.hub.registry import NodeEntry
+    from nox.node.hub.router import routed_spec
+    from nox.node.wire.arguments import NotifyArgs
     from nox.security.model import Risk
 
     class Registry:
@@ -162,9 +162,9 @@ async def test_the_handler_never_re_decides_what_the_scope_decided() -> None:
     """Review follow-up (TOCTOU): the node's dialog disappears between the permission scope and
     the handler - the call still goes out exactly as decided (delegated), so the node refuses it
     instead of running it unconfirmed."""
-    from nox.node.registry import NodeEntry
-    from nox.node.router import routed_spec
-    from nox.node.tools import NotifyArgs
+    from nox.node.hub.registry import NodeEntry
+    from nox.node.hub.router import routed_spec
+    from nox.node.wire.arguments import NotifyArgs
     from nox.security.model import Risk
 
     sent: list[dict[str, Any]] = []
@@ -356,8 +356,8 @@ async def test_the_executor_says_who_decided() -> None:
 
 
 async def test_a_high_call_waits_for_the_dialog_on_the_device() -> None:
-    from nox.node.confirm import CONFIRM_TIMEOUT_S
-    from nox.node.registry import LISTING_WAIT_S
+    from nox.node.hub.registry import LISTING_WAIT_S
+    from nox.node.wire.protocol import CONFIRM_TIMEOUT_S
 
     asked: list[float] = []
 
@@ -390,8 +390,8 @@ def test_the_executor_waits_longer_only_for_a_call_on_a_node(tmp_path: Path) -> 
 
 
 async def test_precheck_runs_before_around_and_stops_it() -> None:
-    from nox.node.router import routed_spec
-    from nox.node.tools import NotifyArgs
+    from nox.node.hub.router import routed_spec
+    from nox.node.wire.arguments import NotifyArgs
     from nox.security.model import Risk
 
     order: list[str] = []
@@ -427,7 +427,7 @@ async def test_precheck_runs_before_around_and_stops_it() -> None:
 
 async def test_package_tools_refuse_a_paired_device_instead_of_running_here() -> None:
     from nox.hands.packages import register_package_tools
-    from nox.node.router import NOT_AVAILABLE_ON_DEVICE, core_only_spec
+    from nox.node.hub.router import NOT_AVAILABLE_ON_DEVICE, core_only_spec
     from nox.tools.registry import ToolRegistry
 
     ran: list[list[str]] = []

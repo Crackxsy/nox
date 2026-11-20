@@ -1,8 +1,8 @@
 """`file.move` and `file.delete` on a node.
 
 Both ends of a move and the file deleted follow the write rules and are decided on handles
-(`nox.node.safe_fs.move_file`, `trash_file`). The escapes are tried for real on this OS (junctions
-on Windows, symlinks elsewhere) and a swap between the check and the rename is staged by
+(`nox.node.device.safe_fs.move_file`, `trash_file`). The escapes are tried for real on this OS
+(junctions on Windows, symlinks elsewhere) and a swap between the check and the rename is staged by
 wrapping the rename itself. A delete goes into the trash or does not happen: the real Recycle
 Bin is used only on a CI runner, the freedesktop trash in a temporary home."""
 
@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from nox.node import safe_fs
-from nox.node.gate import NodeGate
-from nox.node.hands import (
+from nox.node.device import safe_fs
+from nox.node.device.gate import NodeGate
+from nox.node.device.hands import (
     MoveArgs,
     NodeHands,
     PathArgs,
@@ -26,11 +26,11 @@ from nox.node.hands import (
     hand_tools,
     move_refusal,
 )
-from nox.node.install import _delete_precheck, _move_precheck, _move_target
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.registry import ROUTABLE
-from nox.node.safe_fs import Folders, OutsideFolders, move_file, trash_file
-from nox.node.tools import NodeRefusal
+from nox.node.device.safe_fs import Folders, OutsideFolders, move_file, trash_file
+from nox.node.device.tools import NodeRefusal
+from nox.node.hub.install import _delete_precheck, _move_precheck, _move_target
+from nox.node.hub.registry import ROUTABLE
+from nox.node.wire.manifest import GROUPS, NodeManifest
 
 WINDOWS = sys.platform == "win32"
 LINUX = sys.platform.startswith("linux")

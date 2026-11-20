@@ -14,17 +14,17 @@ import pytest
 from cryptography import x509
 
 from nox.lan.tls import TlsMaterial, ensure_tls
-from nox.node.agent import NodeAgent
-from nox.node.gate import NodeGate
-from nox.node.home import NodeHome, NodeIdentity
-from nox.node.keystore import NodeKeyStore
-from nox.node.listener import NodeListener
-from nox.node.manifest import NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.protocol import RENEW_WINDOW_DAYS
-from nox.node.renewal import RenewalRefusedError, accept_renewed, due, store_certificate
-from nox.node.repo import NodeRepository
-from nox.node.tools import default_tools
+from nox.node.device.agent import NodeAgent
+from nox.node.device.gate import NodeGate
+from nox.node.device.home import NodeHome, NodeIdentity
+from nox.node.device.keystore import NodeKeyStore
+from nox.node.device.renewal import RenewalRefusedError, accept_renewed, due, store_certificate
+from nox.node.device.tools import default_tools
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
+from nox.node.wire.manifest import NodeManifest
+from nox.node.wire.protocol import RENEW_WINDOW_DAYS
 from nox.security.audit import SqliteAuditLog
 from tests.unit.node.support import (
     client_context,
@@ -50,7 +50,7 @@ async def _connected(listener: NodeListener, node_id: str) -> None:
 @pytest.fixture(autouse=True)
 def _renew_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pairing just issued a certificate; the 12 h limit between two has its own test."""
-    from nox.node import pairing as pairing_module
+    from nox.node.hub import pairing as pairing_module
 
     monkeypatch.setattr(pairing_module, "RENEW_MIN_INTERVAL", timedelta(0))
 
@@ -173,7 +173,8 @@ async def test_a_running_node_renews_and_stores_its_certificate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The whole way: the agent notices the end is near, asks, checks and stores."""
-    from nox.node import protocol, renewal
+    from nox.node.device import renewal
+    from nox.node.wire import protocol
 
     monkeypatch.setattr(protocol, "RENEW_WINDOW_DAYS", 40)  # a fresh certificate counts as due
     monkeypatch.setattr(renewal, "RENEW_WINDOW_DAYS", 40)
@@ -224,7 +225,7 @@ async def test_one_renewal_per_twelve_hours_whatever_the_connections(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from nox.node import pairing as pairing_module
+    from nox.node.hub import pairing as pairing_module
 
     monkeypatch.setattr(pairing_module, "RENEW_MIN_INTERVAL", timedelta(hours=12))
     node = await pair_node(pairing, tmp_path)  # pairing issued one a moment ago
@@ -241,7 +242,7 @@ async def test_a_certificate_not_valid_yet_or_without_a_current_one_is_refused(
     pairing: NodePairing, tls: TlsMaterial, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from nox.lan.tls import issue_client_certificate
-    from nox.node import renewal
+    from nox.node.device import renewal
 
     node = await pair_node(pairing, tmp_path)
     fresh = issue_client_certificate(tmp_path / "tls", make_csr(node.key), node.node_id)
@@ -308,7 +309,7 @@ async def test_a_lost_answer_never_locks_the_node_out(
     """The new certificate never reached the node (Wi-Fi gone, restart): it still connects with
     the old one, asks again and gets one; the lost one is replaced. Once it connects with the new
     certificate, the older ones are done."""
-    from nox.node import pairing as pairing_module
+    from nox.node.hub import pairing as pairing_module
 
     node = await pair_node(pairing, tmp_path)
     csr = make_csr(node.key)
@@ -335,7 +336,7 @@ async def test_a_lost_answer_never_locks_the_node_out(
 async def test_twelve_hours_between_renewals_of_a_used_certificate(
     pairing: NodePairing, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import pairing as pairing_module
+    from nox.node.hub import pairing as pairing_module
 
     monkeypatch.undo()  # the real limits, not the module fixture's
     assert timedelta(hours=12) == pairing_module.RENEW_MIN_INTERVAL
@@ -355,7 +356,7 @@ async def test_a_node_whose_clock_is_a_little_behind_still_takes_it(
     """A Pi without a real-time clock before its first time sync: up to an hour behind is
     fine; further behind it keeps its current certificate (still valid) and asks again."""
     from nox.lan.tls import issue_client_certificate
-    from nox.node import renewal
+    from nox.node.device import renewal
 
     node = await pair_node(pairing, tmp_path)
     fresh = issue_client_certificate(tmp_path / "tls", make_csr(node.key), node.node_id)

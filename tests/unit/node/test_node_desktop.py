@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from nox.node import appid, tools
-from nox.node.cli import NodeRuntime, keep_updated
-from nox.node.home import NodeHome
-from nox.node.tray import STOP_KEYS, allowed_here, stop_here, view
-from nox.node.update import UpdateCheck
+from nox.node.device import appid, tools
+from nox.node.device.cli import NodeRuntime, keep_updated
+from nox.node.device.home import NodeHome
+from nox.node.device.tray import STOP_KEYS, allowed_here, stop_here, view
+from nox.node.device.update import UpdateCheck
 from nox.shell.hotkeys import HotkeyTracker
 from nox.shell.logic import HotkeyAction
 
@@ -58,8 +58,8 @@ def test_what_nox_may_do_here_names_the_allowed_groups(tmp_path: Path) -> None:
 def test_the_tray_says_when_listening_is_not_switched_on_in_the_dashboard(tmp_path: Path) -> None:
     import json
 
-    from nox.node.tray import has_voice, not_switched_on
-    from nox.node.voice import STATE_FILE
+    from nox.node.device.tray import has_voice, not_switched_on
+    from nox.node.device.voice import STATE_FILE
 
     home = NodeHome(tmp_path / "node")
     home.ensure()
@@ -194,7 +194,7 @@ async def test_no_restart_while_a_call_runs_or_without_the_launcher(
 
 def test_the_tray_starts_isolated_in_the_app_folder(monkeypatch: pytest.MonkeyPatch) -> None:
     """No module from the current folder, PYTHONPATH or a user site can stand in for Nox's."""
-    from nox.node import tray
+    from nox.node.device import tray
 
     seen: dict[str, object] = {}
 
@@ -219,7 +219,7 @@ def test_the_tray_starts_isolated_in_the_app_folder(monkeypatch: pytest.MonkeyPa
 def test_the_trial_start_runs_isolated_in_the_new_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import update
+    from nox.node.device import update
 
     seen: dict[str, object] = {}
 
@@ -243,7 +243,7 @@ def test_the_trial_start_runs_isolated_in_the_new_copy(
 def test_one_tray_per_node_and_it_ends_with_its_node(tmp_path: Path) -> None:
     import os
 
-    from nox.node.tray import parent_alive, single_instance
+    from nox.node.device.tray import parent_alive, single_instance
 
     home = NodeHome(tmp_path / "node")
     first = single_instance(home)
@@ -283,12 +283,12 @@ async def test_only_a_core_that_accepts_this_node_counts_as_connected(
     core that refuses this node's protocol never confirms a version on trial."""
     from datetime import UTC, datetime
 
-    from nox.node.agent import NodeAgent
-    from nox.node.gate import NodeGate
-    from nox.node.home import NodeIdentity
-    from nox.node.keystore import NodeKeyStore
-    from nox.node.manifest import NodeManifest
-    from nox.node.tools import default_tools
+    from nox.node.device.agent import NodeAgent
+    from nox.node.device.gate import NodeGate
+    from nox.node.device.home import NodeIdentity
+    from nox.node.device.keystore import NodeKeyStore
+    from nox.node.device.tools import default_tools
+    from nox.node.wire.manifest import NodeManifest
 
     home = NodeHome(tmp_path / "h")
     home.ensure()

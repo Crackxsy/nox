@@ -1,4 +1,4 @@
-"""`nox.node.safe_fs` for reads, listings and the folders themselves: the text of a path is
+"""`nox.node.device.safe_fs` for reads, listings and the folders themselves: the text of a path is
 checked first, then the file is opened, then the verdict is taken on the open handle - so
 links, junctions, hard links and a swap between check and use change nothing. Broad
 folders are never allowed and the node folder stays closed."""
@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from nox.node.hands import NodeHands, PathArgs, WriteArgs
-from nox.node.home import NodeHome
-from nox.node.safe_fs import (
+from nox.node.device.hands import NodeHands, PathArgs, WriteArgs
+from nox.node.device.home import NodeHome
+from nox.node.device.safe_fs import (
     Folders,
     OutsideFolders,
     list_folder,
@@ -22,7 +22,7 @@ from nox.node.safe_fs import (
     open_new,
     secret_locations,
 )
-from nox.node.tools import NodeRefusal
+from nox.node.device.tools import NodeRefusal
 from tests.unit.node.support_hands import (
     WINDOWS,
     FakeSandbox,
@@ -74,7 +74,7 @@ def test_windows_streams_devices_and_ambiguous_names_are_refused(
 def test_a_resolved_long_path_is_compared_without_its_prefix(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.safe_fs import _plain
+    from nox.node.device.safe_fs import _plain
 
     assert _plain("\\\\?\\C:\\data") == "C:\\data"
     assert _plain("\\\\?\\UNC\\fileserver\\share") == "\\\\?\\UNC\\fileserver\\share"
@@ -247,8 +247,8 @@ async def test_read_and_list_answer_as_data(fs_world: dict[str, Path]) -> None:
 def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
     tmp_path: Path,
 ) -> None:
-    from nox.node import cli as node_cli
-    from nox.node.manifest import load_manifest
+    from nox.node.device import cli as node_cli
+    from nox.node.wire.manifest import load_manifest
 
     home = NodeHome(tmp_path / "h")
     docs = tmp_path / "Dokumente"
@@ -269,8 +269,8 @@ def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
 
 
 def test_broad_folders_are_never_allowed(fs_world: dict[str, Path], tmp_path: Path) -> None:
-    from nox.node import cli as node_cli
-    from nox.node.safe_fs import broad_folder
+    from nox.node.device import cli as node_cli
+    from nox.node.device.safe_fs import broad_folder
 
     system = [os.environ["SystemRoot"], os.environ["ProgramFiles"]] if WINDOWS else ["/etc", "/usr"]
     for place in [Path.home().anchor, str(Path.home()), str(Path.home().parent), *system]:
@@ -316,7 +316,7 @@ def test_a_fifo_is_refused_without_blocking(fs_world: dict[str, Path]) -> None:
 def test_a_windows_listing_whose_folder_changed_is_refused(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import safe_fs
+    from nox.node.device import safe_fs
 
     monkeypatch.setattr(safe_fs, "_win_final", lambda _fd: str(fs_world["outside"]))
     with pytest.raises(OutsideFolders) as caught:
@@ -328,7 +328,7 @@ def test_a_windows_listing_whose_folder_changed_is_refused(
 async def test_a_huge_listing_stops_counting(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import hands as hands_module
+    from nox.node.device import hands as hands_module
 
     monkeypatch.setattr(hands_module, "MAX_SCAN", 3)
     for i in range(6):
@@ -338,7 +338,7 @@ async def test_a_huge_listing_stops_counting(
 
 
 def test_utf8_cut_by_the_limit_stays_utf8() -> None:
-    from nox.node.hands import _decode
+    from nox.node.device.hands import _decode
 
     cut = ("aaa" + "é").encode("utf-8")[:-1]
     assert _decode(cut, True) == ("aaa", "utf-8")
@@ -365,7 +365,7 @@ async def test_a_node_folder_under_a_system_bind_fails_closed(
 def test_the_owner_only_acl_is_put_back_on_every_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import cli as node_cli
+    from nox.node.device import cli as node_cli
 
     calls: list[Path] = []
     monkeypatch.setattr(node_cli, "restrict_dir_to_owner", lambda p: calls.append(p) or True)
@@ -379,7 +379,7 @@ def test_the_owner_only_acl_is_put_back_on_every_start(
 def test_the_protected_identities_are_reused_for_a_while(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import safe_fs
+    from nox.node.device import safe_fs
 
     secret = tmp_path / "geheim"
     secret.mkdir()

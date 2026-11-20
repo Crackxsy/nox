@@ -6,11 +6,11 @@ of what it chooses between. The copies:
 
 * the **base** - the folder this file is in (`nox/`, `config/` next to it), put there by the
   installer;
-* **releases** a node installed itself from a signed bundle (`nox.node.update`), in
+* **releases** a node installed itself from a signed bundle (`nox.node.device.update`), in
   `<node home>/app/releases/<version>`, named by `<node home>/app/state.json`.
 
 The node's account can write the releases and `state.json`, so neither is trusted as it is. A
-release runs only after it passed `nox.node.bundle.verify_folder` - imported from the *base*, with
+release runs only after it passed `nox.node.device.bundle.verify_folder` - imported from the *base*, with
 the base's trusted release keys: the signed manifest, the bundle it lists, the SHA-256 of every
 file and nothing else in the folder. Anything else, or a release not newer than the base, runs the
 base and is dropped from `state.json` (a new installer always wins).
@@ -64,10 +64,10 @@ MAX_CRASHES_PER_HOUR = 10
 TASK_NAME = "Nox Node"
 HOME_ENV = "NOX_NODE_HOME"
 APP_ENV = "NOX_NODE_APP"
-#: Written by the node when it ends in order (`nox.node.cli.run`); removed before every start.
+#: Written by the node when it ends in order (`nox.node.device.cli.run`); removed before every start.
 CLEAN_EXIT = "clean-exit"
 _VERSION = re.compile(r'^__version__\s*=\s*"(\d+)\.(\d+)\.(\d+)[^"]*"', re.MULTILINE)
-#: The only names a release folder may have (the same rule as `nox.node.update`).
+#: The only names a release folder may have (the same rule as `nox.node.device.update`).
 _VERSION_DIR = re.compile(
     r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20})*)?$"
 )
@@ -82,7 +82,7 @@ LOCK_WAIT_S = 120.0
 
 
 def node_home() -> Path:
-    """Where the node keeps its files - the same rule as `nox.node.home.default_home`."""
+    """Where the node keeps its files - the same rule as `nox.node.device.home.default_home`."""
     override = os.environ.get(HOME_ENV, "").strip()
     if override:
         return Path(override)
@@ -103,7 +103,7 @@ def version_of(app: Path) -> tuple[int, int, int] | None:
     return (int(match[1]), int(match[2]), int(match[3])) if match else None
 
 
-# ---- state.json, under the lock nox.node.update takes too ---------------------------------------
+# ---- state.json, under the lock nox.node.device.update takes too ---------------------------------------
 
 
 @contextlib.contextmanager
@@ -197,7 +197,7 @@ def verified(folder: Path) -> bool:
     try:
         if str(BASE) not in sys.path:
             sys.path.insert(0, str(BASE))
-        from nox.node.bundle import verify_folder  # type: ignore[import-not-found]  # noqa: PLC0415
+        from nox.node.device.bundle import verify_folder  # type: ignore[import-not-found]  # noqa: PLC0415
         from nox.release import trusted_release_keys  # type: ignore[import-not-found]  # noqa: PLC0415
 
         verify_folder(folder, trusted_release_keys())

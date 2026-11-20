@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from nox.node.world_routes import NodeControl
+from nox.node.hub.world_routes import NodeControl
 from nox.security.access import REFUSE_LINKED, REFUSE_ROLE, Refuse
 from tests.unit.node.support import registry_entry
 from tests.unit.node.support_sessions import (
@@ -99,7 +99,7 @@ async def test_a_paired_device_without_a_pin_check_is_refused() -> None:
 async def test_the_installed_link_lookup_finds_the_controlled_browser() -> None:
     """The `linked()` that `_world_specs` installs reads the registry's links."""
     from nox.ipc.dispatch import RequestContext, RequestRegistry
-    from nox.node.install import _world_specs
+    from nox.node.hub.install import _world_specs
     from nox.tools.registry import ToolRegistry
 
     laptop = registry_entry(LAPTOP, "Laptop", linked=BROWSER)
@@ -269,7 +269,7 @@ def test_the_conversation_requests_are_exactly_these() -> None:
 def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine() -> None:
     """`wire_guards` installs a condition whose chat rule has these answers."""
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.install import wire_guards
+    from nox.node.hub.install import wire_guards
 
     observed = {"host": "192.168.1.20"}
     control = NodeControl(

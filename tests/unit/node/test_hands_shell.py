@@ -11,20 +11,20 @@ from typing import Any
 import pytest
 
 from nox.lan.tls import TlsMaterial
-from nox.node.confirmed import MOST_RESTRICTIVE, effective_manifest, record_confirmed
-from nox.node.gate import NodeGate
-from nox.node.listener import NodeListener
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.registry import ROUTABLE
-from nox.node.tools import NodeRefusal
+from nox.node.device.confirmed import MOST_RESTRICTIVE, effective_manifest, record_confirmed
+from nox.node.device.gate import NodeGate
+from nox.node.device.tools import NodeRefusal
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.registry import ROUTABLE
+from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.security.audit import SqliteAuditLog
 from tests.unit.node.support import Confirmer, call, session_of, signed
 from tests.unit.node.support_hands import FakeSandbox, hand_tools_for, link_folder, start_hands_node
 
 
 async def test_shell_is_refused_without_a_strong_sandbox(fs_world: dict[str, Path]) -> None:
-    from nox.node.hands import ShellArgs
+    from nox.node.device.hands import ShellArgs
 
     for sandbox in (None, FakeSandbox(weak=True)):
         tools = hand_tools_for(fs_world, sandbox)
@@ -36,7 +36,7 @@ async def test_shell_is_refused_without_a_strong_sandbox(fs_world: dict[str, Pat
 
 
 async def test_shell_runs_in_the_sandbox(fs_world: dict[str, Path]) -> None:
-    from nox.node.hands import ShellArgs
+    from nox.node.device.hands import ShellArgs
 
     sandbox = FakeSandbox()
     tools = hand_tools_for(fs_world, sandbox)
@@ -52,7 +52,7 @@ def test_packages_are_not_offered_on_nodes_yet(fs_world: dict[str, Path]) -> Non
 
 def test_the_default_sandbox_never_accepts_the_weak_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     import nox.sandbox
-    from nox.node.hands import default_sandbox
+    from nox.node.device.hands import default_sandbox
 
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(nox.sandbox, "make_sandbox", lambda **kw: seen.append(kw) or "made")
@@ -78,7 +78,7 @@ def test_every_hand_is_offered_only_with_its_group(fs_world: dict[str, Path]) ->
 
 
 def test_folders_count_only_as_confirmed_on_the_device(tmp_path: Path) -> None:
-    from nox.node.confirmed import manifest_key
+    from nox.node.device.confirmed import manifest_key
 
     audit = SqliteAuditLog(sqlite3.connect(":memory:", check_same_thread=False))
     key = manifest_key(tmp_path, None)

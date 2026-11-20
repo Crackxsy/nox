@@ -22,11 +22,11 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus
 
 from nox.lan.tls import TlsMaterial, ensure_tls, issue_client_certificate
-from nox.node import listener as listener_module
-from nox.node.listener import MAX_PENDING_BLOBS, MAX_VIOLATIONS, NodeListener
-from nox.node.pairing import NodePairing
-from nox.node.protocol import MAX_RESULT_BYTES
-from nox.node.repo import NodeRepository
+from nox.node.hub import listener as listener_module
+from nox.node.hub.listener import MAX_PENDING_BLOBS, MAX_VIOLATIONS, NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
+from nox.node.wire.protocol import MAX_RESULT_BYTES
 from tests.unit.node.support import (
     client_context,
     greet,

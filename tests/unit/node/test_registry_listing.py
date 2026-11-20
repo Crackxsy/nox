@@ -13,12 +13,12 @@ from typing import Any
 import pytest
 
 from nox.mcp.client import McpClientError
-from nox.node import registry as registry_module
-from nox.node.pairing import NodePairing
-from nox.node.registry import NodeEntry, NodeRegistry
-from nox.node.repo import NodeRepository
-from nox.node.router import resolve, routed_spec, waits_for
-from nox.node.tools import NotifyArgs
+from nox.node.hub import registry as registry_module
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.registry import NodeEntry, NodeRegistry
+from nox.node.hub.repo import NodeRepository
+from nox.node.hub.router import resolve, routed_spec, waits_for
+from nox.node.wire.arguments import NotifyArgs
 from nox.security.model import Risk
 from nox.tools.registry import ToolSpec
 from tests.unit.fakes import wait_until
@@ -27,7 +27,7 @@ from tests.unit.node.support_sessions import BROWSER, LAPTOP
 
 
 def test_a_node_that_stopped_answering_is_not_offered() -> None:
-    from nox.node.registry import NodeEntry
+    from nox.node.hub.registry import NodeEntry
 
     class Session:
         alive = False
@@ -43,7 +43,7 @@ def test_a_node_that_stopped_answering_is_not_offered() -> None:
 
 
 async def test_set_linked_writes_the_database_and_memory_together() -> None:
-    from nox.node.registry import NodeEntry, NodeRegistry
+    from nox.node.hub.registry import NodeEntry, NodeRegistry
 
     written: list[tuple[str, str | None]] = []
     nodes = SimpleNamespace(set_linked_device=lambda n, d: written.append((n, d)))
@@ -54,7 +54,7 @@ async def test_set_linked_writes_the_database_and_memory_together() -> None:
 
 
 def test_a_device_reports_its_folders_for_the_devices_page() -> None:
-    from nox.node.registry import reported_folders
+    from nox.node.hub.registry import reported_folders
 
     listed = {"_nox": {"folders": ["C:/Nox-Ablage", 5, "D:/Fotos\x1b[2J"]}}
     assert reported_folders(listed) == ("C:/Nox-Ablage", "D:/Fotos\\x1b[2J")

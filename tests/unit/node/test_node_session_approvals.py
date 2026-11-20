@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from nox.node.world_routes import NodeControl
+from nox.node.hub.world_routes import NodeControl
 from nox.security.access import (
     REFUSE_LINKED,
     REFUSE_NO_PIN,
@@ -107,7 +107,7 @@ async def test_a_slow_remote_check_never_blocks_and_counts_as_unknown(
 ) -> None:
     import time as time_module
 
-    from nox.node import session_access
+    from nox.node.hub import session_access
 
     monkeypatch.setattr(session_access, "REMOTE_CHECK_S", 0.05)
 
@@ -199,7 +199,7 @@ async def test_the_reply_handler_follows_the_rule_and_deny_always_counts(
 
 async def test_the_real_wiring_registers_status_release_and_the_hello_reset() -> None:
     """`wire_guards`, `_register_control_requests` and the connection hook are wired."""
-    from nox.node.install import connection_hook
+    from nox.node.hub.install import connection_hook
 
     core, control, _guard, _audit = wired_core(PinGate())
     assert core.registry.get("node.computer.status") is not None
@@ -227,7 +227,7 @@ async def test_the_real_wiring_registers_status_release_and_the_hello_reset() ->
 
 
 def test_a_remote_session_is_recognised() -> None:
-    from nox.node.console import console_is_remote
+    from nox.node.hub.console import console_is_remote
 
     def run(out: str) -> Any:
         return lambda _argv: out
@@ -256,7 +256,7 @@ class _WinDll:
 
 
 def test_a_remote_session_is_recognised_on_windows() -> None:
-    from nox.node.console import SM_REMOTESESSION, console_is_remote
+    from nox.node.hub.console import SM_REMOTESESSION, console_is_remote
 
     assert SM_REMOTESESSION == 0x1000
     assert console_is_remote(platform="win32", windll=_WinDll(remote=1)) is True  # RDP

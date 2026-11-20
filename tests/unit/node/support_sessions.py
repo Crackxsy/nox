@@ -13,17 +13,14 @@ from pydantic import BaseModel
 
 from nox.desktop.computer_use import DryRunSender
 from nox.desktop.win32 import WindowInfo
-from nox.node.gate import NodeGate
-from nox.node.home import NodeHome
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.protocol import NoxCallMeta
-from nox.node.receipts import ReceiptSigner, ReceiptVerifier
-from nox.node.registry import ROUTABLE
-from nox.node.world import GameLock, PlatformMedia, World, world_tools
-from nox.node.world_routes import (
-    NodeControl,
-    world_specs,
-)
+from nox.node.device.gate import NodeGate
+from nox.node.device.home import NodeHome
+from nox.node.device.world import GameLock, PlatformMedia, World, world_tools
+from nox.node.hub.registry import ROUTABLE
+from nox.node.hub.world_routes import NodeControl, world_specs
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
+from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 from nox.security.gate import PinRequiredError
 from tests.unit.node.support import FakeRegistry, registry_entry, signed
 
@@ -247,7 +244,7 @@ async def session_refusal(
     remote: Callable[[], bool | None],
 ) -> Any:
     """What the node-session condition says about `action` from `ctx`: the refusal, or None."""
-    from nox.node.session_access import NodeSessionCondition
+    from nox.node.hub.session_access import NodeSessionCondition
     from nox.security.access import Allow, Call, PinChecks
 
     pins = PinChecks(gate=lambda: gate)
@@ -259,9 +256,9 @@ async def session_refusal(
 def wired_core(
     gate: PinGate, remote: Callable[[], bool | None] = lambda: False
 ) -> tuple[Any, NodeControl, DeviceGuard, list[str]]:
-    """A core wired exactly like `nox.node.install` (`wire_guards`), with fakes behind it."""
+    """A core wired exactly like `nox.node.hub.install` (`wire_guards`), with fakes behind it."""
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.install import wire_guards
+    from nox.node.hub.install import wire_guards
 
     device_guard = DeviceGuard(gate)
     audit: list[str] = []

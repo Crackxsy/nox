@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-from nox.node.gate import NodeGate
-from nox.node.hands import NodeHands, WriteArgs, hand_tools
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.protocol import NoxCallMeta
+from nox.node.device.gate import NodeGate
+from nox.node.device.hands import NodeHands, WriteArgs, hand_tools
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
 from nox.security.model import Risk
 from tests.unit.node.support import (
     Confirmer,
@@ -38,7 +38,7 @@ async def test_deeply_nested_or_huge_structured_text_is_refused(
 def test_the_node_refuses_bad_structured_text_before_the_dialog_and_the_budget(
     tmp_path: Path,
 ) -> None:
-    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+    from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 
     signer = ReceiptSigner(tmp_path / "r")
     verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
@@ -60,8 +60,8 @@ def test_the_node_refuses_bad_structured_text_before_the_dialog_and_the_budget(
 
 
 async def test_the_core_refuses_bad_structured_text_before_asking_anyone() -> None:
-    from nox.node.install import _write_precheck, _write_target
-    from nox.node.router import routed_spec
+    from nox.node.hub.install import _write_precheck, _write_target
+    from nox.node.hub.router import routed_spec
 
     laptop = registry_entry("a" * 32, "Laptop", tools={"file.write": "medium"})
     registry = FakeRegistry([laptop])
@@ -114,7 +114,7 @@ ADVERSARIAL = {
 def test_the_markdown_scan_is_linear(name: str) -> None:
     import time
 
-    from nox.node.safe_fs import markdown_runs_code
+    from nox.node.device.safe_fs import markdown_runs_code
 
     started = time.perf_counter()
     markdown_runs_code(ADVERSARIAL[name])
@@ -123,7 +123,7 @@ def test_the_markdown_scan_is_linear(name: str) -> None:
 
 @pytest.mark.parametrize("path", ["notes/lang.md", "notes/lang.txt", "notes/lang.csv"])
 async def test_text_over_the_cap_is_refused(empty_fs_world: dict[str, Path], path: str) -> None:
-    from nox.node.safe_fs import MAX_TEXT_BYTES
+    from nox.node.device.safe_fs import MAX_TEXT_BYTES
 
     assert await write_refusal(empty_fs_world, path, "a" * (MAX_TEXT_BYTES + 1)) == "too_large"
     assert (await write_file(empty_fs_world, path, "a" * 1000))["ok"] is True
@@ -135,9 +135,9 @@ async def test_the_core_runs_the_text_check_in_a_thread_with_a_time_limit(
     import threading
     import time
 
-    from nox.node import tools as tools_module
-    from nox.node.install import _write_target
-    from nox.node.router import routed_spec
+    from nox.node.hub.install import _write_target
+    from nox.node.hub.router import routed_spec
+    from nox.node.wire import offload as offload_module
 
     seen: list[str] = []
 
@@ -146,7 +146,7 @@ async def test_the_core_runs_the_text_check_in_a_thread_with_a_time_limit(
         time.sleep(0.3)
         return None
 
-    monkeypatch.setattr(tools_module, "CHECK_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(offload_module, "CHECK_TIMEOUT_S", 0.05)
     laptop = registry_entry("a" * 32, "Laptop", tools={"file.write": "medium"})
     spec = routed_spec(
         name="file.write",
@@ -171,7 +171,7 @@ async def test_the_core_runs_the_text_check_in_a_thread_with_a_time_limit(
 def test_the_node_gate_is_safe_to_run_in_a_thread(tmp_path: Path) -> None:
     import threading
 
-    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+    from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 
     signer = ReceiptSigner(tmp_path / "r")
     verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
@@ -209,7 +209,7 @@ async def test_a_slow_text_check_never_holds_up_the_stop(
     import asyncio
     import time
 
-    from nox.node import hands as hands_module
+    from nox.node.device import hands as hands_module
 
     def slow(path: str, text: str, *, append: bool) -> str | None:
         time.sleep(1.0)  # a worker thread: the event loop goes on
@@ -252,15 +252,15 @@ async def test_a_check_that_runs_out_of_time_spends_nothing_and_allows_nothing(
     import asyncio
     import time
 
-    from nox.node import hands as hands_module
-    from nox.node import tools as tools_module
+    from nox.node.device import hands as hands_module
+    from nox.node.wire import offload as offload_module
 
     def slow(path: str, text: str, *, append: bool) -> str | None:
         time.sleep(0.4)
         return None
 
     monkeypatch.setattr(hands_module, "write_text_refusal", slow)
-    monkeypatch.setattr(tools_module, "CHECK_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(offload_module, "CHECK_TIMEOUT_S", 0.1)
     agent, task, stop, audit = await start_hands_node(
         listener, pairing, tls, tmp_path, empty_fs_world, FakeSandbox(), Confirmer("allow")
     )
@@ -290,7 +290,7 @@ async def test_a_check_that_runs_out_of_time_spends_nothing_and_allows_nothing(
 async def test_structured_text_is_capped_lower_than_plain_text(
     empty_fs_world: dict[str, Path],
 ) -> None:
-    from nox.node.safe_fs import MAX_STRUCTURED_BYTES
+    from nox.node.device.safe_fs import MAX_STRUCTURED_BYTES
 
     big = '{"a": "' + "x" * MAX_STRUCTURED_BYTES + '"}'
     assert await write_refusal(empty_fs_world, "notes/gross.json", big) == "too_large"

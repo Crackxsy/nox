@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 
-from nox.node.gate import NodeGate
-from nox.node.manifest import NodeManifest
-from nox.node.policy import relevant_groups
-from nox.node.registry import ROUTABLE, NodeRegistry
-from nox.node.tools import NodeRefusal
-from nox.node.world import PlatformMedia, world_tools
+from nox.node.device.gate import NodeGate
+from nox.node.device.tools import NodeRefusal
+from nox.node.device.world import PlatformMedia, world_tools
+from nox.node.hub.policy import relevant_groups
+from nox.node.hub.registry import ROUTABLE, NodeRegistry
+from nox.node.wire.manifest import NodeManifest
 from tests.unit.node.support import registry_entry
 from tests.unit.node.support_sessions import LAPTOP, SENSE_GROUPS, device_world, world_gate
 
@@ -81,8 +81,8 @@ async def test_desktop_and_computer_are_windows_only() -> None:
 def test_enabling_computer_needs_windows_and_a_second_yes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import cli
-    from nox.node.home import NodeHome
+    from nox.node.device import cli
+    from nox.node.device.home import NodeHome
 
     home = NodeHome(tmp_path / "node")
     monkeypatch.setattr(cli, "computer_supported", lambda: False)
@@ -122,7 +122,7 @@ def test_building_the_tools_touches_no_window_api() -> None:
 def test_a_tool_whose_library_or_os_is_missing_is_not_offered() -> None:
     """The node never lists what cannot work here, so the core's
     status and the dashboard never claim it."""
-    from nox.node.world import withheld
+    from nox.node.device.world import withheld
 
     world, _ = device_world()
     world.screen = world.camera = None

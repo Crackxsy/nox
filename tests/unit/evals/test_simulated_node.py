@@ -9,10 +9,10 @@ from typing import Any
 from kann_alles.confirm import decide
 from kann_alles.nodes import PI_ID, PI_NAME, WorldNodes
 from kann_alles.tasks import load_tasks
-from nox.node.hands import ShellArgs
-from nox.node.install import _shell_target
-from nox.node.router import routed_spec
-from nox.node.tools import NoArgs
+from nox.node.device.hands import ShellArgs
+from nox.node.hub.install import _shell_target
+from nox.node.hub.router import routed_spec
+from nox.node.wire.arguments import NoArgs
 from nox.security.model import Decision, Risk
 from nox.tools.executor import CALL_DECISION, CallDecision
 

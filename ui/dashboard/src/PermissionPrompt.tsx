@@ -43,7 +43,7 @@ export interface PermissionPromptProps {
   /** On a paired device: whether a security PIN is set; null while not known. */
   pinSet: boolean | null;
   /** Nox controls mouse and keyboard on a paired PC: allowing needs the PIN everywhere, and the
-   * browser on that PC cannot allow at all (the core decides; `nox.node.world_routes`). */
+   * browser on that PC cannot allow at all (the core decides; `nox.node.hub.world_routes`). */
   nodeControl?: boolean;
   /** This browser runs on the PC Nox controls: it cannot allow anything (no PIN field). */
   controlledHere?: boolean;
