@@ -129,6 +129,39 @@ class StreamTwitchConfig(StrictSection):
     #: Reconnect backoff, doubled from `min` up to `max` between two connection attempts.
     min_backoff_s: float = Field(default=1.0, gt=0.0)
     max_backoff_s: float = Field(default=30.0, gt=0.0)
+    #: What `!streamplan` answers, as one chat line (e.g. "Mo, Mi, Fr ab 19 Uhr"). Empty = the bot
+    #: says that no schedule has been set; it never invents one.
+    schedule_text: str = Field(default="", max_length=300)
+    #: Chat accounts Nox ignores completely: no reply, no commands, no Funken. Other bots belong
+    #: here, so that two bots never answer each other's `!` lines. Twitch logins, any case.
+    ignored_chatters: list[str] = Field(
+        default_factory=lambda: [
+            "nightbot",
+            "streamelements",
+            "streamlabs",
+            "moobot",
+            "fossabot",
+            "wizebot",
+            "sery_bot",
+        ]
+    )
+
+    @field_validator("schedule_text")
+    @classmethod
+    def _schedule_is_one_line(cls, value: str) -> str:
+        # It is sent as one `PRIVMSG`; a line break would end that IRC line early.
+        value = value.strip()
+        if _LINE_BREAKING.search(value):
+            raise ValueError("schedule_text must be a single line (no line breaks or NUL)")
+        return value
+
+    @field_validator("ignored_chatters")
+    @classmethod
+    def _clean_ignored(cls, value: list[str]) -> list[str]:
+        names = [name.strip().lstrip("@").lower() for name in value if name.strip()]
+        if any(not _TWITCH_CHANNEL.fullmatch(name) for name in names):
+            raise ValueError("ignored_chatters must be Twitch login names")
+        return names
 
     @field_validator("channel")
     @classmethod

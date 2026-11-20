@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import re
 import ssl
+import time
 from collections.abc import Awaitable, Callable
 
 from nox.core.logging import get_logger
@@ -48,7 +49,22 @@ def _require_param(value: str, what: str) -> str:
     return value
 
 
+#: Twitch pings an idle connection about every five minutes. A connection that has been silent
+#: for longer than this has died without the server saying so (sleep, Wi-Fi drop, NAT timeout):
+#: `readline()` would wait for ever and the bot would look connected while hearing nothing.
+DEFAULT_IDLE_TIMEOUT_S = 360.0
+#: A connection that stayed joined at least this long counts as a good one: the reconnect wait
+#: starts over after it. One that is dropped sooner (a server that accepts and cuts) keeps
+#: backing off.
+DEFAULT_MIN_STABLE_S = 30.0
+
+#: `NOTICE` texts with which Twitch refuses the login (the wrong token format has its own text).
+_AUTH_FAILURES = ("authentication failed", "improperly formatted auth")
+
 PrivmsgHandler = Callable[[ChatTags, str, str, str], Awaitable[None] | None]
+#: `USERNOTICE` (subscription, gifted sub, raid, ...): `(tags, login, channel, text)`, where `tags`
+#: is the raw tag map (`msg-id`, `user-id`, `msg-param-*`).
+UsernoticeHandler = Callable[[dict[str, str], str, str, str], Awaitable[None] | None]
 ConnectedHook = Callable[[], Awaitable[None]]
 DisconnectedHook = Callable[[str], Awaitable[None]]
 TokenProvider = Callable[[], Awaitable[str | None]]
@@ -96,6 +112,10 @@ class TwitchIrcClient:
         max_backoff_s: float = 30.0,
         connector: Connector | None = None,
         authorize: Callable[[], None] | None = None,
+        on_usernotice: UsernoticeHandler | None = None,
+        idle_timeout_s: float = DEFAULT_IDLE_TIMEOUT_S,
+        min_stable_s: float = DEFAULT_MIN_STABLE_S,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.host = host
         self.port = port
@@ -106,6 +126,12 @@ class TwitchIrcClient:
         self._token_provider = token_provider
         self._nick_provider = nick_provider
         self._on_privmsg = on_privmsg
+        self._on_usernotice = on_usernotice
+        self._idle_timeout_s = idle_timeout_s
+        #: How long a joined connection must have lasted for the next wait to start over.
+        self._min_stable_s = min_stable_s
+        self._clock = clock
+        self._joined_at = 0.0
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
         #: Called synchronously before every connection attempt (: raw asyncio streams
@@ -156,6 +182,13 @@ class TwitchIrcClient:
             try:
                 await self._connect_once()
             except Exception as exc:  # noqa: BLE001 - the reconnect loop must never die
+                if self.joined and self._clock() - self._joined_at >= self._min_stable_s:
+                    # The server accepted the login and the channel and the connection held for a
+                    # while before it ended (a `RECONNECT`, a silent line): the next attempt
+                    # starts from the shortest wait again. A refused login never gets here (the
+                    # join comes after it), and a server that accepts and drops at once keeps
+                    # backing off because the connection did not last `min_stable_s`.
+                    backoff.succeeded()
                 backoff.failed(exc)
             else:
                 backoff.succeeded()
@@ -196,7 +229,12 @@ class TwitchIrcClient:
         if self._on_connected is not None:
             await self._on_connected()
         while True:
-            raw = await reader.readline()
+            try:
+                raw = await asyncio.wait_for(reader.readline(), self._idle_timeout_s)
+            except TimeoutError:
+                raise ConnectionError(
+                    f"no data from Twitch for {self._idle_timeout_s:g} s; reconnecting"
+                ) from None
             if not raw:
                 raise ConnectionError("connection closed by server")
             await self._dispatch(raw.decode("utf-8", errors="replace"))
@@ -210,14 +248,27 @@ class TwitchIrcClient:
             target = msg.params[-1] if msg.params else ""
             await self._send_raw(f"PONG :{target}")
             return
+        if msg.command == "RECONNECT":
+            # Twitch is about to restart this chat server and asks clients to come back.
+            raise ConnectionError("Twitch asked the client to reconnect")
         if msg.command == "NOTICE":
             text = " ".join(msg.params).lower()
-            if "authentication failed" in text or "login authentication failed" in text:
+            if any(failure in text for failure in _AUTH_FAILURES):
                 raise TwitchAuthError(" ".join(msg.params))
+            return
+        if msg.command == "USERNOTICE":
+            if self._on_usernotice is not None:
+                channel = msg.params[0].lstrip("#") if msg.params else ""
+                text = msg.params[-1] if len(msg.params) > 1 else ""
+                login = msg.tags.get("login", "")
+                result = self._on_usernotice(msg.tags, login, channel, text)
+                if result is not None:
+                    await result
             return
         if msg.command == "JOIN":
             if msg.nick and self._nick and msg.nick.lower() == self._nick.lower():
                 self.joined = True
+                self._joined_at = self._clock()
             return
         if msg.command == "PRIVMSG":
             channel = msg.params[0].lstrip("#") if msg.params else ""

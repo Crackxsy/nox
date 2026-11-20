@@ -11,6 +11,7 @@ serves the `stream.funken.top` IPC request (leaderboard).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -24,6 +25,23 @@ from nox.tools.executor import ToolExecutor
 log = get_logger(__name__)
 
 Clock = Callable[[], datetime]
+
+#: The most "units" (bits, gifted subs, ...) one request may count and the most Funken one request
+#: may book, whatever the plugin says and whatever `earn_daily_cap` is (0 means no daily cap). The
+#: plugin reads Twitch's own tags, but the core does not take its numbers on trust.
+MAX_UNITS_PER_EVENT = 100_000.0
+MAX_FUNKEN_PER_EVENT = 100_000.0
+
+
+def _finite(value: object, default: float = 0.0) -> float:
+    """`value` as a float, or `default` when it is not a number or is NaN or infinite."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
 Unsubscribe = Callable[[], None]
 
 
@@ -85,7 +103,20 @@ class FunkenBooking:
         if not viewer_id:
             return
         reason = str(ev.payload.get("reason", ""))
-        delta = float(ev.payload.get("delta", 0.0))
+        raw_delta = ev.payload.get("delta", 0.0)
+        delta = _finite(raw_delta, default=math.nan)
+        if math.isnan(delta):
+            log.warning(
+                "stream.funken_award_ignored", reason="delta_not_finite", viewer_id=viewer_id
+            )
+            return
+        if delta <= 0:
+            # No explicit amount: the configured rate for this reason, times the units. Reasons
+            # without a rate, and units that are not a positive finite number, are worth nothing
+            # and are dropped here; a huge count is cut to `MAX_UNITS_PER_EVENT`.
+            units = min(_finite(ev.payload.get("units", 1.0)), MAX_UNITS_PER_EVENT)
+            delta = self._funken.rate(reason) * units if units > 0 else 0.0
+        delta = min(_finite(delta), MAX_FUNKEN_PER_EVENT)
         if delta <= 0:
             return
         cap = self._config.earn_daily_cap

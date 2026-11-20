@@ -84,6 +84,10 @@ class FunkenService:
                 current = name
         return current
 
+    def rate(self, reason: str) -> float:
+        """Funken per unit for `reason` (message|sub|bit|raid); 0 for any other reason."""
+        return self._rate_for_reason(reason)
+
     def _rate_for_reason(self, reason: str) -> float:
         rates = {
             "message": self._config.earn_per_message,

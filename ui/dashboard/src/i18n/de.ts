@@ -57,6 +57,8 @@ export const de = {
   setting_stream_twitch_rate_limit_min_gap_s: 'Mindestabstand zwischen Nachrichten (Sekunden)',
   setting_stream_twitch_min_backoff_s: 'Wartezeit vor dem ersten Neuverbinden (Sekunden)',
   setting_stream_twitch_max_backoff_s: 'Längste Wartezeit beim Neuverbinden (Sekunden)',
+  setting_stream_twitch_schedule_text: 'Antwort auf !streamplan (eine Zeile)',
+  setting_stream_twitch_ignored_chatters: 'Andere Bots, die der Bot ignoriert',
   setting_stream_ai_voice_disclosure_enabled: 'Im Stream sagen, dass die Stimme KI-erzeugt ist',
   setting_stream_ai_voice_disclosure_chat_text: 'Hinweis im Chat',
   setting_stream_ai_voice_disclosure_chat_text_hint:

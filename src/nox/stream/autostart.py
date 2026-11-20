@@ -1,7 +1,8 @@
 """Start the stream session when the stream starts - not when someone remembers to say so.
 
-Twitch chat is only read while Nox is in stream mode (the `twitch` plugin runs under the `stream`
-profile), so chat went unanswered until someone said "lass uns streamen". Two signals now start it:
+Twitch chat is only read while Nox is in stream mode or in the `rocket_league` profile (the `twitch`
+plugin runs under those two profiles), so chat went unanswered until someone said "lass uns
+streamen". Two signals now start it:
 
 * OBS goes live: the `obs` plugin (running in the companion profile as well) reports
   `stream.started`, also when OBS was already live when Nox connected;

@@ -11,7 +11,7 @@ name: Twitch Bot
 version: 0.1.0
 api_version: 1
 entry: nox_plugin_twitch:create
-profiles: [stream]
+profiles: [stream, rocket_league]   # chat must keep working while a game is in the foreground
 permissions:
   - tool: twitch.chat.send            # risk: low - rate-limited (20 msg/30s, >=1.5s gap) and
     risk: low                         # passed through ModerationGate.check before every send
@@ -26,7 +26,7 @@ events:
 # `nox secrets set nox/twitch/oauth_token`. The channel to join is plain config, not a secret.
 secrets: [nox/twitch/oauth_token, nox/twitch/bot_username]
 network:
-  egress: ["irc.chat.twitch.tv:6697", "api.twitch.tv:443"]  # api.twitch.tv: reserved, unused today
+  egress: ["irc.chat.twitch.tv:6697"]  # the one chat connection; the plugin reaches nothing else
 resources:
   memory_mb: 128
   priority: normal
