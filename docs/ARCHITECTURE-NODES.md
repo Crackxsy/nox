@@ -511,7 +511,7 @@ Tests: `test_address_binding.py` (`test_the_binding_only_grows_while_the_lock_ho
 
 `session_access.py::NodeSessionCondition`, one of the conditions of `AccessPolicy`
 (`security/access.py`): `RequestRegistry.dispatch` asks `policy.decide` for every request,
-`permission_reply` asks `policy.approval` for every answer, and `install.py::wire_guards` adds
+`permission_reply` asks `policy.approval` for every answer, and `install/control.py::wire_guards` adds
 the condition. The local input lock of computer use on this machine (`InputLock`) is the other
 condition; both read "calm" from the same `calm_call`, so a request is never calm under one lock
 and not under the other - unmuting the microphone is not calm under either. When both hold, the
