@@ -249,7 +249,7 @@ async def test_privacy_downgrade_allowed_upgrade_denied(core: NoxCore, sent: lis
     ]
     # In OFFLINE the egress-bound `telegram.send` is denied like any other cloud tool, so the
     # refusal cannot be delivered either - the mode the phone asked for is the mode that silences
-    # it. Honest over convenient (docs/PRIVACY.md).
+    # it. Honest over convenient.
     assert sent == []
 
 

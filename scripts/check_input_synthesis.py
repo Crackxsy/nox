@@ -1,4 +1,4 @@
-"""Observation-only guard (docs/SECURITY.md): input synthesis stays in two game-guarded files, nowhere else.
+"""Observation-only guard (docs/SECURITY.md): input synthesis stays in two game-guarded files.
 
 Run by CI (`python scripts/check_input_synthesis.py`) and by the unit tests. It scans every
 Python file under `src/` and under all of `plugins/` (not only one plugin):
