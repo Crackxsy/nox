@@ -3,9 +3,9 @@ again, the device as the only place that widens, the default device per tool fam
 do which of these with or without the security PIN.
 
 A scripted node (raw JSON-RPC over the real mutual-TLS listener) answers `tools/list` with what
-it has enabled minus what the core narrowed, exactly like `nox.node.agent` does, says which groups
-it enabled (or, as an older node, does not), and records every `nox/policy` it is sent - so a test
-sees what reached the device, not only what the core believes. A paired phone talks to the real
+it has enabled minus what the core narrowed, exactly like `nox.node.device.agent` does, says which
+groups it enabled (or, as an older node, does not), and records every `nox/policy` it is sent - so a
+test sees what reached the device, not only what the core believes. A paired phone talks to the real
 network listener with its real token, so the PIN rules are the ones a phone meets.
 """
 
@@ -28,8 +28,8 @@ from websockets.asyncio.client import ClientConnection, connect
 from nox.app import PROFILES_DIR, NoxCore
 from nox.ipc.errors import ERR_PERMISSION, ERR_VALIDATION, IpcError
 from nox.ipc.protocol import Kind
-from nox.node.policy import relevant_groups
-from nox.node.protocol import NODE_PATH
+from nox.node.hub.policy import relevant_groups
+from nox.node.wire.protocol import NODE_PATH
 from tests.integration.test_lan import _auth, _request, _with_pin
 from tests.integration.test_lan import _connect as lan_connect
 from tests.integration.test_lan import _pair as lan_pair

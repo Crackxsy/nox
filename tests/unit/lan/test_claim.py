@@ -405,7 +405,7 @@ def _every_credential(tmp_path: Path, devices: LanDevices, db: Any) -> dict[str,
     from datetime import UTC, datetime, timedelta
 
     from nox.ipc.overlay_tokens import OverlayTokenStore
-    from nox.node.repo import NodeRepository
+    from nox.node.hub.repo import NodeRepository
     from nox.remote.repo import RemoteRepository
     from nox.security.model import Risk, TemporaryGrant
     from nox.security.permissions import DefaultPermissionEngine

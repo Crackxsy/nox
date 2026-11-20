@@ -854,7 +854,7 @@ def python_runtime_dirs(
 
 def _node_home() -> Path:
     """A node's own folder (key, certificates, audit trail): never granted to a container."""
-    from nox.node.home import default_home  # noqa: PLC0415
+    from nox.node.device.home import default_home  # noqa: PLC0415
 
     return Path(os.path.realpath(default_home()))
 

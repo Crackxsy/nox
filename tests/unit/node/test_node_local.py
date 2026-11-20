@@ -14,12 +14,12 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 
 from nox.lan.terminal import render_node
-from nox.node import cli as node_cli
-from nox.node.enroll import EnrollError, enroll
-from nox.node.home import NodeHome, NodeIdentity
-from nox.node.keystore import PASSPHRASE_SECRET, NodeKeyStore
-from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
-from nox.node.protocol import PairLink
+from nox.node.device import cli as node_cli
+from nox.node.device.enroll import EnrollError, enroll
+from nox.node.device.home import NodeHome, NodeIdentity
+from nox.node.device.keystore import PASSPHRASE_SECRET, NodeKeyStore
+from nox.node.wire.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
+from nox.node.wire.protocol import PairLink
 from nox.security.secrets import InMemorySecretStore
 from tests.unit.node.support import make_key
 
@@ -248,7 +248,7 @@ async def test_a_key_file_that_cannot_be_protected_is_a_clean_refusal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from nox.lan.tls import ensure_tls
-    from nox.node import keystore as keystore_module
+    from nox.node.device import keystore as keystore_module
     from tests.unit.node.support import ADDRESSES, NAMES
 
     tls = ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
@@ -285,8 +285,8 @@ def _clean(line: str) -> bool:
 def test_the_gate_records_a_hostile_tool_name_escaped(evil: str) -> None:
     import sqlite3
 
-    from nox.node.gate import NodeGate
-    from nox.node.tools import default_tools
+    from nox.node.device.gate import NodeGate
+    from nox.node.device.tools import default_tools
     from nox.security.audit import SqliteAuditLog
 
     audit = SqliteAuditLog(sqlite3.connect(":memory:", check_same_thread=False))
@@ -297,8 +297,8 @@ def test_the_gate_records_a_hostile_tool_name_escaped(evil: str) -> None:
 
 
 def test_the_core_cannot_narrow_with_names_that_are_no_groups() -> None:
-    from nox.node.gate import NodeGate
-    from nox.node.tools import default_tools
+    from nox.node.device.gate import NodeGate
+    from nox.node.device.tools import default_tools
 
     gate = NodeGate(default_tools(None), NodeManifest(), None)
     gate.narrow(["notify", "x\x1b[2Jfake"])

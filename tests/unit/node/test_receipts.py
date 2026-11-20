@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from nox.lan.tls import TlsMaterial
-from nox.node.gate import NodeGate
-from nox.node.hands import NodeHands, hand_tools
-from nox.node.listener import NodeListener
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.protocol import NoxCallMeta
-from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+from nox.node.device.gate import NodeGate
+from nox.node.device.hands import NodeHands, hand_tools
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
+from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 from tests.unit.node.support import CORE_ID, DEVICE_ID, gate_with_every_group, signed, start_node
 
 # ---- receipts ----------------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def test_a_receipt_for_another_node_or_core_is_invalid(tmp_path: Path) -> None:
 def test_one_receipt_is_used_once_even_from_many_threads(tmp_path: Path) -> None:
     import threading
 
-    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+    from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 
     signer = ReceiptSigner(tmp_path / "r")
     verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)

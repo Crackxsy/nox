@@ -17,13 +17,13 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from nox.lan.tls import TlsMaterial
-from nox.node.agent import confirmation_text
-from nox.node.gate import NodeGate, inside
-from nox.node.listener import NodeListener
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.protocol import NoxCallMeta
-from nox.node.tools import NodeTool, default_tools
+from nox.node.device.agent import confirmation_text
+from nox.node.device.gate import NodeGate, inside
+from nox.node.device.tools import NodeTool, default_tools
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
 from tests.unit.node.support import (
     CORE_ID,
     DEVICE_ID,
@@ -189,9 +189,9 @@ async def test_the_same_text_is_signed_shown_and_run(
 def test_no_node_tool_may_touch_the_node_folder(tmp_path: Path, where: str) -> None:
     from pydantic import BaseModel, ConfigDict
 
-    from nox.node.gate import NodeGate, protected_forms, touches
-    from nox.node.manifest import GROUPS, NodeManifest
-    from nox.node.tools import NodeTool
+    from nox.node.device.gate import NodeGate, protected_forms, touches
+    from nox.node.device.tools import NodeTool
+    from nox.node.wire.manifest import GROUPS, NodeManifest
 
     home = node_home(tmp_path)
 
@@ -228,7 +228,7 @@ def test_a_link_or_short_name_into_the_node_folder_is_still_inside(tmp_path: Pat
     import subprocess
     import sys
 
-    from nox.node.gate import inside
+    from nox.node.device.gate import inside
 
     home = node_home(tmp_path)
     secret = home.path / "manifest.key"

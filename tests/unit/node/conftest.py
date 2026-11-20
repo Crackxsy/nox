@@ -11,9 +11,9 @@ import pytest
 
 from nox.data.db import Database
 from nox.lan.tls import TlsMaterial, ensure_tls
-from nox.node.listener import NodeListener
-from nox.node.pairing import NodePairing
-from nox.node.repo import NodeRepository
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
 from nox.remote.repo import RemoteRepository
 from tests.unit.ipc.conftest import SimpleBus
 from tests.unit.node import support
@@ -34,7 +34,7 @@ def _english_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
 def _instant_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scripted confirmers answer at once; the 1.5 s rule against reflex answers is tested on
     its own (`test_device_confirmation.py`)."""
-    from nox.node import agent as agent_module
+    from nox.node.device import agent as agent_module
 
     monkeypatch.setattr(agent_module, "MIN_DECISION_S", 0.0)
 
@@ -75,7 +75,7 @@ def pairing(
 async def listener(
     pairing: NodePairing, nodes: NodeRepository, tls: TlsMaterial, tmp_path: Path
 ) -> AsyncIterator[NodeListener]:
-    from nox.node.receipts import ReceiptSigner
+    from nox.node.wire.receipts import ReceiptSigner
 
     signer = ReceiptSigner(tmp_path / "tls")
     kills: list[tuple[str, str]] = []
@@ -111,7 +111,7 @@ def _same_groups_on_every_test_os(monkeypatch: pytest.MonkeyPatch) -> None:
 
     if sys.platform != "darwin":
         return
-    from nox.node import cli, cli_text
+    from nox.node.device import cli, cli_text
 
     real = cli_text.unsupported_reason
     monkeypatch.setattr(
@@ -138,7 +138,7 @@ def a_screen(monkeypatch: pytest.MonkeyPatch) -> None:
     """A device with a screen (`mode: auto` is push-to-talk there). The satellite test modules
     use it for every test; the headless default has a test of its own
     (`test_a_headless_device_listens_for_the_wake_word`)."""
-    monkeypatch.setattr("nox.node.confirm.has_screen", lambda: True)
+    monkeypatch.setattr("nox.node.device.confirm.has_screen", lambda: True)
 
 
 @pytest.fixture

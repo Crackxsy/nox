@@ -7,14 +7,14 @@ from typing import Any
 
 import pytest
 
-from nox.node.hands import WriteArgs
-from nox.node.router import routed_spec
+from nox.node.device.hands import WriteArgs
+from nox.node.hub.router import routed_spec
 from nox.security.model import Risk
 from tests.unit.node.support import FakeRegistry, registry_entry
 
 
 async def test_a_node_write_is_high_when_it_replaces_and_never_remembered() -> None:
-    from nox.node.install import _write_risk, _write_target
+    from nox.node.hub.install import _write_risk, _write_target
     from nox.security.model import Decision, PermissionResult
     from nox.tools.executor import ToolExecutor
     from nox.tools.registry import ToolRegistry
@@ -70,7 +70,7 @@ def test_the_routes_never_remember_a_write_on_a_node() -> None:
     from types import SimpleNamespace
 
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.install import _install_routes
+    from nox.node.hub.install import _install_routes
     from nox.tools.registry import ToolRegistry
 
     laptop = registry_entry("a" * 32, "Laptop", tools={"file.write": "medium", "shell.run": "high"})

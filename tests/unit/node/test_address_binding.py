@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 
 from nox.lan.tls import TlsMaterial
-from nox.node import protocol as p
-from nox.node.listener import NodeListener
-from nox.node.pairing import NodePairing
-from nox.node.world_routes import NodeControl
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.world_routes import NodeControl
+from nox.node.wire import protocol as p
 from tests.unit.fakes import wait_until
 from tests.unit.node.support import session_of, start_node
 from tests.unit.node.support_sessions import (
@@ -31,8 +31,8 @@ from tests.unit.node.support_sessions import (
 
 
 def test_addresses_are_compared_in_one_spelling() -> None:
-    from nox.node.agent import local_addresses
-    from nox.node.world_routes import host_of
+    from nox.node.device.agent import local_addresses
+    from nox.node.hub.world_routes import host_of
 
     assert host_of("[FE80::1%eth0]") == "fe80::1"
     assert host_of("::ffff:192.0.2.10") == "192.0.2.10"
@@ -95,8 +95,8 @@ async def test_the_node_says_where_it_is_in_its_hello_and_every_pong(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`NodeHello.addresses` and `nox/pong` `addresses`, reused for a while."""
-    from nox.node import agent as agent_module
-    from nox.node.protocol import NodeHello, Ping
+    from nox.node.device import agent as agent_module
+    from nox.node.wire.protocol import NodeHello, Ping
 
     calls: list[int] = []
 
@@ -126,7 +126,7 @@ async def test_the_node_says_where_it_is_in_its_hello_and_every_pong(
 def test_real_interfaces_come_before_virtual_ones(monkeypatch: pytest.MonkeyPatch) -> None:
     import psutil
 
-    from nox.node.agent import local_addresses
+    from nox.node.device.agent import local_addresses
 
     def entry(address: str) -> Any:
         return SimpleNamespace(address=address)
@@ -166,7 +166,7 @@ def test_this_machine_is_recognised_whatever_its_number_of_adapters(
 ) -> None:
     import psutil
 
-    from nox.node.agent import all_local_addresses
+    from nox.node.wire.addresses import all_local_addresses
 
     adapters = {f"vEthernet ({i})": [SimpleNamespace(address=f"172.20.{i}.1")] for i in range(30)}
     adapters["Ethernet"] = [
@@ -220,7 +220,7 @@ def _saturating(control: NodeControl) -> dict[str, Any]:
 
 
 def test_a_full_binding_drops_nothing_and_treats_everyone_as_the_controlled_pc() -> None:
-    from nox.node.world_routes import MAX_REPORTED_BOUND
+    from nox.node.hub.world_routes import MAX_REPORTED_BOUND
 
     audited: list[str] = []
     control = NodeControl(None, lambda _n: None, audit=audited.append)
@@ -245,7 +245,7 @@ def test_a_full_binding_drops_nothing_and_treats_everyone_as_the_controlled_pc()
 
 
 def test_too_many_connection_addresses_saturate_as_well() -> None:
-    from nox.node.world_routes import MAX_OBSERVED_ADDRESSES
+    from nox.node.hub.world_routes import MAX_OBSERVED_ADDRESSES
 
     control = NodeControl(None, lambda _n: None)
     now = _saturating(control)
@@ -299,7 +299,7 @@ async def test_the_listener_takes_the_addresses_the_agent_sends_in_hello_and_pon
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import nox.node.agent as agent_module
+    import nox.node.device.agent as agent_module
 
     current = {"addresses": ["192.0.2.10", "fe80::10"]}
     monkeypatch.setattr(agent_module, "local_addresses", lambda: list(current["addresses"]))
@@ -328,8 +328,8 @@ def test_unreadable_own_addresses_count_as_this_machine_during_a_session(
 ) -> None:
     import psutil
 
-    from nox.node.agent import ADDRESSES_UNREADABLE, all_local_addresses
-    from nox.node.world_routes import NodeControl
+    from nox.node.hub.world_routes import NodeControl
+    from nox.node.wire.addresses import ADDRESSES_UNREADABLE, all_local_addresses
 
     def broken() -> Any:
         raise PermissionError("no access to the interface table")
@@ -349,7 +349,7 @@ def test_unreadable_own_addresses_count_as_this_machine_during_a_session(
 
 
 def test_an_own_address_lookup_that_raises_fails_closed() -> None:
-    from nox.node.world_routes import NodeControl
+    from nox.node.hub.world_routes import NodeControl
 
     def raising() -> list[str]:
         raise RuntimeError("psutil is gone")

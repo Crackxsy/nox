@@ -303,7 +303,7 @@ def step_assemble_app() -> None:
     shutil.copy2(LAUNCHER, APP_DIR / LAUNCHER.name)
     shutil.copy2(NODE_LAUNCHER, APP_DIR / NODE_LAUNCHER.name)
     # The libraries this payload ships, by their lock: a node applies a code-only update
-    # (nox.node.update) only when the update was built from the same uv.lock.
+    # (nox.node.device.update) only when the update was built from the same uv.lock.
     lock = hashlib.sha256((REPO_ROOT / "uv.lock").read_bytes()).hexdigest()
     (APP_DIR / "uv.lock.sha256").write_text(lock + "\n", encoding="ascii")
     log(f"assembled app payload -> {APP_DIR}")

@@ -7,8 +7,8 @@ only the `websockets` library (already a project dependency) - no OBS SDK, no ex
 
 The connection owns its own reconnect-with-backoff loop (`start`/`stop`); callers observe
 `connected`/`identified` and get `on_connected`/`on_disconnected` callbacks to drive honest health
-reporting one layer up (`nox_plugin_obs.plugin` on the core, `nox.node.obs` on a node, where OBS
-may run instead - the same client either way, so a node needs no plugin folder).
+reporting one layer up (`nox_plugin_obs.plugin` on the core, `nox.node.device.obs` on a node, where
+OBS may run instead - the same client either way, so a node needs no plugin folder).
 """
 
 from __future__ import annotations

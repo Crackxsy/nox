@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 
-from nox.node import cli as node_cli
-from nox.node.home import NodeHome
-from nox.node.tools import NodeRefusal
-from nox.node.world import MediaArgs, PlatformMedia
+from nox.node.device import cli as node_cli
+from nox.node.device.home import NodeHome
+from nox.node.device.tools import NodeRefusal
+from nox.node.device.world import PlatformMedia
+from nox.node.wire.arguments import MediaArgs
 from tests.unit.node.support_sessions import device_world, world_gate, world_meta
 
 # ---- media ---------------------------------------------------------------------------------------

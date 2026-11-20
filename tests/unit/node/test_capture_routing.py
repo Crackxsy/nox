@@ -13,15 +13,13 @@ from typing import Any
 import pytest
 
 from nox.lan.tls import TlsMaterial
-from nox.node.listener import NodeListener
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.registry import BLOB_RESULT_KEY
-from nox.node.tools import NodeRefusal
-from nox.node.world import world_tools
-from nox.node.world_routes import (
-    capture_refusal,
-)
+from nox.node.device.tools import NodeRefusal
+from nox.node.device.world import world_tools
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.registry import BLOB_RESULT_KEY
+from nox.node.hub.world_routes import capture_refusal
+from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.security.model import Risk
 from tests.unit.node import support
 from tests.unit.node.support import Confirmer, call, session_of, start_node

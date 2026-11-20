@@ -11,15 +11,13 @@ from typing import Any
 
 import pytest
 
-from nox.node import protocol as p
-from nox.node.pairing import NodePairing
-from nox.node.policy import CORE_OPT_IN, NodePolicy
-from nox.node.repo import NodeRepository
-from nox.node.router import origin_device, resolve
-from nox.node.satellites import obs_route, voice_say_spec
-from nox.node.voice import (
-    voice_tools,
-)
+from nox.node.device.voice import voice_tools
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.policy import CORE_OPT_IN, NodePolicy
+from nox.node.hub.repo import NodeRepository
+from nox.node.hub.router import origin_device, resolve
+from nox.node.hub.satellites import obs_route, voice_say_spec
+from nox.node.wire import protocol as p
 from nox.security.model import Risk
 from nox.security.taint import CONVERSATION
 from nox.tools.registry import ToolRegistry, ToolSpec
@@ -210,7 +208,7 @@ async def test_no_utterance_without_the_second_key() -> None:
     ],
 )
 def test_voice_say_never_says_a_command(tmp_path: Path, text: str) -> None:
-    from nox.node.voice import says_a_command
+    from nox.node.wire.speech import says_a_command
 
     satellite, _ = make_satellite(tmp_path)
     tools = voice_tools(satellite, support=lambda: None)
@@ -231,7 +229,7 @@ def _scoped(spec: Any, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_voice_say_is_asked_in_a_tainted_conversation() -> None:
-    from nox.node.voice import says_a_command
+    from nox.node.wire.speech import says_a_command
 
     assert not says_a_command("Das Essen ist fertig.")
     pi = registry_entry(PI, "Living room Pi", tools={"voice.say": "low"})

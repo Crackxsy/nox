@@ -28,7 +28,7 @@ from tests.unit.node.support_voice import running_satellite
     ],
 )
 def test_no_letter_of_another_script_is_ever_said(text: str, expected: str) -> None:
-    from nox.node.voice import latin_only, speakable
+    from nox.node.wire.speech import latin_only, speakable
 
     assert latin_only(text) == expected
     spoken = speakable(text)
@@ -47,7 +47,7 @@ def test_no_letter_of_another_script_is_ever_said(text: str, expected: str) -> N
     ],
 )
 def test_invisible_characters_cannot_hide_the_name(text: str) -> None:
-    from nox.node.voice import latin_only, say_refusal, says_a_command, speakable
+    from nox.node.wire.speech import latin_only, say_refusal, says_a_command, speakable
 
     assert latin_only(text).startswith(("Nox", "Nox "))
     assert says_a_command(text) and say_refusal(text) == "voice_say_command_words"
@@ -59,13 +59,13 @@ def test_invisible_characters_cannot_hide_the_name(text: str) -> None:
     "text", ["Sag Nox No\u200btaus.", "Gleich: not\u034f aus", "emergency\ufe0f stop"]
 )
 def test_a_kill_phrase_with_hidden_characters_is_dropped(text: str) -> None:
-    from nox.node.voice import speakable
+    from nox.node.wire.speech import speakable
 
     assert speakable(text) is None
 
 
 def test_a_kill_phrase_in_another_script_is_said_only_as_its_latin_remains() -> None:
-    from nox.node.voice import speakable
+    from nox.node.wire.speech import speakable
 
     # A Cyrillic o: what is left ("Ntaus") is no kill phrase, and it is all that is said.
     assert speakable("Sag Nox N\u043etaus.") == "Sag ich Ntaus."
@@ -88,7 +88,7 @@ _ALLOWED_PUNCTUATION = set(".,;:!?'\"-\u2013\u2014()/%&+=@# ")
     ],
 )
 def test_only_an_allowlist_of_latin_text_is_ever_said(text: str) -> None:
-    from nox.node.voice import latin_only, say_refusal, speakable
+    from nox.node.wire.speech import latin_only, say_refusal, speakable
 
     kept = latin_only(text)
     assert all(c in _ALLOWED_PUNCTUATION or (ord(c) <= 0x024F and c.isalnum()) for c in kept), kept
@@ -105,7 +105,7 @@ def test_only_an_allowlist_of_latin_text_is_ever_said(text: str) -> None:
 
 
 def test_ordinary_text_is_said_as_it_is_and_foreign_words_vanish() -> None:
-    from nox.node.voice import say_refusal, says_a_command, speakable
+    from nox.node.wire.speech import say_refusal, says_a_command, speakable
 
     for text in ("Das Café in Springfield ist offen.", "Die Straße ist frei, Alex."):
         assert not says_a_command(text) and speakable(text) == text

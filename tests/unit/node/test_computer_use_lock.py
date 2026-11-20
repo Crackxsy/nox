@@ -11,12 +11,9 @@ from typing import Any
 
 import pytest
 
-from nox.node.protocol import NodeHello, Ping, SessionReport
-from nox.node.world import world_tools
-from nox.node.world_routes import (
-    MAX_SESSION_MINUTES,
-    NodeControl,
-)
+from nox.node.device.world import world_tools
+from nox.node.hub.world_routes import MAX_SESSION_MINUTES, NodeControl
+from nox.node.wire.protocol import NodeHello, Ping, SessionReport
 from nox.security.model import PermissionRequest, Risk
 from nox.security.permissions import grant_matches
 from tests.unit.node.support import registry_entry
@@ -248,7 +245,7 @@ async def test_the_node_reports_its_sessions_with_a_growing_generation() -> None
 
 
 def test_session_reports_are_read_strictly() -> None:
-    from nox.node.protocol import SessionReport
+    from nox.node.wire.protocol import SessionReport
 
     assert Ping.model_validate({"seq": 1, "ts": 1.0, "session": session_report(3, True)}).session
     for bad in (
@@ -268,7 +265,7 @@ def test_a_same_generation_pong_leaves_a_start_in_flight() -> None:
     control = NodeControl(None, lambda _n: None)
     control.observe(LAPTOP, session_report(5, False))
     device = control._device(LAPTOP, "Laptop")
-    from nox.node.world_routes import _Attempt
+    from nox.node.hub.world_routes import _Attempt
 
     device.attempt = _Attempt(control._clock(), device.gen)
     control.observe(LAPTOP, session_report(5, False))  # a pong sent before the start was handled
@@ -380,7 +377,7 @@ def test_the_owner_releases_a_stuck_lock_and_a_live_session_locks_again() -> Non
 async def test_the_release_request_needs_the_pin_here() -> None:
     from nox.ipc.dispatch import RequestRegistry
     from nox.ipc.errors import IpcError
-    from nox.node.install import ReleaseRequest, _register_control_requests
+    from nox.node.hub.install import ReleaseRequest, _register_control_requests
 
     audit: list[str] = []
     ipc = RequestRegistry()
@@ -453,7 +450,7 @@ def test_a_new_connection_forgets_the_started_session() -> None:
 
 
 async def test_the_connection_hook_drops_a_node_whose_hello_claims_a_session() -> None:
-    from nox.node.install import connection_hook
+    from nox.node.hub.install import connection_hook
 
     control, _seen = _violations()
     dropped: list[tuple[str, str]] = []
@@ -473,7 +470,7 @@ async def test_the_connection_hook_drops_a_node_whose_hello_claims_a_session() -
 
 def _world_control(sessions: dict[str, Any], tools: dict[str, dict[str, str]]) -> Any:
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.install import _world_specs
+    from nox.node.hub.install import _world_specs
     from nox.tools.registry import ToolRegistry
 
     dropped: list[tuple[str, str]] = []

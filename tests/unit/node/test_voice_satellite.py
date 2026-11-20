@@ -13,19 +13,13 @@ import pytest
 
 from nox.core.events.names import E
 from nox.lan.tls import TlsMaterial
-from nox.node import protocol as p
-from nox.node.listener import NodeListener
-from nox.node.manifest import NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.policy import relevant_groups
-from nox.node.registry import ROUTABLE
-from nox.node.voice import (
-    MUTE_FILE,
-    PTT_FILE,
-    VoiceSettings,
-    voice_config,
-    voice_tools,
-)
+from nox.node.device.voice import MUTE_FILE, PTT_FILE, VoiceSettings, voice_config, voice_tools
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.policy import relevant_groups
+from nox.node.hub.registry import ROUTABLE
+from nox.node.wire import protocol as p
+from nox.node.wire.manifest import NodeManifest
 from tests.unit.fakes import wait_until
 from tests.unit.node.support import session_of, start_node
 from tests.unit.node.support_voice import (
@@ -51,7 +45,7 @@ def test_voice_and_obs_are_off_by_default_and_routable() -> None:
 
 
 def test_a_pi_gets_the_small_speech_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.node import voice as voice_module
+    from nox.node.device import voice as voice_module
 
     monkeypatch.setattr(voice_module.platform, "machine", lambda: "aarch64")
     cfg = voice_config(VoiceSettings(), tmp_path)
@@ -67,7 +61,7 @@ def test_a_headless_device_listens_for_the_wake_word(
 ) -> None:
     """Push-to-talk needs a key to hold - a tray or a terminal. A
     device without a screen listens for the wake word unless its settings say otherwise."""
-    from nox.node.voice import listening_mode
+    from nox.node.device.voice import listening_mode
 
     assert VoiceSettings().mode == "auto"
     assert listening_mode(VoiceSettings(), screen=lambda: False) == "wake_word"
@@ -75,12 +69,12 @@ def test_a_headless_device_listens_for_the_wake_word(
     assert listening_mode(VoiceSettings(mode="push_to_talk"), screen=lambda: False) == (
         "push_to_talk"
     )
-    monkeypatch.setattr("nox.node.confirm.has_screen", lambda: False)
+    monkeypatch.setattr("nox.node.device.confirm.has_screen", lambda: False)
     assert voice_config(VoiceSettings(), tmp_path).stt.listening_mode == "continuous"
 
 
 def test_voice_say_is_offered_only_where_the_voice_libraries_are(tmp_path: Path) -> None:
-    from nox.node.voice import voice_support
+    from nox.node.device.voice import voice_support
 
     satellite, _seen = make_satellite(tmp_path)
     assert voice_tools(satellite, support=lambda: "the extra voice is missing") == {}
@@ -96,7 +90,7 @@ def test_voice_setup_asks_first_and_downloads_into_the_node_folder(
 ) -> None:
     """The models only after a yes, into the node's own folder - and
     the node's speech recognition never downloads by itself (`local_files_only`)."""
-    from nox.node import voice as voice_module
+    from nox.node.device import voice as voice_module
     from nox.voice.stt.faster_whisper_engine import FasterWhisperStt
 
     monkeypatch.setattr(voice_module, "voice_support", lambda: None)
@@ -242,8 +236,8 @@ async def test_a_refusal_is_remembered_in_words_and_sounds_once(tmp_path: Path) 
     `nox node voice status`, a low two-tone "no" plays, and not again within the rate limit."""
     import json
 
-    from nox.node.satellite_cli import voice_status
-    from nox.node.voice import REFUSAL_SOUND_EVERY_S, STATE_FILE
+    from nox.node.device.satellite_cli import voice_status
+    from nox.node.device.voice import REFUSAL_SOUND_EVERY_S, STATE_FILE
 
     satellite, seen = await running_satellite(
         tmp_path, answer={"result": {"accepted": False, "reason": "voice_not_switched_on_here"}}
@@ -262,7 +256,7 @@ async def test_a_refusal_is_remembered_in_words_and_sounds_once(tmp_path: Path) 
     await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
     assert len(out.played) == 2
     # The status says it in words, in both languages.
-    from nox.node.home import NodeHome
+    from nox.node.device.home import NodeHome
 
     home = NodeHome(tmp_path)
     for lang, words in (
@@ -290,7 +284,7 @@ async def _accepted() -> dict[str, Any]:
 
 
 def test_every_refusal_the_core_gives_has_words() -> None:
-    from nox.node.satellite_cli import refusal_words
+    from nox.node.device.satellite_cli import refusal_words
 
     for code in (
         "voice_not_switched_on_here",
@@ -306,7 +300,7 @@ def test_every_refusal_the_core_gives_has_words() -> None:
 
 
 def test_whisper_is_fetched_by_pinned_revision() -> None:
-    from nox.node.voice import WHISPER_REVISIONS
+    from nox.node.device.voice import WHISPER_REVISIONS
 
     assert set(WHISPER_REVISIONS) == {"tiny", "base", "small"}
     assert all(

@@ -16,10 +16,10 @@ import pytest
 from websockets.exceptions import InvalidStatus
 
 from nox.lan.tls import TlsMaterial
-from nox.node import listener as listener_module
-from nox.node.listener import NodeListener
-from nox.node.pairing import NodePairing
-from nox.node.repo import NodeRepository
+from nox.node.hub import listener as listener_module
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
 from nox.security.audit import SqliteAuditLog
 from tests.unit.node.support import client_context, greet, open_node, pair_node, recv_until
 

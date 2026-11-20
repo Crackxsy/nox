@@ -1,4 +1,4 @@
-"""Satellites through the real wiring of `nox.node.install`: a preset started at a satellite
+"""Satellites through the real wiring of `nox.node.hub.install`: a preset started at a satellite
 runs as the satellite agent, dropped sentences are skipped instead of sent empty, and the
 hub cleans a node's name itself."""
 
@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from nox.core.events.names import E
-from nox.node import protocol as p
+from nox.node.wire import protocol as p
 from tests.unit.fakes import FakeBus, wait_until
 from tests.unit.node.support_voice import PI, fake_session, heard, running_satellite, voice_hub
 
@@ -131,7 +131,7 @@ async def test_a_dropped_last_sentence_still_ends_the_answer() -> None:
 
 
 async def test_the_hub_cleans_the_nodes_name_itself() -> None:
-    from nox.node.satellites import SatelliteHub
+    from nox.node.hub.satellites import SatelliteHub
 
     notes: list[str] = []
 

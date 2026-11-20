@@ -3,7 +3,7 @@
  *
  * The core publishes it whenever a session that moves the mouse and presses keys starts or ends
  * (`src/nox/desktop/install.py`) - on this machine, or on a paired PC (`device`, `device_id`, from
- * `src/nox/node/world_routes.py`). While one is active every page shows a banner that cannot be
+ * `src/nox/node/hub/world_routes.py`). While one is active every page shows a banner that cannot be
  * dismissed and names the hotkey that ends it at once. The payload is narrowed by hand: it is a
  * bus event, not a pydantic model in `src/nox/ipc/protocol.py`.
  */

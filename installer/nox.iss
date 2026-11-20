@@ -114,7 +114,7 @@ Name: "{group}\{cm:UninstallProgram,Nox}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; Tasks: desktopicon
 Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Tasks: autostart
 ; Node: "Nox Node" starts the logon task now (never a second copy). Its AppUserModelID is the one
-; the node's notifications carry (nox.node.appid), so a toast says "Nox", not "Windows PowerShell".
+; the node's notifications carry (nox.node.device.appid), so a toast says "Nox", not "Windows PowerShell".
 Name: "{group}\Nox Node"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; AppUserModelID: "Nox.Node"; Check: IsNodeMode
 ; Node: a Command Prompt where `nox-node ...` works (status, allow, pair) - what the dashboard's
 ; "So schaltest du es ein" asks for.
@@ -270,7 +270,7 @@ end;
 
 { The link reaches the node as one quoted argument: only nox-node://pair? links made of characters
   a link holds are passed on - no quotes, spaces or anything a command line treats specially.
-  The node checks the link itself again (nox.node.protocol.PairLink). }
+  The node checks the link itself again (nox.node.wire.protocol.PairLink). }
 function ValidPairLink(const Link: String): Boolean;
 var
   I: Integer;

@@ -36,7 +36,7 @@ class CallScope:
     #: What the confirmation dialog and the audit entry name as the call's target; empty means
     #: the tool's own `targets`.
     target: str = ""
-    #: The node the call runs on (`nox.node.router`); "" for this core.
+    #: The node the call runs on (`nox.node.hub.router`); "" for this core.
     device: str = ""
     #: High risk on a node: the person at that device confirms it there,
     #: so the core does not ask anyone itself. A refusal by the core's rules still refuses.

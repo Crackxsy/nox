@@ -162,7 +162,7 @@ if [ -n "$NODE_MODE" ]; then
   else
     data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
     PREFIX="$data_home/nox-node-app"
-    NODE_DIR="$data_home/nox/node"  # nox.node.home.default_home
+    NODE_DIR="$data_home/nox/node"  # nox.node.device.home.default_home
     NODE_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/nox-node.service"
     NODE_BIN="$HOME/.local/bin/nox-node"
     LOCK_FILE="$PREFIX/.install.lock"

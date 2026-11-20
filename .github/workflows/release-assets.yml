@@ -103,15 +103,15 @@ jobs:
       # Into the signed manifest: the node protocols this release's core accepts, the protocol its
       # node speaks, and whether uv.lock changed since the previous release tag. A node installs a
       # release by itself only when its paired core accepts the new node's protocol and no library
-      # changed - a code-only patch (nox.node.update); otherwise the installer is needed.
+      # changed - a code-only patch (nox.node.device.update); otherwise the installer is needed.
       - name: The commit the tag points to, its node protocols, changed libraries
         id: source
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           echo "commit=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          range="$(sed -n 's/^NODE_PROTOCOL_RANGE: tuple\[int, int\] = (\([0-9]*\), \([0-9]*\))$/\1-\2/p' source/src/nox/node/protocol.py)"
-          speaks="$(sed -n 's/^NODE_PROTOCOL = \([0-9]*\)$/\1/p' source/src/nox/node/protocol.py)"
+          range="$(sed -n 's/^NODE_PROTOCOL_RANGE: tuple\[int, int\] = (\([0-9]*\), \([0-9]*\))$/\1-\2/p' source/src/nox/node/wire/protocol.py)"
+          speaks="$(sed -n 's/^NODE_PROTOCOL = \([0-9]*\)$/\1/p' source/src/nox/node/wire/protocol.py)"
           test -n "$range" && test -n "$speaks"
           previous="$(git -C source describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || true)"
           if [ -n "$previous" ] && git -C source diff --quiet "$previous" HEAD -- uv.lock; then

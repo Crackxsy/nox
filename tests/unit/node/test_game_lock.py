@@ -10,12 +10,12 @@ from typing import Any
 
 import pytest
 
-from nox.node import cli as node_cli
-from nox.node.confirmed import effective_manifest
-from nox.node.gate import NodeGate
-from nox.node.home import NodeHome
-from nox.node.manifest import NodeManifest
-from nox.node.world import GameLock, world_tools
+from nox.node.device import cli as node_cli
+from nox.node.device.confirmed import effective_manifest
+from nox.node.device.gate import NodeGate
+from nox.node.device.home import NodeHome
+from nox.node.device.world import GameLock, world_tools
+from nox.node.wire.manifest import NodeManifest
 from tests.unit.node.support_sessions import LAPTOP, device_world, world_gate, world_meta
 
 # ---- the game lock -------------------------------------------------------------------------------
@@ -162,7 +162,7 @@ def test_the_devices_own_games_lock_and_only_the_device_removes_them(tmp_path: P
     assert "ExampleGame.exe" in runtime.gate.manifest.games
     assert "examplegame.exe" in runtime.world.lock._names()
     # Editing node.yaml cannot drop a confirmed game: games only ever add up.
-    from nox.node.manifest import load_manifest, save_manifest
+    from nox.node.wire.manifest import load_manifest, save_manifest
 
     found = load_manifest(home.manifest_file)
     save_manifest(home.manifest_file, found.model_copy(update={"games": []}))
@@ -192,7 +192,7 @@ def test_the_core_can_only_add_games() -> None:
 
 
 async def test_the_core_sends_its_games_on_every_connection() -> None:
-    from nox.node.install import send_games
+    from nox.node.hub.install import send_games
 
     sent: list[tuple[str, Any]] = []
 
@@ -211,7 +211,7 @@ async def test_the_core_sends_its_games_on_every_connection() -> None:
 
 
 def test_the_wire_accepts_program_names_only() -> None:
-    from nox.node.protocol import GamesAdd
+    from nox.node.wire.protocol import GamesAdd
 
     assert GamesAdd.model_validate({"add": ["Game One.exe"]}).add == ["Game One.exe"]
     for bad in (["../x.exe"], ["C:\\x.exe"], ["*"], ["x" * 70]):
@@ -266,7 +266,7 @@ def test_more_anti_cheat_services_are_known() -> None:
 
 
 def test_removing_a_game_without_a_confirmation_writes_nothing(tmp_path: Path) -> None:
-    from nox.node.manifest import NodeManifest, save_manifest
+    from nox.node.wire.manifest import NodeManifest, save_manifest
 
     home = NodeHome(tmp_path / "node")
     home.ensure()
@@ -285,7 +285,7 @@ def test_removing_a_game_without_a_confirmation_writes_nothing(tmp_path: Path) -
 
 
 async def test_the_core_sends_its_games_again_when_they_change() -> None:
-    from nox.node.install import resend_games_if_changed
+    from nox.node.hub.install import resend_games_if_changed
 
     sent: list[Any] = []
 

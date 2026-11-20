@@ -27,8 +27,8 @@ from nox.ipc.dispatch import RequestContext
 from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.ipc.protocol import Envelope, Kind, Source
 from nox.lan.install import LanRuntime
-from nox.node.install import NodeRuntime
-from nox.node.protocol import NODE_PATH, PairLink
+from nox.node.hub.install import NodeRuntime
+from nox.node.wire.protocol import NODE_PATH, PairLink
 from tests.integration.test_lan import _config as lan_config
 from tests.unit.node.support import hello, key_pem, make_csr, make_key
 
@@ -232,13 +232,13 @@ async def test_a_stop_on_the_node_engages_the_kill_switch(core: NoxCore, tmp_pat
 async def test_a_node_enrolls_runs_and_serves_the_core(core: NoxCore, tmp_path: Path) -> None:
     """`nox node pair` + `nox node run` end to end: the node pins the authority, gets its
     certificate, connects, and the core calls its tools - which the node's gate checks."""
-    from nox.node.agent import NodeAgent
-    from nox.node.enroll import enroll
-    from nox.node.gate import NodeGate
-    from nox.node.home import NodeHome
-    from nox.node.keystore import NodeKeyStore
-    from nox.node.manifest import NodeManifest
-    from nox.node.tools import default_tools
+    from nox.node.device.agent import NodeAgent
+    from nox.node.device.enroll import enroll
+    from nox.node.device.gate import NodeGate
+    from nox.node.device.home import NodeHome
+    from nox.node.device.keystore import NodeKeyStore
+    from nox.node.device.tools import default_tools
+    from nox.node.wire.manifest import NodeManifest
     from nox.security.secrets import InMemorySecretStore
 
     start = await _local(core, "dashboard", "node.pair.start", {"name": "Laptop"})
@@ -308,13 +308,13 @@ async def test_the_core_routes_tool_calls_to_the_right_device(
 ) -> None:
     """End to end: `device` resolves to the paired laptop, the permission target and the audit
     name it, an unknown device is an honest error, and an offline one is never substituted."""
-    from nox.node.agent import NodeAgent
-    from nox.node.enroll import enroll
-    from nox.node.gate import NodeGate
-    from nox.node.home import NodeHome
-    from nox.node.keystore import NodeKeyStore
-    from nox.node.manifest import NodeManifest
-    from nox.node.tools import default_tools
+    from nox.node.device.agent import NodeAgent
+    from nox.node.device.enroll import enroll
+    from nox.node.device.gate import NodeGate
+    from nox.node.device.home import NodeHome
+    from nox.node.device.keystore import NodeKeyStore
+    from nox.node.device.tools import default_tools
+    from nox.node.wire.manifest import NodeManifest
 
     start = await _local(core, "dashboard", "node.pair.start", {"name": "Laptop"})
     printed = PairLink.parse(start["link"])

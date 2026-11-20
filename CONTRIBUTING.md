@@ -44,6 +44,7 @@ Run what CI runs:
 .venv\Scripts\python.exe -m ruff check src tests
 .venv\Scripts\python.exe -m ruff format --check src tests
 .venv\Scripts\python.exe -m mypy src/nox
+.venv\Scripts\lint-imports.exe
 .venv\Scripts\python.exe scripts/gen_ts_types.py --check
 .venv\Scripts\python.exe scripts/check_planning_ids.py
 .venv\Scripts\python.exe -m pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider

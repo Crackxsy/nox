@@ -10,11 +10,11 @@ from typing import Any
 
 import pytest
 
-from nox.node.gate import NodeGate
-from nox.node.hands import NodeHands, WriteArgs, hand_tools
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.protocol import NoxCallMeta
-from nox.node.tools import NodeRefusal
+from nox.node.device.gate import NodeGate
+from nox.node.device.hands import NodeHands, WriteArgs, hand_tools
+from nox.node.device.tools import NodeRefusal
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
 from nox.security.model import Risk
 from tests.unit.node.support import signed
 from tests.unit.node.support_hands import (
@@ -152,8 +152,8 @@ async def test_a_link_cannot_turn_a_data_name_into_a_hidden_folder(
 
 
 def test_structured_formats_are_always_high_and_passive_ones_medium_when_new() -> None:
-    from nox.node.hands import write_risk
-    from nox.node.install import _write_risk
+    from nox.node.device.hands import write_risk
+    from nox.node.hub.install import _write_risk
 
     for name in ("a.json", "a.YAML", "a.yml"):
         assert write_risk(name, False, False) == "high", name
@@ -164,7 +164,7 @@ def test_structured_formats_are_always_high_and_passive_ones_medium_when_new() -
 
 
 async def test_a_new_structured_file_needs_a_high_receipt(tmp_path: Path) -> None:
-    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+    from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 
     signer = ReceiptSigner(tmp_path / "r")
     verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
@@ -299,7 +299,7 @@ def test_spaces_around_a_path_or_a_name_are_refused_not_cut(
 async def test_a_refused_name_is_never_created_even_for_a_moment(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import safe_fs
+    from nox.node.device import safe_fs
 
     def never(*_a: Any, **_k: Any) -> int:
         raise AssertionError("the file system was touched for a refused name")

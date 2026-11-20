@@ -1,4 +1,4 @@
-"""`nox.node.policy`: the core's own tool -> group mapping, what a listing records, and that a
+"""`nox.node.hub.policy`: the core's own tool -> group mapping, what a listing records, and that a
 narrowed group stays out of what the core routes - whatever the node says."""
 
 from __future__ import annotations
@@ -12,12 +12,12 @@ from typing import Any
 
 import pytest
 
-from nox.node.manifest import GROUPS
-from nox.node.pairing import NodePairing
-from nox.node.policy import NodePolicy, defaults_view, family_tools, group_of, reported_groups
-from nox.node.registry import ROUTABLE, NodeEntry, NodeRegistry
-from nox.node.repo import NodeRepository
-from nox.node.router import resolve
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.policy import NodePolicy, defaults_view, family_tools, group_of, reported_groups
+from nox.node.hub.registry import ROUTABLE, NodeEntry, NodeRegistry
+from nox.node.hub.repo import NodeRepository
+from nox.node.hub.router import resolve
+from nox.node.wire.manifest import GROUPS
 from tests.unit.node.support import ListingClient, ListingSession, SlowListingClient, pair_node
 
 
@@ -378,7 +378,7 @@ async def test_a_call_right_after_connecting_waits_for_the_tool_list(
 async def test_a_device_that_never_finishes_announcing_is_offline_after_the_wait(
     pairing: NodePairing, nodes: NodeRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node import registry as registry_module
+    from nox.node.hub import registry as registry_module
 
     monkeypatch.setattr(registry_module, "LISTING_WAIT_S", 0.05)
     node = await pair_node(pairing, tmp_path)

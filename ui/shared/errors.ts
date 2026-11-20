@@ -41,7 +41,7 @@ export function failureKind(e: unknown): FailureKind {
   }
 }
 
-/** The core's refusal while Nox controls mouse and keyboard on a paired PC (`nox.node.world_routes`). */
+/** The core's refusal while Nox controls mouse and keyboard on a paired PC (`nox.node.hub.world_routes`). */
 export const NODE_SESSION = 'node_session';
 
 /**

@@ -27,7 +27,7 @@ repository but not the key.
 | `nox update` on Linux / Raspberry Pi | Before it runs the new version's installer, the **running** version checks the new release with its own `nox release verify` - so trust always comes from what is already installed, never from what is being installed. Then the new installer checks again with its own key list. |
 | `nox release verify <manifest>` | The same check by hand, on any system Nox runs on, optionally with `--file <downloaded file>` (repeatable) to compare files against the manifest. Exit status: 0 verified, 1 refused, 3 not configured. |
 | `nox release keys` | Lists the keys this version trusts and whether each is still valid. |
-| Node self-update (`nox.node.update`, daily, and `nox node update`) | The same library and manifest: the signature against the keys of the node version already installed (none trusted: no update at all), no downgrade below the highest version that ran there, then `nox-app-<tag>.zip` must match the manifest's size and SHA-256 before it is unpacked, trial-started and switched to atomically; a version that does not start is rolled back. Order and details: [NODES.md](NODES.md#updates). |
+| Node self-update (`nox.node.device.update`, daily, and `nox node update`) | The same library and manifest: the signature against the keys of the node version already installed (none trusted: no update at all), no downgrade below the highest version that ran there, then `nox-app-<tag>.zip` must match the manifest's size and SHA-256 before it is unpacked, trial-started and switched to atomically; a version that does not start is rolled back. Order and details: [NODES.md](NODES.md#updates). |
 | Nox-OS images (`os/README.md`) | Nox inside the image is installed by `install-linux.sh --image`, checked exactly like a Pi install. The image's own files are listed in a second manifest, `nox-os-manifest.json` (+ `.sig`): same format and key, with `"kind": "os-image"`, signed by `.github/workflows/os-image.yml` in the same environment. Check one with `nox release verify nox-os-manifest.json --kind os-image --file <image>`. A release without the key gets no image at all. |
 | Windows installer | Not yet a release asset built by CI, so it is not in the manifest yet. Once it is, it is listed like the other files and can be checked with `nox release verify --file Nox-Setup-<version>.exe`. The Inno Setup installer cannot check an Ed25519 signature by itself; on Windows, Authenticode code signing is the matching control, and it is not configured yet either (`installer/README.md`). |
 
@@ -100,7 +100,7 @@ key signed. Or, on a machine that already runs Nox: `nox release verify release-
   signed document. Trust itself comes from the list built into the installed version, never from
   a downloaded manifest.
 - `node_protocol` is the node protocol range the release's core accepts (`NODE_PROTOCOL_RANGE`
-  in `src/nox/node/protocol.py`), `node_speaks` the protocol its node speaks (`NODE_PROTOCOL`),
+  in `src/nox/node/wire/protocol.py`), `node_speaks` the protocol its node speaks (`NODE_PROTOCOL`),
   and `deps_changed` whether `uv.lock` changed since the previous release tag - all three filled
   by the release workflow. A node installs a release by itself only when its *paired core*
   accepts `node_speaks` and `deps_changed` is `false` (a code-only patch); otherwise the device's

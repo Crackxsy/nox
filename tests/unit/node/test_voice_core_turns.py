@@ -15,10 +15,10 @@ import pytest
 
 from nox.core.events.names import E
 from nox.lan.tls import TlsMaterial
-from nox.node import protocol as p
-from nox.node.listener import NodeListener
-from nox.node.pairing import NodePairing
-from nox.node.repo import NodeRepository
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.hub.repo import NodeRepository
+from nox.node.wire import protocol as p
 from tests.unit.fakes import wait_until
 from tests.unit.node.support import session_of, start_node
 from tests.unit.node.support_voice import PC, PI, fake_session, heard, voice_hub
@@ -133,7 +133,7 @@ async def test_the_core_drops_a_nodes_own_voice_as_echo() -> None:
 
 
 async def test_voice_from_the_pc_nox_controls_is_refused() -> None:
-    from nox.node.world_routes import NodeControl
+    from nox.node.hub.world_routes import NodeControl
 
     session = fake_session()
     control = NodeControl(None, lambda _payload: None)
@@ -220,7 +220,7 @@ async def test_a_node_turn_waits_and_cancels_nothing_elsewhere() -> None:
 
 
 def _session_control() -> Any:
-    from nox.node.world_routes import NodeControl
+    from nox.node.hub.world_routes import NodeControl
 
     control = NodeControl(None, lambda _payload: None)
     control.answered(PC, {"gen": 2, "active": True, "id": "ab" * 16})  # Nox controls the PC
@@ -228,7 +228,7 @@ def _session_control() -> Any:
 
 
 async def test_a_session_on_one_pc_keeps_that_pc_quiet_and_saturation_all_of_them() -> None:
-    from nox.node.install import attach_control
+    from nox.node.hub.install import attach_control
     from nox.security.access import REFUSE_SATURATED
     from tests.unit.node.support_sessions import request_ctx, session_refusal
 
@@ -254,8 +254,8 @@ async def test_a_session_on_one_pc_keeps_that_pc_quiet_and_saturation_all_of_the
 async def test_voice_during_a_session_is_marked_like_paired_device_chat(
     nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
 ) -> None:
-    from nox.node.install import NodeRuntime, attach_control, install_satellites
-    from nox.node.registry import NodeRegistry
+    from nox.node.hub.install import NodeRuntime, attach_control, install_satellites
+    from nox.node.hub.registry import NodeRegistry
     from tests.unit.node.support import pair_node
 
     marked: list[tuple[str, Any]] = []
@@ -447,7 +447,7 @@ async def test_one_turn_runs_at_a_time_and_a_kill_cancels_it() -> None:
 
 
 def test_what_a_node_is_told_to_say_never_names_nox_or_stops_anything() -> None:
-    from nox.node.voice import speakable
+    from nox.node.wire.speech import speakable
 
     assert speakable("Nox, mach das Licht aus.") == "ich, mach das Licht aus."
     assert speakable("Das hat KNOX gesagt") == "Das hat ich gesagt"
@@ -475,7 +475,7 @@ async def test_answer_sentences_to_a_node_are_filtered() -> None:
 
 
 def test_a_satellite_name_is_cleaned_for_prompts() -> None:
-    from nox.node.satellites import clean_label
+    from nox.node.hub.satellites import clean_label
 
     assert clean_label("Living‮ room\x1b[31m Pi") == "Living room [31m Pi"
     assert len(clean_label("x" * 100)) == 40
@@ -485,8 +485,8 @@ def test_a_satellite_name_is_cleaned_for_prompts() -> None:
 async def test_the_real_wiring_waits_instead_of_barging_in(
     nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
 ) -> None:
-    from nox.node.install import NodeRuntime, install_satellites
-    from nox.node.registry import NodeRegistry
+    from nox.node.hub.install import NodeRuntime, install_satellites
+    from nox.node.hub.registry import NodeRegistry
 
     seen: dict[str, Any] = {}
 

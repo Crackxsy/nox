@@ -454,7 +454,7 @@ src/nox/worker      worker runtime for services and plugins
 src/nox/plugins     plugin manager and manifest validation
 src/nox/home        smart-home boundary, deterministic intent matching, `home.*` IPC, connection probe
 src/nox/lan         network access: the installation's own certificate authority, paired devices, HTTPS listener
-src/nox/node        nodes - Nox on your other computers: listener, routing and receipts on the core, `nox-node` on the device
+src/nox/node        nodes - Nox on your other computers: `hub/` (listener, routing, pairing) on the core, `device/` (`nox-node`) on the device, `wire/` (protocol, receipts) for both
 src/nox/hands       the tools that reach the machine and the world: shell, packages, web, browser, senses
 src/nox/desktop     processes and windows on this machine; typing and computer use behind the game guard
 src/nox/sandbox     runs commands and foreign code confined (AppContainer on Windows, bwrap on Linux)

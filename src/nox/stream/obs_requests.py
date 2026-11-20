@@ -542,7 +542,8 @@ async def privacy_scene_refusal(
     request: ObsRequest, privacy_scene: str, request_type: str, request_data: Mapping[str, Any]
 ) -> str | None:
     """`privacy_refusal` with what the privacy scene holds asked from OBS right now - by the
-    plugin on the core and by `nox.node.obs` on a node alike. Raises `PermissionError` when OBS
+    plugin on the core and by `nox.node.device.obs` on a node alike. Raises `PermissionError` when
+    OBS
     cannot say: the panic path is worth more than one request."""
     if not privacy_scene:
         return None

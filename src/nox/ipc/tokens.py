@@ -168,7 +168,7 @@ class TokenStore:
         self._session_file_restricted: bool | None = None
         self._device_verifier: DeviceVerifier | None = None
         #: Whether the node an overlay credential was issued to (`node:<id>`) may still hold one
-        #: (set by `nox.node.install`). Not set, or failing: no node overlay over the network.
+        #: (set by `nox.node.hub.install`). Not set, or failing: no node overlay over the network.
         self.node_overlay_allowed: Callable[[str], bool] | None = None
 
     @property

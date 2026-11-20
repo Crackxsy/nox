@@ -15,15 +15,15 @@ from typing import Any
 import pytest
 
 from nox.lan.tls import TlsMaterial
-from nox.node import agent as agent_module
-from nox.node.agent import NodeAgent
-from nox.node.gate import NodeGate
-from nox.node.home import NodeHome
-from nox.node.keystore import NodeKeyStore
-from nox.node.listener import NodeListener
-from nox.node.manifest import NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.receipts import ReceiptSigner
+from nox.node.device import agent as agent_module
+from nox.node.device.agent import NodeAgent
+from nox.node.device.gate import NodeGate
+from nox.node.device.home import NodeHome
+from nox.node.device.keystore import NodeKeyStore
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.wire.manifest import NodeManifest
+from nox.node.wire.receipts import ReceiptSigner
 from tests.unit.node.support import (
     Confirmer,
     call,
@@ -126,7 +126,7 @@ async def test_an_expired_certificate_ends_the_session(
     pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
 ) -> None:
     """A session does not outlive its certificate."""
-    from nox.node.repo import NodeRepository
+    from nox.node.hub.repo import NodeRepository
 
     signer = ReceiptSigner(tmp_path / "tls")
     server = NodeListener(
@@ -230,7 +230,7 @@ async def test_the_kill_switch_resumes_the_nodes() -> None:
 async def test_a_node_that_connects_while_nox_is_stopped_stays_stopped(
     pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
 ) -> None:
-    from nox.node.repo import NodeRepository
+    from nox.node.hub.repo import NodeRepository
 
     signer = ReceiptSigner(tmp_path / "tls")
     server = NodeListener(
@@ -257,7 +257,7 @@ async def test_a_node_that_connects_while_nox_is_stopped_stays_stopped(
 
 
 async def test_a_stop_closes_an_open_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.node import confirm as confirm_module
+    from nox.node.device import confirm as confirm_module
 
     killed: list[bool] = []
 

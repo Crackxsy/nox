@@ -833,7 +833,7 @@ class DefaultPermissionEngine:
         #: what the user said in each.
         self._taint = TaintLedger()
         #: A node's name by its id, for a question that came from its voice satellite (set by
-        #: `nox.node.install`).
+        #: `nox.node.hub.install`).
         self.satellite_label: Callable[[str], str] | None = None
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------

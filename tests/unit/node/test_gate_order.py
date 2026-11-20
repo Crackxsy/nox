@@ -1,6 +1,6 @@
 """The order of the gate's checks. The first refusal a call meets is the one the core hears
 and the one the audit trail records, so the order is part of the contract: it is pinned
-here against `nox.node.gate.CHECK_ORDER` and the module's documentation."""
+here against `nox.node.device.gate.CHECK_ORDER` and the module's documentation."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import re
 import textwrap
 from pathlib import Path
 
-from nox.node import gate as gate_module
-from nox.node.gate import CHECK_ORDER, INPUT_TOOLS, LOCKED_TOOLS, NodeGate
+from nox.node.device import gate as gate_module
+from nox.node.device.gate import CHECK_ORDER, INPUT_TOOLS, LOCKED_TOOLS, NodeGate
 from tests.unit.node.support_sessions import device_world, world_gate
 
 # ---- the order itself: one list, held against the code and the documentation ---------------------

@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from nox.node.registry import MAX_RESULT_CHARS, NodeEntry, NodeRegistry, clean_result
-from nox.node.router import CORE, resolve, routed_spec
-from nox.node.tools import NotifyArgs
+from nox.node.hub.registry import MAX_RESULT_CHARS, NodeEntry, NodeRegistry, clean_result
+from nox.node.hub.router import CORE, resolve, routed_spec
+from nox.node.wire.arguments import NotifyArgs
 from nox.security.model import PermissionRequest, Risk, TemporaryGrant
 from nox.security.permissions import grant_matches
 from nox.security.taint import CONVERSATION
@@ -219,7 +219,7 @@ async def test_the_core_keeps_its_own_target_and_handler() -> None:
         ran.append(payload)
         return {"here": True}
 
-    from nox.node.tools import NoArgs
+    from nox.node.wire.arguments import NoArgs
 
     core = ToolSpec(
         name="system.info",
@@ -251,7 +251,7 @@ def test_unknown_arguments_stay_refused() -> None:
 
 
 def test_the_origin_comes_from_a_device_conversation() -> None:
-    from nox.node.router import origin_device
+    from nox.node.hub.router import origin_device
 
     token = CONVERSATION.set(f"chat:device:{'d' * 32}#abc123")
     try:
@@ -427,7 +427,7 @@ def test_two_devices_with_one_name_are_never_guessed_between() -> None:
     ],
 )
 def test_a_device_name_in_the_turn_context_is_bounded_and_plain(name: str, shown: str) -> None:
-    from nox.node.registry import display_name
+    from nox.node.hub.registry import display_name
 
     assert display_name(name) == shown
 
@@ -486,7 +486,7 @@ def test_node_results_taint_the_conversation() -> None:
 def test_a_fallback_or_core_chosen_name_is_made_allowed_and_unique(
     wanted: str, taken: list[str], stored: str
 ) -> None:
-    from nox.node.names import ALLOWED, MAX_NAME, household_name
+    from nox.node.wire.names import ALLOWED, MAX_NAME, household_name
 
     name = household_name(wanted, taken)
     assert name == stored and len(name) <= MAX_NAME and set(name) <= ALLOWED
@@ -509,7 +509,7 @@ def test_a_fallback_or_core_chosen_name_is_made_allowed_and_unique(
 def test_a_name_typed_on_the_device_is_refused_when_not_allowed_or_taken(
     wanted: str, taken: list[str], reason: str
 ) -> None:
-    from nox.node.names import NameRejectedError, household_name
+    from nox.node.wire.names import NameRejectedError, household_name
 
     with pytest.raises(NameRejectedError) as refused:
         household_name(wanted, taken, strict=True)
@@ -519,9 +519,9 @@ def test_a_name_typed_on_the_device_is_refused_when_not_allowed_or_taken(
 async def test_pairing_checks_the_name_only_behind_a_valid_code(tmp_path: Any) -> None:
     from nox.data.db import Database
     from nox.lan.tls import ensure_tls
-    from nox.node.pairing import NodePairing
-    from nox.node.protocol import NodePairRequest
-    from nox.node.repo import NodeRepository
+    from nox.node.hub.pairing import NodePairing
+    from nox.node.hub.repo import NodeRepository
+    from nox.node.wire.protocol import NodePairRequest
     from nox.remote.repo import RemoteRepository
     from tests.unit.node.support import make_csr, make_key, pair_node
 
@@ -560,7 +560,7 @@ async def test_pairing_checks_the_name_only_behind_a_valid_code(tmp_path: Any) -
 
 
 def test_the_model_always_sees_a_short_id_it_cannot_choose() -> None:
-    from nox.node.names import label
+    from nox.node.wire.names import label
 
     assert label("Laptop", "3f2a" + "0" * 28) == "Laptop · 3f2a"
     assert label("\x1b\u202e", "3f2a" + "0" * 28) == "Gerät · 3f2a"
@@ -576,9 +576,9 @@ def test_the_registry_keeps_only_the_allowed_form_of_a_name() -> None:
 async def test_an_expired_code_never_reveals_whether_a_name_is_taken(tmp_path: Any) -> None:
     from nox.data.db import Database
     from nox.lan.tls import ensure_tls
-    from nox.node.pairing import NodePairing
-    from nox.node.protocol import NodePairRequest
-    from nox.node.repo import NodeRepository
+    from nox.node.hub.pairing import NodePairing
+    from nox.node.hub.repo import NodeRepository
+    from nox.node.wire.protocol import NodePairRequest
     from nox.remote.repo import RemoteRepository
     from tests.unit.node.support import make_csr, make_key, pair_node
 

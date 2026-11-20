@@ -204,7 +204,7 @@ def safe_python_binds(paths: list[str], *, private: list[str]) -> tuple[str, ...
 def _private_folders(home: Path) -> list[str]:
     """What a bind may never expose: the user's home, Nox's folder and a node's own folder
     (key, certificates, audit trail - `NOX_NODE_HOME` may put it outside the home)."""
-    from nox.node.home import default_home  # noqa: PLC0415 - small, and only for this check
+    from nox.node.device.home import default_home  # noqa: PLC0415 - small, and only for this check
 
     return [os.path.expanduser("~"), str(home), os.path.realpath(default_home())]
 

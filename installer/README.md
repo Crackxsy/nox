@@ -110,7 +110,7 @@ with `/MODE=node` and may pass `/PAIR=<nox-node://pair?... link>`.
 - The sandbox-rules task is offered as in a core install (a node runs shell commands in the same
   sandbox); it stays the only elevated step and still never runs anything from `{app}`.
 - `app\start_node.pyw` - standard library only, never replaced by an update - chooses between this
-  copy and a version the node installed itself from a signed release (`nox.node.update`), restarts
+  copy and a version the node installed itself from a signed release (`nox.node.device.update`), restarts
   the node after an update and rolls a version back that does not start.
 - Uninstall also removes those self-installed versions (`%LOCALAPPDATA%\Nox\node\app`) - program
   code, the one path outside `{app}` it deletes. The node's key, certificate, settings and audit

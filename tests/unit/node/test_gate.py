@@ -13,14 +13,14 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from nox.lan.tls import TlsMaterial
-from nox.node import agent as agent_module
-from nox.node.gate import NodeGate
-from nox.node.listener import NodeListener
-from nox.node.manifest import GROUPS, NodeManifest
-from nox.node.pairing import NodePairing
-from nox.node.protocol import NoxCallMeta
-from nox.node.receipts import ReceiptSigner, ReceiptVerifier
-from nox.node.tools import NodeTool
+from nox.node.device import agent as agent_module
+from nox.node.device.gate import NodeGate
+from nox.node.device.tools import NodeTool
+from nox.node.hub.listener import NodeListener
+from nox.node.hub.pairing import NodePairing
+from nox.node.wire.manifest import GROUPS, NodeManifest
+from nox.node.wire.protocol import NoxCallMeta
+from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 from nox.security.audit import SqliteAuditLog
 from tests.unit.node.support import (
     call,
@@ -154,7 +154,7 @@ def test_critical_from_the_core_is_never_cheaper_or_unconfirmed(
 
 
 def test_an_unknown_risk_ranks_highest(tmp_path: Path) -> None:
-    from nox.node.gate import _rank
+    from nox.node.device.gate import _rank
 
     assert _rank("extreme") > _rank("critical") > _rank("high")
 

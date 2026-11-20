@@ -58,7 +58,7 @@ DEVICE_SURFACE = frozenset(
         "lan.unpair",
         "memory.profile.list",
         "node.computer.status",  # the header line about a PC Nox controls (read only)
-        "node.defaults.set",  # with the PIN, always (`nox.node.policy`)
+        "node.defaults.set",  # with the PIN, always (`nox.node.hub.policy`)
         "node.link",
         "node.list",
         "node.narrow",  # with the PIN from a device, like node.unpair
@@ -900,8 +900,8 @@ async def test_a_device_at_the_controlled_pcs_address_is_refused_by_the_hub_cont
     a paired device connecting from the address of the PC Nox controls is that PC's browser."""
     from pydantic import BaseModel
 
-    from nox.node.session_access import NodeSessionCondition
-    from nox.node.world_routes import NodeControl
+    from nox.node.hub.session_access import NodeSessionCondition
+    from nox.node.hub.world_routes import NodeControl
 
     assert core.registry is not None
     seen: list[tuple[str, str]] = []

@@ -32,11 +32,10 @@ from kann_alles.nodes import (
 from kann_alles.scoring import Observation, evaluate_check
 from kann_alles.tasks import Check, Environment, Task, load_tasks
 from nox.core.events import E, Event
-from nox.node.hands import PathArgs
-from nox.node.registry import NodeEntry
-from nox.node.router import routed_spec
-from nox.node.tools import NoArgs, NotifyArgs
-from nox.node.world import MediaArgs
+from nox.node.device.hands import PathArgs
+from nox.node.hub.registry import NodeEntry
+from nox.node.hub.router import routed_spec
+from nox.node.wire.arguments import MediaArgs, NoArgs, NotifyArgs
 from nox.security.model import Decision, Risk
 from nox.voice.stt.wake_word import WakeWordMatcher
 

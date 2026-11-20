@@ -1,9 +1,10 @@
 """Who may do what while Nox's own hands are on the machine - decided in one place.
 
 Two situations make a click or a keystroke suspect: synthetic input on this machine (computer use
-- `InputLock`) and a computer-use session on a paired PC (`nox.node.session_access`). While either
-holds, a button in the dashboard could have been pressed by Nox itself, so a request that changes
-something - and an "allow" for a permission prompt - has to come from somebody Nox cannot be.
+- `InputLock`) and a computer-use session on a paired PC (`nox.node.hub.session_access`). While
+either holds, a button in the dashboard could have been pressed by Nox itself, so a request that
+changes something - and an "allow" for a permission prompt - has to come from somebody Nox cannot
+be.
 
 `AccessPolicy.decide` answers for a request, `AccessPolicy.approval` for a prompt's answer, both
 from the same inputs: *who* (`ClientContext`, built once per connection), *what* (the request's
@@ -20,7 +21,7 @@ lockout) live in `PinChecks`, so the conditions share them instead of each carry
 This module owns the rule and the words of every refusal (`REFUSE_*`, with a stable `code` the
 dashboard words itself). It knows no role names, no node, no transport: what a role *is* is
 decided where connections are authenticated (`nox.ipc.dispatch.client_context`), and what a node
-session *means* in `nox.node.session_access`. Principle P1 (the kill switch and the permission
+session *means* in `nox.node.hub.session_access`. Principle P1 (the kill switch and the permission
 engine are enforced in code, below the model) is untouched: this decides who may click, not
 what Nox may do.
 """
@@ -90,7 +91,7 @@ CALM_UI_REQUESTS: frozenset[str] = frozenset(
 )  # fmt: skip
 #: Talking to Nox: while Nox controls mouse and keyboard on a paired PC these need no PIN - from
 #: anywhere but the browser on that very PC, so Nox cannot type instructions to itself
-#: (`nox.node.session_access`). Anything they lead to is asked as usual.
+#: (`nox.node.hub.session_access`). Anything they lead to is asked as usual.
 CONVERSATION_UI_REQUESTS: frozenset[str] = frozenset({"chat.send", "voice.ptt"})
 
 
