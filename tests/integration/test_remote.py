@@ -207,11 +207,11 @@ async def test_kill_from_the_phone_engages_and_resumes_locally_without_a_pin(
 async def test_resume_is_refused_from_the_phone_and_from_the_remote_role(
     core: NoxCore, sent: list[dict[str, Any]]
 ):
-    """Resume stays local (Security Model §6). Note what the reply list shows: once safe mode is
-    engaged the permission engine denies every side-effecting tool, `telegram.send` included, so
-    the phone is not even told "no" - the kill switch really does stop everything. That is the
-    conservative behaviour, not a bug, and it is deliberately *not* carved out for `remote`
-    (no remote-specific exception anywhere in the permission path)."""
+    """Resume stays local (docs/SECURITY.md, "Kill switch and panic mode"). Note what the reply list
+    shows: once safe mode is engaged the permission engine denies every side-effecting tool,
+    `telegram.send` included, so the phone is not even told "no" - the kill switch really does stop
+    everything. That is the conservative behaviour, not a bug, and it is deliberately *not* carved
+    out for `remote` (no remote-specific exception anywhere in the permission path)."""
     await _pair(core)
     await _message(core, "/kill", update_id=2)
     sent.clear()
@@ -249,7 +249,7 @@ async def test_privacy_downgrade_allowed_upgrade_denied(core: NoxCore, sent: lis
     ]
     # In OFFLINE the egress-bound `telegram.send` is denied like any other cloud tool, so the
     # refusal cannot be delivered either - the mode the phone asked for is the mode that silences
-    # it. Honest over convenient (Security Model §5).
+    # it. Honest over convenient.
     assert sent == []
 
 

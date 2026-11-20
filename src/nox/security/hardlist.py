@@ -1,4 +1,4 @@
-"""Hard prohibitions: the immutable deny list (security/model.py, config/defaults.yaml, ADR-007).
+"""Hard prohibitions: the immutable deny list (security/model.py, config/defaults.yaml).
 
 This is the only module-level constant allowed by the engineering brief. Configuration layers may
 only add entries; `nox.core.config` rejects any layer that removes one of these.

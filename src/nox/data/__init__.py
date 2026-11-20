@@ -1,4 +1,4 @@
-"""SQLite data layer (ADR-006): `Database` wrapper, plain-SQL migrations and typed repositories."""
+"""SQLite data layer: `Database` wrapper, plain-SQL migrations and typed repositories."""
 
 from nox.data.db import Database
 

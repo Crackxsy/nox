@@ -1,4 +1,4 @@
-# Nox permission profile "offline" (Security Model §3). No network egress; the allow-listed local
+# Nox permission profile "offline" (the permission-profile rules in docs/SECURITY.md). No network egress; the allow-listed local
 # services stay reachable, so the local model can still answer while offline.
 security:
   profile: offline

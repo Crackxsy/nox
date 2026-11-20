@@ -1,7 +1,7 @@
 /**
- * Capture indicator (PRD §20, NFR-8): mic / screen / camera / cloud. It has no prop that can hide
+ * Capture indicator: mic / screen / camera / cloud. It has no prop that can hide
  * it and is always mounted on the desktop pet. The only place it is not rendered is the OBS overlay
- * (`?overlay=1`), because the PRD forbids the indicator in the public stream output.
+ * (`?overlay=1`), because the privacy rules forbid the indicator in the public stream output.
  *
  * Each dot carries a letter *and* a shape change, so the state is never colour-only. A
  * letter on its own is not an explanation, so whichever capture is running is also spelled out next

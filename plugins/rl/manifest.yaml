@@ -1,5 +1,5 @@
 # Rocket League observation plugin (Rocket League Stage 1). Observation
-# only, per the immutable boundary in Security Model /: no input-synthesis, memory-read,
+# only, per the immutable boundary in docs/SECURITY.md ("Rocket League observation-only boundary"): no input-synthesis, memory-read,
 # injection or hook verb exists anywhere in this plugin's tool surface - not merely denied by
 # profile, the verbs do not exist, same pattern as `obs`'s missing scene.delete. CI greps
 # plugins/rl/** for forbidden APIs.

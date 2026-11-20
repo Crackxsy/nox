@@ -145,7 +145,7 @@ async def test_kill_from_the_phone_engages_as_a_user_origin(service, pairing, ki
 
     assert killswitch.engaged
     assert killswitch.origins == [REMOTE_KILL_ORIGIN]
-    # Not a security-path kill: resuming locally needs no PIN (Security Model §6).
+    # Not a security-path kill: resuming locally needs no PIN (docs/SECURITY.md).
     assert killswitch.security_path is False
     assert await killswitch.resume(pin_ok=False, by="dashboard") is True
 

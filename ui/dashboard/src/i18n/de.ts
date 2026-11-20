@@ -1,5 +1,5 @@
 /**
- * German dictionary — the primary language (FR-5.3: DE first, EN equal quality). This object is
+ * German dictionary — the primary language (German first, English of equal quality). This object is
  * also the *shape* of the contract: `Key` is derived from it, so `en.ts` cannot compile with a key
  * missing or a key too many.
  *

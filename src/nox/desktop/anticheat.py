@@ -4,8 +4,8 @@ game or presentation in front.
 
 Only observation: names of running processes, the state of a few named services and drivers
 (`QueryServiceStatus`), and the shell's own notification state (`SHQueryUserNotificationState`).
-Nothing here reads another process's memory or sends input (Security Model §10). Every check
-that cannot answer says "locked" - a lock that fails open is no lock.
+Nothing here reads another process's memory or sends input (docs/SECURITY.md, observation-only
+boundary). Every check that cannot answer says "locked" - a lock that fails open is no lock.
 """
 
 from __future__ import annotations

@@ -48,7 +48,7 @@ export interface AppProps {
   ipcRole?: PetRole;
   /** One language per window; chosen once in `main.tsx` and reflected on `<html lang>`. */
   lang: Lang;
-  /** OBS browser-source mode: no interaction, no capture indicator (PRD §20), transparent. */
+  /** OBS browser-source mode: no interaction, no capture indicator, transparent. */
   overlay: boolean;
   /** Creature concept, from `?variant=`; falls back to `neutral` for unknown/missing ids.
    * `sprite:<id>` selects a sprite set instead of a procedural variant (#19). */

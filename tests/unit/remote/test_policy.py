@@ -103,7 +103,7 @@ def test_kill_is_allowed_from_a_paired_phone(policy: RemoteCommandPolicy):
 
 
 def test_resume_is_never_allowed_from_the_phone(policy: RemoteCommandPolicy):
-    """Security Model §6: resume stays local-only. It is denied by name so the attempt is
+    """Resume stays local-only (docs/SECURITY.md). It is denied by name so the attempt is
     audited as such instead of looking like a typo."""
     decision = policy.decide(message("/resume"), device())
 

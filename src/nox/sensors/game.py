@@ -1,7 +1,7 @@
 """Generic game/process-lifecycle hook (feeds the `rl` plugin instead of it polling `psutil`
 itself). Polls the running-process list for `sensors.game.process_names` (`config/defaults.yaml`,
 e.g. `RocketLeague.exe`) and publishes `sensor.process_started` / `sensor.process_ended` on the bus
-- observation only; no input synthesis, memory reads or injection (Security Model; this module
+- observation only; no input synthesis, memory reads or injection (docs/SECURITY.md; this module
 never imports anything beyond `psutil.process_iter`).
 """
 

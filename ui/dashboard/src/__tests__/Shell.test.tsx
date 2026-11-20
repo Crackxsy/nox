@@ -247,7 +247,7 @@ describe('the header', () => {
   it('counts what waits and takes the person there', async () => {
     harness.answers['memory.profile.list'] = { items: [{ id: 3, text: 'Mag Tee.', created_at: new Date().toISOString(), learned: true, unconfirmed: true }] };
     await start(LOCAL, '#/settings');
-    const chip = await screen.findByRole('button', { name: '1 Sache wartet auf dich' });
+    const chip = await screen.findByRole('button', { name: '1 wartet auf dich' });
     await act(async () => chip.click());
     expect(document.querySelector('.app')!.getAttribute('data-area')).toBe('today');
     expect(screen.getByText('„Mag Tee.“')).toBeTruthy();

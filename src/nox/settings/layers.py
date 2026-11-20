@@ -1,6 +1,6 @@
 """User-layer (layer 2, `user.yaml`) read/write helpers shared by `nox onboard` and the dashboard.
 
-ADR-010's four layers are Defaults -> User -> Profile/Preset -> Runtime Override. Both writers
+The four layers are Defaults -> User -> Profile/Preset -> Runtime Override. Both writers
 that exist - the onboarding wizard and `config.set` - must touch exactly the same file, in the
 same way, or the two would silently disagree about where a setting lives. The implementation
 therefore lives here and `nox.onboarding.wizard` re-exports it.

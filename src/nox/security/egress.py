@@ -74,7 +74,7 @@ def default_transport() -> httpx.AsyncHTTPTransport:
     return httpx.AsyncHTTPTransport(verify=shared_ssl_context())
 
 
-class EgressDenied(PermissionError):  # noqa: N818 - name fixed by the Security Model
+class EgressDenied(PermissionError):  # noqa: N818 - name fixed by the security design
     def __init__(self, host: str, port: int, rule_id: str, reason: str) -> None:
         super().__init__(f"egress to {host}:{port} denied ({rule_id}): {reason}")
         self.host = host

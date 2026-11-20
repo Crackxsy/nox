@@ -1,4 +1,4 @@
-"""Shared privacy-capture gate for the RL screen-capture loops (Security Model FR-7.x).
+"""Shared privacy-capture gate for the RL screen-capture loops (docs/PRIVACY.md).
 
 Both `plugins/rl/src/nox_plugin_rl/plugin.py`'s `_recognize_loop` (Stage 1, HUD template matching)
 and `_vision_loop` (Stage 2) sample the screen/HUD region on a timer. Stage 2 already stops
@@ -15,7 +15,7 @@ purely by the `privacy.capture_changed` event payload (`nox.core.events.CaptureC
 publishes on every zone/mode/capture-flag/panic/safe-mode change (`nox/security/privacy.py`) -
 `screen` there already ANDs together "no active privacy zone", "`privacy.capture.screen` is true",
 "not panicked" and "not in safe mode" (`PrivacyService.allows_capture`), so a single boolean is
-enough to satisfy FR-7.x's "zone active, or PRIVATE/OFFLINE-with-capture-off, or
+enough to satisfy the privacy rule "zone active, or PRIVATE/OFFLINE-with-capture-off, or
 `privacy.capture.screen` false" condition correctly - this gate does not need to re-derive privacy
 state itself, only react to it. `on_zone_changed` is optional and only sharpens the logged pause
 *reason* (naming the zone instead of a generic fallback) when a caller also forwards

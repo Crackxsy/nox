@@ -2,7 +2,7 @@
  * fox: a fox-eared spirit of the dusk — alert, warm, a little sly. Tall pointed ears with pale
  * inner markings, a fluffy tail tipped in moonlight and softly narrowed "grinning" crescent eyes
  * give it a distinct, friendly-but-cunning read. Fantasy spirit, not a literal fox (one coherent
- * entity, FR-1.9).
+ * entity).
  *
  * Amber-rust body with cool moonlight accents. The four concepts used to sit at hue 248–320, i.e.
  * five shades of violet that differed only by ear and tail silhouette; at 220 px on a dark desktop

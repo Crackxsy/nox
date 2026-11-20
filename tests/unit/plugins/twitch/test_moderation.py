@@ -63,7 +63,7 @@ def test_configurable_blocklist_is_enforced() -> None:
 
 
 def test_blocklist_never_relaxes_the_hard_exclusions() -> None:
-    """A hard exclusion is independent of any config (FR-9.9); an empty blocklist config still
+    """A hard exclusion is independent of any config; an empty blocklist config still
     blocks hate speech."""
     gate = ModerationGate(blocklist=[])
     ok, _reason = gate.check("muslims should die")
