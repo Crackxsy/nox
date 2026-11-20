@@ -10,7 +10,7 @@ from kann_alles.confirm import decide
 from kann_alles.nodes import PI_ID, PI_NAME, WorldNodes
 from kann_alles.tasks import load_tasks
 from nox.node.device.hands import ShellArgs
-from nox.node.hub.install import _shell_target
+from nox.node.hub.install.routes import shell_target
 from nox.node.hub.router import routed_spec
 from nox.node.wire.arguments import NoArgs
 from nox.security.model import Decision, Risk
@@ -63,7 +63,7 @@ async def _routed(nodes: WorldNodes, name: str, model: Any, payload: dict[str, A
         side_effects=name == "shell.run",
         registry=nodes,
         input_model=model,
-        node_target=_shell_target if name == "shell.run" else None,
+        node_target=shell_target if name == "shell.run" else None,
     )
     data = spec.input_model.model_validate(payload).model_dump()
     assert spec.scope is not None

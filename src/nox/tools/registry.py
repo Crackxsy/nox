@@ -14,10 +14,15 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from nox.capabilities.model import CapabilityState
+from nox.core.hooks import NamedHooks
 from nox.security.model import Risk
 
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 Targets = Callable[[dict[str, Any]], str]
+#: Says why a registered tool cannot be used right now (`(state, reason)`), or `None` when the
+#: probe has nothing to say about it.
+AvailabilityProbe = Callable[[str], tuple[CapabilityState, str] | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +127,22 @@ class ToolRegistry:
         #: own that registered under that name (None while there is none).
         self._wrappers: dict[str, Callable[[ToolSpec | None], ToolSpec]] = {}
         self._own: dict[str, ToolSpec | None] = {}
+        self._probes: NamedHooks[AvailabilityProbe] = NamedHooks("availability probe")
+
+    def add_availability_probe(self, name: str, probe: AvailabilityProbe) -> None:
+        """Let an extension say that a tool it routes is not usable right now (a tool only paired
+        devices have, while none is online). Probes are asked in the order they registered. A name
+        registers once: a second registration under it raises `DuplicateHookError`."""
+        self._probes.add(name, probe)
+
+    def availability(self, tool_name: str) -> tuple[CapabilityState, str] | None:
+        """The first probe's answer that is not `None`: the state and the reason the tool is not
+        usable, or `None` when no probe objects."""
+        for probe in self._probes:
+            found = probe(tool_name)
+            if found is not None:
+                return found
+        return None
 
     def register(self, spec: ToolSpec) -> None:
         # `-` is the wire form of `.` (`nox.tools.names`); a name containing it would make the

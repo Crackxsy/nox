@@ -15,6 +15,9 @@ import nox.node
 
 NODE_DIR = Path(nox.node.__file__).resolve().parent
 LAYERS = ("wire", "device", "hub")
+#: The one sub-package of a layer: the core's extension loader names `nox.node.hub.install`
+#: (`MODULE_OF`), and the wiring is cut into modules inside it.
+SUBPACKAGES = {"hub": ("install",)}
 
 
 def _sources() -> list[Path]:
@@ -48,7 +51,8 @@ def test_every_layer_is_a_package_with_python_files_only() -> None:
 
         assert (NODE_DIR / layer / "__init__.py") in files
         assert {path.suffix for path in files} == {".py"}
-        assert all(path.parent == NODE_DIR / layer for path in files), "no sub-packages"
+        folders = {path.parent for path in files} - {NODE_DIR / layer}
+        assert folders == {NODE_DIR / layer / name for name in SUBPACKAGES.get(layer, ())}
 
 
 def test_no_module_name_exists_in_two_layers() -> None:

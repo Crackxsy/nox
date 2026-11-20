@@ -189,7 +189,7 @@ ignore_imports = [
     # words the device runs (`PathArgs`, `write_risk`, `move_refusal`, ...). They call the write
     # rules inside `device.safe_fs`, so they cannot move to `wire` before `safe_fs` is split into
     # its pure rules and its file-system access.
-    "nox.node.hub.install -> nox.node.device.hands",
+    "nox.node.hub.install.routes -> nox.node.device.hands",
     # The voice satellite builds its pipeline from the voice worker's builders. `worker.main`
     # reaches the core application only through its `voice setup` command (a lazy import of
     # `entrypoints`), which a device never runs. It goes once the builders live in a module of

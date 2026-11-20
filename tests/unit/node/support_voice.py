@@ -15,7 +15,7 @@ import numpy as np
 from nox.ipc.tokens import TokenStore
 from nox.node.device.gate import NodeGate
 from nox.node.device.voice import VoiceEngines, VoiceSatellite, VoiceSettings
-from nox.node.hub.satellites import SatelliteHub
+from nox.node.hub.satellites import NodeDirectory, OverlayAccess, SatelliteHub, VoiceAssistant
 from nox.node.wire import protocol as p
 from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
@@ -218,22 +218,28 @@ def voice_hub(
 
     audit = SimpleNamespace(append=lambda **kw: seen["audit"].append(kw))
     hub = SatelliteHub(
-        offers=lambda device, tool: (device, tool) in allowed,
-        enabled_on_device=lambda device, group: (
-            group == "obs" and (device, "obs.request") in allowed
+        NodeDirectory(
+            offers=lambda device, tool: (device, tool) in allowed,
+            enabled_on_device=lambda device, group: (
+                group == "obs" and (device, "obs.request") in allowed
+            ),
+            sessions=lambda: sessions or [],
+            opted_in=lambda _device, _group: opted_in,
+            label=lambda _device: "Living room Pi",
         ),
-        sessions=lambda: sessions or [],
-        turn=turn or default_turn,
-        capture_refusal=lambda: capture,
-        publish=lambda name, payload: seen["published"].append((name, payload)),
+        VoiceAssistant(
+            turn=turn or default_turn,
+            capture_refusal=lambda: capture,
+            publish=lambda name, payload: seen["published"].append((name, payload)),
+        ),
+        OverlayAccess(
+            store=overlay,
+            disconnect=disconnect,
+            allowed=lambda device: device in (may_hold if may_hold is not None else {PI}),
+        ),
         audit=audit,  # type: ignore[arg-type]
-        overlay=overlay,
-        disconnect_credential=disconnect,
-        opted_in=lambda _device, _group: opted_in,
-        controlled=lambda _device: seen["controlled"],
-        label=lambda _device: "Living room Pi",
-        overlay_allowed=lambda device: device in (may_hold if may_hold is not None else {PI}),
     )
+    hub.controlled = lambda _device: seen["controlled"]
     return hub, seen
 
 

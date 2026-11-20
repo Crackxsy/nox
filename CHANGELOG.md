@@ -77,6 +77,16 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   code has not shipped), and the module map in `docs/ARCHITECTURE-NODES.md` shows the new ones.
   The core now loads the imports its node code used to defer until first use at start-up; a device's
   import footprint is unchanged (the voice satellite loads 387 modules instead of 378).
+- **The core's side of `nox node` hangs onto the core through named extension points** instead
+  of overwriting attributes. New, additive core API: `Orchestrator.add_fact_source`,
+  `ToolRegistry.add_availability_probe` / `availability`, `DefaultPermissionEngine.add_satellite_label`,
+  `TokenStore.add_node_overlay_check`, and `nox.core.hooks.NamedHooks` behind them (registration
+  order is call order, a name registers once, a second registration raises). The single slots
+  `engine.satellite_label`, `tokens.node_overlay_allowed` and `core.node_probe` are gone; an
+  extension that set one of them registers with the matching `add_*` method instead.
+  `nox.node.hub.install` is now a package with typed ports for what it reads from the core, and
+  installing it twice or on a core that lacks a part it needs fails with a clear message. No
+  behavior, wire format, configuration or file format changes.
 
 ### Added
 - **Twitch chat, every interaction (Stream Bot):** `!befehle` (English `!commands`) lists all chat

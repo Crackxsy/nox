@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from nox.node.hub.world_routes import NodeControl
+from nox.node.hub.world_routes import NodeControl, NodeLookups
 from nox.security.access import (
     REFUSE_LINKED,
     REFUSE_NO_PIN,
@@ -198,8 +198,8 @@ async def test_the_reply_handler_follows_the_rule_and_deny_always_counts(
 
 
 async def test_the_real_wiring_registers_status_release_and_the_hello_reset() -> None:
-    """`wire_guards`, `_register_control_requests` and the connection hook are wired."""
-    from nox.node.hub.install import connection_hook
+    """`wire_guards`, `register_control_requests` and the connection hook are wired."""
+    from nox.node.hub.install.control import connection_hook
 
     core, control, _guard, _audit = wired_core(PinGate())
     assert core.registry.get("node.computer.status") is not None
@@ -216,10 +216,10 @@ async def test_the_real_wiring_registers_status_release_and_the_hello_reset() ->
             connected.append(method)
             return {}
 
-    core.config = SimpleNamespace(
+    config = SimpleNamespace(
         sensors=SimpleNamespace(game=SimpleNamespace(process_names=["RocketLeague.exe"]))
     )
-    hook = connection_hook(core, Registry(), [control])  # type: ignore[arg-type]
+    hook = connection_hook(config, Registry(), control, SimpleNamespace())  # type: ignore[arg-type]
     session = SimpleNamespace(device_id=LAPTOP, computer=session_report(1, False), client=Client())
     await hook(session)
     assert connected == [LAPTOP, "nox/games"]
@@ -270,7 +270,9 @@ def test_a_remote_session_is_recognised_on_windows() -> None:
 
 
 def _saturated() -> NodeControl:
-    control = NodeControl(None, lambda _n: None, linked=lambda d: BROWSER if d == LAPTOP else None)
+    control = NodeControl(
+        None, lambda _n: None, NodeLookups(linked=lambda d: BROWSER if d == LAPTOP else None)
+    )
     control.answered(LAPTOP, session_report(2, True))
     control.saturated.add(LAPTOP)
     return control

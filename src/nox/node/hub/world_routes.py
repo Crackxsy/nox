@@ -49,7 +49,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -69,7 +69,7 @@ from nox.tools.registry import ToolSpec
 
 log = get_logger(__name__)
 
-__all__ = ["NodeControl", "store_capture", "world_specs"]
+__all__ = ["NodeActions", "NodeControl", "NodeLookups", "store_capture", "world_specs"]
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 MAX_CAPTURE_BYTES = 8 * 1024 * 1024
@@ -179,6 +179,58 @@ Reports = Callable[[], Iterable[tuple[str, Any]]]
 OnViolation = Callable[[str, str], None]
 
 
+class GrantEngine(Protocol):
+    """What the lock asks of the permission engine: a grant for a session, and taking it back."""
+
+    def grant_temporary(self, grant: TemporaryGrant) -> None: ...
+
+    def revoke(self, grant_id: str) -> None: ...
+
+
+def _short_label(device_id: str) -> str:
+    return device_id[:8]
+
+
+def _no_link(_device_id: str) -> str | None:
+    return None
+
+
+def _nothing_to_say(_what: str) -> None:
+    return None
+
+
+def _no_violation(_device_id: str, _why: str) -> None:
+    return None
+
+
+@dataclass(frozen=True)
+class NodeLookups:
+    """What the control reads about the nodes: their latest reports, names, links and addresses."""
+
+    #: Where the latest hello/pong reports come from.
+    reports: Reports = tuple
+    #: How a node is named in the notice and the grant.
+    labels: Callable[[str], str] = _short_label
+    #: The browser device that sits on a node's machine (`node.link`), if one was named.
+    linked: Callable[[str], str | None] = _no_link
+    #: Where each connected node is on the network: (address seen here, addresses it reported).
+    addresses: Callable[[], Mapping[str, tuple[str, Iterable[str]]]] = dict
+    #: This core's own addresses (a node on one of them is this machine).
+    own_addresses: Callable[[], Iterable[str]] = tuple
+
+
+@dataclass(frozen=True)
+class NodeActions:
+    """What the control does to a node: end its session, cut its connection, audit a refusal."""
+
+    #: Ends the session on a node; None: no node can be told to.
+    end_on_node: EndOnNode | None = None
+    #: A node broke the computer-use rules (once per connection).
+    on_violation: OnViolation = _no_violation
+    #: A refused or forced binding change, for the audit trail.
+    audit: Callable[[str], None] = _nothing_to_say
+
+
 def host_of(address: str) -> str:
     """An address as one spelling: no port, no brackets, no IPv6 zone, IPv4 out of `::ffff:`."""
     text = str(address).strip().strip("[]").split("%", 1)[0].lower()
@@ -264,32 +316,28 @@ class NodeControl:
 
     def __init__(
         self,
-        engine: Any,
+        engine: GrantEngine | None,
         publish: Callable[[dict[str, Any]], None],
+        lookups: NodeLookups | None = None,
+        actions: NodeActions | None = None,
         *,
-        end_on_node: EndOnNode | None = None,
-        reports: Reports = tuple,
-        labels: Callable[[str], str] = lambda device_id: device_id[:8],
-        linked: Callable[[str], str | None] = lambda _device_id: None,
-        audit: Callable[[str], None] = lambda _what: None,
-        addresses: Callable[[], Mapping[str, tuple[str, Iterable[str]]]] = dict,
-        own_addresses: Callable[[], Iterable[str]] = tuple,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
-        on_violation: OnViolation = lambda _device_id, _why: None,
     ) -> None:
+        lookups = lookups if lookups is not None else NodeLookups()
+        actions = actions if actions is not None else NodeActions()
         self._engine = engine
-        self._on_violation = on_violation
+        self._on_violation = actions.on_violation
         #: Nodes told about a violation on their current connection (once each, until a hello).
         self._violated: set[str] = set()
         self._publish = publish
-        self._end_on_node = end_on_node
-        self._reports = reports
-        self._labels = labels
-        self._linked = linked
-        self._audit = audit
-        self._addresses = addresses
-        self._own_addresses = own_addresses
+        self._end_on_node = actions.end_on_node
+        self._reports = lookups.reports
+        self._labels = lookups.labels
+        self._linked = lookups.linked
+        self._audit = actions.audit
+        self._addresses = lookups.addresses
+        self._own_addresses = lookups.own_addresses
         #: Where each node the lock holds for is on the network, kept while the lock holds (also
         #: while it is disconnected): the connection addresses this core saw (at most
         #: `MAX_OBSERVED_ADDRESSES`) and the private addresses it reported, oldest first (at most

@@ -88,7 +88,7 @@ The rules are a contract that CI checks (`lint-imports`, configured in `pyprojec
    `release`, `lan.tls`, `ipc.tokens`, the logger and the config models) are not part of it.
 
 Two imports are still allowed against rule 2, each with its reason next to it in
-`pyproject.toml` (`ignore_imports`): `hub.install` reads the file tools' argument models and
+`pyproject.toml` (`ignore_imports`): `hub.install.routes` reads the file tools' argument models and
 refusal words from `device.hands` (they depend on the write rules inside `device.safe_fs`), and
 `device.voice` builds the voice pipeline with the helpers in `nox.worker.main`, which reach the
 core application only through its `voice setup` command. The list may only get shorter.
@@ -97,7 +97,8 @@ core application only through its `voice setup` command. The list may only get s
 
 | Module | Owns | Does not |
 | --- | --- | --- |
-| `node/hub/install.py` | Wiring into a started core (`install`): the IPC requests, the routed tool specs, the stop hooks, and the node-session condition added to the access policy (`wire_guards`). | Decide anything itself. |
+| `node/hub/install/` | Wiring into a started core: `__init__.py` is the one entry (`install`, the composition root and the order of the connection hooks); `pairing_requests.py` the pairing requests and `POST /api/node/pair`; `routes.py` the routed tool specs and how each call is shown (`shell_target`, `write_target`, the prechecks); `satellites.py` the satellites' wiring; `control.py` the computer-use lock, its guards and requests, the connection hook and the one-second watcher; `games.py` the watched games; `runtime.py` `NodeRuntime` and its tasks. | Decide anything itself, or read the core except through `ports.py`. |
+| `node/hub/ports.py` | The core as this extension sees it: narrow `Protocol` ports (`SecurityPort`, `OrchestratorPort`, `TokensPort`, `LanPort`, ...) and `CoreServices.of(core)`, the one place that reads the core and says which part is missing (`NodeWiringError`). | Wire anything. |
 | `node/hub/listener.py` | The node port: TLS, "is this a paired node" (`NodePairing.identify`), the first message, the `NODE_TO_CORE` allow-list, pings, blobs, `broadcast_kill`. | Know what a tool is. |
 | `node/hub/pairing.py` | One-time code -> client certificate, `identify`, renewal on the core, `revoke`. | Store anything secret of the node (it keeps hashes). |
 | `node/hub/repo.py` | The node tables (certificates, groups, links). | The pairing row (that is `nox.remote.repo`). |
@@ -109,6 +110,27 @@ core application only through its `voice setup` command. The list may only get s
 | `security/access.py` | `AccessPolicy`: the one place that decides, for a request (`decide`) and for an answer to a permission prompt (`approval`), whether a UI client may go ahead while synthetic input or a node session is in play. `ClientContext`, the verdicts (`Allow`, `Refuse`, `NeedsPin`), the refusal words (`REFUSE_*`), the calm-request rule (`calm_call`), `InputLock`, `PinChecks`. | Know a node, a role name or a transport. |
 | `node/hub/satellites.py` | The core's side of voice on a node, OBS on a node and the overlay credential (`SatelliteHub`). | Audio. Only text arrives. |
 | `node/hub/console.py` | "Is the console this core runs on a remote session" (`console_is_remote`), the one of the node-session checks that asks the operating system. | Decide what a remote session may do (`session_access`). |
+
+#### How the hub hangs onto the core
+
+`install(core)` reads the core once (`CoreServices.of`, `node/hub/ports.py`) and works on narrow
+ports from then on. It joins the core only through named, ordered extension points that any other
+extension can join as well; each name registers once, a second registration under it raises
+`DuplicateHookError` instead of replacing the first, and an extension installed twice is refused
+(`NodeWiringError`) before anything is wired.
+
+| Extension point | What the hub adds | Several hooks mean |
+| --- | --- | --- |
+| `Orchestrator.add_fact_source` | The line that names the devices and whether they are online. | Lines in registration order, after the core's own facts. |
+| `ToolRegistry.add_availability_probe` | "No paired device with this tool is online" for a tool only nodes have. | The first probe with an answer wins. |
+| `DefaultPermissionEngine.add_satellite_label` | A node's name for a question asked from its voice satellite. | The first non-empty name wins. |
+| `TokenStore.add_node_overlay_check` | Whether a node may still hold an overlay credential. | Every check must say yes: order cannot change the answer. |
+| `KillSwitchService.register_stop_hook` / `register_resume_hook` | Stopping and resuming every node. | One hook per name, all run. |
+| `NodeListener.on_connected` / `on_disconnected` | The vetting and listing of a node, then its gate and a panic that is on; on the way out the satellites forget it before the registry marks it offline. | Hooks run in the order added; one that raises ends the connection (connect) or skips the later ones (disconnect). |
+
+The order in `install()` is behaviour: a node is vetted (a hello that claims a computer-use session
+ends the connection) and listed before its microphone gate is pushed, and
+`tests/unit/node/test_install_wiring.py` pins it.
 
 ### Device side (`node/device/`)
 
@@ -216,7 +238,7 @@ is worth.
 **Revocation** (`NodePairing.revoke`, `NodeListener.disconnect`, `NodeAgent._forget`). Every
 certificate the node ever had goes on the denylist, the live connection is told `nox/revoked`
 and closed, the node deletes its key and certificate. On the core, the grants bound to the
-device (`revoke_device_grants`, called from `node/hub/install.py`) and its computer-use lock
+device (`revoke_device_grants`, called from `node/hub/install/__init__.py`) and its computer-use lock
 (`NodeControl.forget`) go with it.
 
 ## 4. One call, end to end
@@ -489,7 +511,7 @@ Tests: `test_address_binding.py` (`test_the_binding_only_grows_while_the_lock_ho
 
 `session_access.py::NodeSessionCondition`, one of the conditions of `AccessPolicy`
 (`security/access.py`): `RequestRegistry.dispatch` asks `policy.decide` for every request,
-`permission_reply` asks `policy.approval` for every answer, and `install.py::wire_guards` adds
+`permission_reply` asks `policy.approval` for every answer, and `install/control.py::wire_guards` adds
 the condition. The local input lock of computer use on this machine (`InputLock`) is the other
 condition; both read "calm" from the same `calm_call`, so a request is never calm under one lock
 and not under the other - unmuting the microphone is not calm under either. When both hold, the
@@ -774,7 +796,7 @@ template (`notify.show` for a small one, `file.write` for one with a boundary of
    `test_gate_order.py::test_the_locked_tools_are_exactly_these`.
 4. **Routing on the core.** Add the name to `ROUTABLE` (`node/hub/registry.py`) and its prefix to
    the core's own tool -> group mapping (`node/hub/policy.py`). Register a `routed_spec`
-   (`node/hub/router.py`) in `node/hub/install.py` or `node/hub/world_routes.py`: `node_target` (what the
+   (`node/hub/router.py`) in `node/hub/install/routes.py` or `node/hub/world_routes.py`: `node_target` (what the
    confirmation shows - raise `CannotShow` rather than shorten), `node_risk`, `remember_on_node`
    (false for anything destructive), `precheck`, `around` if the answer needs handling on the
    core.
@@ -809,6 +831,7 @@ fixtures only; no test module imports from another.
 | Files and shell | `test_safe_fs_read_write.py`, `test_safe_fs_move_delete.py`, `test_write_content_rules.py`, `test_write_markdown_rules.py`, `test_write_text_checks.py`, `test_workspaces_and_repositories.py`, `test_hands_shell.py` |
 | Captures, media, the game lock | `test_capture_routing.py`, `test_media_node.py`, `test_game_lock.py` |
 | Computer-use sessions | `test_computer_use_lock.py`, `test_address_binding.py`, `test_node_session_approvals.py`, `test_node_session_chat.py` |
+| The wiring onto the core, and its extension points | `test_install_wiring.py`, `test_install_hooks.py`, `test_listener_hooks.py`; the core's side in `tests/unit/core/test_hooks.py`, `test_orchestrator_fact_sources.py`, `tests/unit/tools/test_registry_availability.py`, `tests/unit/security/test_satellite_label_hooks.py`, `tests/unit/ipc/test_tokens_node_overlay_checks.py` |
 | Satellites | `test_voice_satellite.py`, `test_voice_core_turns.py`, `test_voice_speech_filter.py`, `test_satellite_routing.py`, `test_satellite_wiring.py`, `test_obs_node.py`, `test_overlay_relay.py` |
 | Update, desktop integration | `test_update.py`, `test_node_desktop.py` |
 

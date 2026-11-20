@@ -295,11 +295,8 @@ def _routed_model(base: type[BaseModel] | None, tool: str) -> type[BaseModel]:
 
 
 def _may_delegate(registry: NodeRegistry, device_id: str) -> bool:
-    check = getattr(registry, "may_delegate", None)
-    if check is None:
-        return True  # a registry without the computer-use lock (no session can run)
     try:
-        return bool(check(device_id))
+        return bool(registry.may_delegate(device_id))
     except Exception:  # noqa: BLE001 - cannot tell: the core asks itself
         return False
 

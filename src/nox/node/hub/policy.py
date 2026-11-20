@@ -34,7 +34,7 @@ import asyncio
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,6 +49,11 @@ from nox.node.hub.repo import NodeRepository
 from nox.node.wire.manifest import GROUPS
 from nox.remote.models import DeviceRow
 from nox.settings.layers import resolve_user_config_path, write_user_config
+
+if TYPE_CHECKING:
+    from nox.node.hub.pairing import NodePairing
+    from nox.node.hub.ports import CoreServices
+    from nox.node.hub.registry import NodeRegistry
 
 log = get_logger(__name__)
 
@@ -257,13 +262,24 @@ def defaults_view(defaults: Mapping[str, str], nodes: list[DeviceRow]) -> list[d
     return out
 
 
+class PolicyRuntime(Protocol):
+    """What the policy requests read of the node runtime: who is paired, and the registry once
+    the node listener exists."""
+
+    @property
+    def pairing(self) -> NodePairing: ...
+
+    @property
+    def registry(self) -> NodeRegistry | None: ...
+
+
 def register_policy_requests(
-    core: Any, runtime: Any
+    services: CoreServices, runtime: PolicyRuntime
 ) -> Callable[[list[DeviceRow], set[str]], dict[str, dict[str, Any]]]:
     """Register `node.narrow` and `node.defaults.set`; returns what `node.list` adds per node
     (blocking: call it in a thread)."""
     pairing = runtime.pairing
-    nodes = NodeRepository(core.db)
+    nodes = NodeRepository(services.db)
     standalone = NodePolicy(nodes)
     #: One writer of `devices.defaults` at a time (the dashboard, a removal).
     defaults_lock = asyncio.Lock()
@@ -289,7 +305,7 @@ def register_policy_requests(
         return out
 
     def audit(ctx: RequestContext, action: str, target: str, decision: str, result: str) -> None:
-        core.security.audit.append(
+        services.security.audit.append(
             actor=ctx.client_id or ctx.role,
             tool="node",
             action=action,
@@ -323,7 +339,7 @@ def register_policy_requests(
     async def h_narrow(ctx: RequestContext, p: NarrowRequest) -> dict[str, Any]:
         # Authorization first: a refusal is audited only for someone allowed to ask at all, so a
         # paired device without the PIN cannot fill the audit trail.
-        await authorize_admin(core, ctx, p.pin, "node.narrow", local_needs_pin=not p.narrowed)
+        await authorize_admin(services, ctx, p.pin, "node.narrow", local_needs_pin=not p.narrowed)
         target = f"device:{p.node_id} {p.group}"
         device = pairing.get(p.node_id)
         if device is None or device.revoked:
@@ -369,10 +385,10 @@ def register_policy_requests(
 
     async def write(values: dict[str, str]) -> dict[str, str]:
         async with defaults_lock:
-            live = core.config.devices.defaults
+            live = services.config.devices.defaults
             updated = {**live, **values}
             DevicesConfig(defaults=updated)  # validated before anything is written
-            await asyncio.to_thread(_persist, _user_config_path(core), values)
+            await asyncio.to_thread(_persist, resolve_user_config_path(), values)
             # The router reads this mapping on every call: changed in place, the change is live.
             live.update(values)
             return dict(live)
@@ -383,7 +399,7 @@ def register_policy_requests(
         return written
 
     async def h_defaults_set(ctx: RequestContext, p: DefaultsSetRequest) -> dict[str, Any]:
-        await authorize_admin(core, ctx, p.pin, "node.defaults", local_needs_pin=True)
+        await authorize_admin(services, ctx, p.pin, "node.defaults", local_needs_pin=True)
         target = f"{p.group} -> {p.device}"
         if p.group not in relevant_groups():
             raise refuse(
@@ -393,7 +409,7 @@ def register_policy_requests(
             device = pairing.get(p.device)
             if device is None or device.revoked:
                 raise refuse(ctx, "node.defaults", target, ERR_NOT_FOUND, "no such node", "no_node")
-        tools = family_tools(p.group, _routable(), core.config.devices.defaults)
+        tools = family_tools(p.group, _routable(), services.config.devices.defaults)
 
         async def apply() -> dict[str, str]:
             try:
@@ -417,7 +433,8 @@ def register_policy_requests(
         device = pairing.get(device_id)
         if device is None:
             return
-        stale = {t: AUTO for t, v in core.config.devices.defaults.items() if _points_at(v, device)}
+        defaults = services.config.devices.defaults
+        stale = {t: AUTO for t, v in defaults.items() if _points_at(v, device)}
         if not stale:
             return
         try:
@@ -425,7 +442,7 @@ def register_policy_requests(
         except Exception as exc:  # noqa: BLE001 - the removal itself stands either way
             log.error("node.defaults_reset_failed", device_id=device_id, error=type(exc).__name__)
             return
-        core.security.audit.append(
+        services.security.audit.append(
             actor="core",
             tool="node",
             action="node.defaults",
@@ -435,18 +452,10 @@ def register_policy_requests(
         )
 
     pairing.on_revoked(forget_defaults)
-    reg = core.registry.register
+    reg = services.registry.register
     reg("node.narrow", NarrowRequest, h_narrow, roles=UI_ROLES)
     reg("node.defaults.set", DefaultsSetRequest, h_defaults_set, roles=UI_ROLES)
     return details
-
-
-def _user_config_path(core: Any) -> Path:
-    path = getattr(core, "user_config_path", None)
-    if isinstance(path, Path):
-        return path
-
-    return resolve_user_config_path()
 
 
 def _persist(path: Path, values: dict[str, str]) -> None:

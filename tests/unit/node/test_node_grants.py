@@ -14,7 +14,7 @@ from tests.unit.node.support import FakeRegistry, registry_entry
 
 
 async def test_a_node_write_is_high_when_it_replaces_and_never_remembered() -> None:
-    from nox.node.hub.install import _write_risk, _write_target
+    from nox.node.hub.install.routes import write_risk_of, write_target
     from nox.security.model import Decision, PermissionResult
     from nox.tools.executor import ToolExecutor
     from nox.tools.registry import ToolRegistry
@@ -29,8 +29,8 @@ async def test_a_node_write_is_high_when_it_replaces_and_never_remembered() -> N
         side_effects=True,
         registry=registry,  # type: ignore[arg-type]
         input_model=WriteArgs,
-        node_target=_write_target,
-        node_risk=_write_risk,
+        node_target=write_target,
+        node_risk=write_risk_of,
         remember_on_node=False,
     )
     payload = {"path": "a.txt", "text": "neu", "device": "Laptop"}
@@ -67,22 +67,15 @@ async def test_a_node_write_is_high_when_it_replaces_and_never_remembered() -> N
 
 
 def test_the_routes_never_remember_a_write_on_a_node() -> None:
-    from types import SimpleNamespace
-
-    from nox.ipc.dispatch import RequestRegistry
-    from nox.node.hub.install import _install_routes
-    from nox.tools.registry import ToolRegistry
+    from nox.node.hub.install.routes import install_node_routes
+    from tests.unit.node.support_wiring import fake_services
 
     laptop = registry_entry("a" * 32, "Laptop", tools={"file.write": "medium", "shell.run": "high"})
     laptop.confirmer = True
     registry = FakeRegistry([laptop])
     registry.any_online_with = lambda _t: True  # type: ignore[attr-defined]
-    core = SimpleNamespace(
-        registry=RequestRegistry(),
-        tool_registry=ToolRegistry(),
-        config=SimpleNamespace(devices=SimpleNamespace(defaults={})),
-    )
-    _install_routes(core, registry)  # type: ignore[arg-type]
+    core = fake_services()
+    install_node_routes(core, registry, None)  # type: ignore[arg-type]
     write = core.tool_registry.get("file.write")
     shell = core.tool_registry.get("shell.run")
     assert write is not None and shell is not None and write.scope is not None

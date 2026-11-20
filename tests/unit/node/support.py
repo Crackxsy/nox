@@ -527,6 +527,10 @@ class FakeRegistry:
         """No device is still connecting here (the router waits for that before a call)."""
         return None
 
+    def may_delegate(self, _device_id: str) -> bool:
+        """No computer-use lock: every node's own dialog may ask."""
+        return True
+
     async def call(
         self,
         entry: NodeEntry,

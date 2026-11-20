@@ -28,7 +28,7 @@ from nox.node.device.hands import (
 )
 from nox.node.device.safe_fs import Folders, OutsideFolders, move_file, trash_file
 from nox.node.device.tools import NodeRefusal
-from nox.node.hub.install import _delete_precheck, _move_precheck, _move_target
+from nox.node.hub.install.routes import delete_precheck, move_precheck, move_target
 from nox.node.hub.registry import ROUTABLE
 from nox.node.wire.manifest import GROUPS, NodeManifest
 
@@ -530,12 +530,12 @@ def test_both_are_offered_only_with_files_and_withheld_where_they_cannot_work(
 
 
 def test_the_core_shows_a_move_in_full_and_refuses_before_asking() -> None:
-    target = _move_target({"path": "notizen/a.txt", "to": "archiv/b.txt"})
+    target = move_target({"path": "notizen/a.txt", "to": "archiv/b.txt"})
     assert target == 'move "notizen/a.txt" to "archiv/b.txt" replaces never'
-    assert _move_precheck({"path": "a.txt", "to": "b.bat"}) == "extension_refused"
-    assert _move_precheck({"path": "a.txt", "to": "b.txt", "overwrite": True}) == (
+    assert move_precheck({"path": "a.txt", "to": "b.bat"}) == "extension_refused"
+    assert move_precheck({"path": "a.txt", "to": "b.txt", "overwrite": True}) == (
         "overwrite_refused"
     )
-    assert _move_precheck({"path": "a.txt", "to": "archiv"}) is None  # a folder to move into
-    assert _delete_precheck({"path": "start.ps1"}) == "extension_refused"
-    assert _delete_precheck({"path": "notizen/a.txt"}) is None
+    assert move_precheck({"path": "a.txt", "to": "archiv"}) is None  # a folder to move into
+    assert delete_precheck({"path": "start.ps1"}) == "extension_refused"
+    assert delete_precheck({"path": "notizen/a.txt"}) is None

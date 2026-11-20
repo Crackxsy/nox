@@ -228,7 +228,7 @@ def _session_control() -> Any:
 
 
 async def test_a_session_on_one_pc_keeps_that_pc_quiet_and_saturation_all_of_them() -> None:
-    from nox.node.hub.install import attach_control
+    from nox.node.hub.install.control import attach_control
     from nox.security.access import REFUSE_SATURATED
     from tests.unit.node.support_sessions import request_ctx, session_refusal
 
@@ -254,9 +254,11 @@ async def test_a_session_on_one_pc_keeps_that_pc_quiet_and_saturation_all_of_the
 async def test_voice_during_a_session_is_marked_like_paired_device_chat(
     nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
 ) -> None:
-    from nox.node.hub.install import NodeRuntime, attach_control, install_satellites
+    from nox.node.hub.install.control import attach_control
+    from nox.node.hub.install.satellites import install_satellites
     from nox.node.hub.registry import NodeRegistry
     from tests.unit.node.support import pair_node
+    from tests.unit.node.support_wiring import fake_security, fake_services
 
     marked: list[tuple[str, Any]] = []
     registry = NodeRegistry(pairing, nodes)
@@ -267,25 +269,18 @@ async def test_voice_during_a_session_is_marked_like_paired_device_chat(
 
     engine = SimpleNamespace(
         mark_tainted=lambda conversation, content: marked.append((conversation, content)),
-        satellite_label=None,
+        add_satellite_label=lambda _name, _label: None,
     )
     orchestrator = SimpleNamespace(
         handle_text=handle_text, conversation_for=lambda channel: f"{channel}#c0ffee"
     )
-    core = SimpleNamespace(
-        security=SimpleNamespace(privacy=None, killswitch=None, audit=None, engine=engine),
-        orchestrator=orchestrator,
-        tokens=None,
-        hub=None,
-        bus=None,
-    )
-    listener = SimpleNamespace(sessions={}, _on_connected=None, _on_disconnected=None)
-    runtime = NodeRuntime(pairing=pairing, enabled=True)
-    satellites = install_satellites(core, runtime, registry, listener, pairing)
-    attach_control(satellites, _session_control())
-    await satellites._turn("Hallo", "de", lambda _d: None, f"voice:node:{pi}", "note")  # type: ignore[misc,arg-type]
+    core = fake_services(security=fake_security(engine=engine), orchestrator=orchestrator)
+    listener = SimpleNamespace(sessions={})
+    wiring = install_satellites(core, registry, listener, pairing)  # type: ignore[arg-type]
+    attach_control(wiring.hub, _session_control())
+    await wiring.hub._turn("Hallo", "de", lambda _d: None, f"voice:node:{pi}", "note")  # type: ignore[misc,arg-type]
     assert marked == [(f"voice:node:{pi}#c0ffee", None)]
-    await runtime.stop()
+    await wiring.hub.close()
 
 
 # ---- presets, one turn at a time, and what a node is told to say ---------------------------------
@@ -485,8 +480,9 @@ def test_a_satellite_name_is_cleaned_for_prompts() -> None:
 async def test_the_real_wiring_waits_instead_of_barging_in(
     nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
 ) -> None:
-    from nox.node.hub.install import NodeRuntime, install_satellites
+    from nox.node.hub.install.satellites import install_satellites
     from nox.node.hub.registry import NodeRegistry
+    from tests.unit.node.support_wiring import fake_services
 
     seen: dict[str, Any] = {}
 
@@ -495,19 +491,12 @@ async def test_the_real_wiring_waits_instead_of_barging_in(
         return SimpleNamespace(response="")
 
     orchestrator = SimpleNamespace(handle_text=handle_text, conversation_for=lambda c: c + "#1")
-    core = SimpleNamespace(
-        security=SimpleNamespace(privacy=None, killswitch=None, audit=None, engine=None),
-        orchestrator=orchestrator,
-        tokens=None,
-        hub=None,
-        bus=None,
-    )
-    listener = SimpleNamespace(sessions={}, _on_connected=None, _on_disconnected=None)
-    runtime = NodeRuntime(pairing=pairing, enabled=True)
+    core = fake_services(orchestrator=orchestrator)
+    listener = SimpleNamespace(sessions={})
     registry = NodeRegistry(pairing, nodes)
-    satellites = install_satellites(core, runtime, registry, listener, pairing)
-    assert satellites._turn is not None
-    await satellites._turn("Hallo", "de", lambda _d: None, f"voice:node:{PI}", "note")  # type: ignore[arg-type]
+    wiring = install_satellites(core, registry, listener, pairing)  # type: ignore[arg-type]
+    assert wiring.hub._turn is not None
+    await wiring.hub._turn("Hallo", "de", lambda _d: None, f"voice:node:{PI}", "note")  # type: ignore[arg-type]
     assert seen["barge_in"] is False and seen["context_note"] == "note"
     assert seen["speak"] is False and seen["channel"] == f"voice:node:{PI}"
-    await runtime.stop()
+    await wiring.hub.close()

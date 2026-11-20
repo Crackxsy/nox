@@ -17,7 +17,7 @@ from nox.node.device.gate import NodeGate
 from nox.node.device.home import NodeHome
 from nox.node.device.world import GameLock, PlatformMedia, World, world_tools
 from nox.node.hub.registry import ROUTABLE
-from nox.node.hub.world_routes import NodeControl, world_specs
+from nox.node.hub.world_routes import NodeActions, NodeControl, NodeLookups, world_specs
 from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.node.wire.protocol import NoxCallMeta
 from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
@@ -154,7 +154,7 @@ def routed_specs(
         ends.append(entry.device_id)
         return await answer(entry, "computer.session_end", {})
 
-    control = NodeControl(engine, notices.append, end_on_node=end_on_node)
+    control = NodeControl(engine, notices.append, actions=NodeActions(end_on_node=end_on_node))
     specs = world_specs(
         registry=registry,  # type: ignore[arg-type]
         own=lambda _n: None,
@@ -220,7 +220,9 @@ class DeviceGuard:
 
 def locked_control() -> NodeControl:
     """A `NodeControl` that holds the lock for a session on the laptop."""
-    control = NodeControl(None, lambda _n: None, linked=lambda d: BROWSER if d == LAPTOP else None)
+    control = NodeControl(
+        None, lambda _n: None, NodeLookups(linked=lambda d: BROWSER if d == LAPTOP else None)
+    )
     control.answered(LAPTOP, session_report(2, True))
     return control
 
@@ -258,7 +260,7 @@ def wired_core(
 ) -> tuple[Any, NodeControl, DeviceGuard, list[str]]:
     """A core wired exactly like `nox.node.hub.install` (`wire_guards`), with fakes behind it."""
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.hub.install import wire_guards
+    from nox.node.hub.install.control import wire_guards
 
     device_guard = DeviceGuard(gate)
     audit: list[str] = []

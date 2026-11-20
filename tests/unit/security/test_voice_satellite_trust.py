@@ -81,7 +81,9 @@ def test_nothing_spoken_there_counts_as_user_directed(engine: DefaultPermissionE
 async def test_the_question_says_which_satellite_the_words_came_from(
     engine: DefaultPermissionEngine,
 ) -> None:
-    engine.satellite_label = lambda device_id: "Living room Pi" if device_id == PI else ""
+    engine.add_satellite_label(
+        "test", lambda device_id: "Living room Pi" if device_id == PI else ""
+    )
     engine.request_confirmation(req("notes", "write", risk=Risk.MEDIUM, conversation=VOICE))
     engine.request_confirmation(req("notes", "write", risk=Risk.MEDIUM, conversation=CHAT))
     shown = [p.voice_satellite for p in engine.pending_requests()]
