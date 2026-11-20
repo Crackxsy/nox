@@ -66,6 +66,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   definition of "calm": unmuting the microphone counts as a change under either (the local lock
   had already been aligned with the node lock; it is now one function and pinned by a table of
   every client in every state). Wire format, PIN rules and approval behavior are unchanged.
+- **The node code is split by where it runs** (`nox.node.wire`, `nox.node.device`,
+  `nox.node.hub`): what both sides agree on (protocol, receipts, the manifest vocabulary, names,
+  the argument models of tools both validate, the speech and path rules) sits in `wire`, what runs
+  on a device in `device`, what runs on the core in `hub`. The two never import each other, a
+  device does not import the core's runtime, and `lint-imports` (a new step of the Python CI job)
+  fails the build when one does. A few helpers moved to `wire` so the core no longer loads a
+  device's voice pipeline, and imports that only worked around a cycle are ordinary imports
+  again. No behavior, wire format or file format changes; the old module paths are gone (this
+  code has not shipped), and the module map in `docs/ARCHITECTURE-NODES.md` shows the new ones.
 
 ### Added
 - **Nodes: Nox's hands on your other computers** (guide docs/NODES.md and
