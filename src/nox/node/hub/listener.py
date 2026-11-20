@@ -174,8 +174,6 @@ class NodeListener:
         port: int,
         audit: AuditLog | None = None,
         on_security_kill: SecurityKillFn | None = None,
-        on_connected: SessionFn | None = None,
-        on_disconnected: SessionFn | None = None,
         on_tools_changed: SessionFn | None = None,
         receipt_key: str = "",
         ping_interval_s: float = PING_INTERVAL_S,
@@ -190,8 +188,12 @@ class NodeListener:
         self._port = port
         self._audit = audit
         self._on_security_kill = on_security_kill
-        self._on_connected = on_connected
-        self._on_disconnected = on_disconnected
+        #: Called, in the order they were added, for every authenticated connection once it is
+        #: ready. A hook that raises ends that connection and the hooks after it are not called.
+        self.on_connected: list[SessionFn] = []
+        #: Called, in the order they were added, after a connection ended. Failures are not
+        #: reported: the first hook that raises skips the ones after it.
+        self.on_disconnected: list[SessionFn] = []
         self._on_tools_changed = on_tools_changed
         self._receipt_key = receipt_key
         self._ping_interval_s = ping_interval_s
@@ -440,8 +442,8 @@ class NodeListener:
         session.ready.set()
         pinger = asyncio.create_task(self._ping(session), name=f"nox-node-ping-{device.id[:8]}")
         try:
-            if self._on_connected is not None:
-                await self._on_connected(session)
+            for hook in tuple(self.on_connected):
+                await hook(session)
             await client.wait_closed()
         finally:
             pinger.cancel()
@@ -451,9 +453,9 @@ class NodeListener:
                 del self.sessions[device.id]
             await client.close()
             log.info("node.disconnected", device_id=device.id)
-            if self._on_disconnected is not None:
-                with contextlib.suppress(Exception):
-                    await self._on_disconnected(session)
+            with contextlib.suppress(Exception):
+                for hook in tuple(self.on_disconnected):
+                    await hook(session)
 
     async def _answer_outdated(
         self, connection: ServerConnection, device: DeviceRow, head: p.NodeHelloHead, hello_id: Any

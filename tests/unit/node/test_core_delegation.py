@@ -79,6 +79,9 @@ async def test_the_core_delegates_only_to_a_node_that_can_ask() -> None:
         def entries(self) -> list[NodeEntry]:
             return self._e
 
+        def may_delegate(self, _device_id: str) -> bool:
+            return True
+
     for confirmer in (True, False):
         entry = NodeEntry(
             device_id="a" * 32,
@@ -175,6 +178,9 @@ async def test_the_handler_never_re_decides_what_the_scope_decided() -> None:
 
         def entries(self) -> list[NodeEntry]:
             return [self.entry]
+
+        def may_delegate(self, _device_id: str) -> bool:
+            return True
 
         async def call(
             self,

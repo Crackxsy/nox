@@ -473,7 +473,7 @@ async def test_wire_guards_puts_the_real_remote_probe_into_the_policy(
     through a remote session is refused for talking to Nox, one used at the console is not."""
     from types import SimpleNamespace
 
-    import nox.node.hub.install as install_module
+    import nox.node.hub.install.control as install_module
     from nox.ipc.dispatch import RequestRegistry
     from nox.node.hub.world_routes import NodeControl
 
@@ -497,7 +497,7 @@ async def test_the_real_locks_speak_in_a_fixed_order() -> None:
     from types import SimpleNamespace
 
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.hub.install import wire_guards
+    from nox.node.hub.install.control import wire_guards
     from nox.node.hub.world_routes import NodeControl
 
     for lock_first in (True, False):

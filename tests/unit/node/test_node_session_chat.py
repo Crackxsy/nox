@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from nox.node.hub.world_routes import NodeControl
+from nox.node.hub.world_routes import NodeControl, NodeLookups
 from nox.security.access import REFUSE_LINKED, REFUSE_ROLE, Refuse
 from tests.unit.node.support import registry_entry
 from tests.unit.node.support_sessions import (
@@ -82,7 +82,7 @@ def test_the_calm_rule_for_one_call() -> None:
 
 async def test_a_paired_device_without_a_pin_check_is_refused() -> None:
     """No device PIN guard on this core - refused, never let through."""
-    control = NodeControl(None, lambda _n: None, linked=lambda _d: None)
+    control = NodeControl(None, lambda _n: None, NodeLookups(linked=lambda _d: None))
     control.answered(LAPTOP, session_report(2, True))
     refusal = await session_refusal(
         control,
@@ -97,10 +97,10 @@ async def test_a_paired_device_without_a_pin_check_is_refused() -> None:
 
 
 async def test_the_installed_link_lookup_finds_the_controlled_browser() -> None:
-    """The `linked()` that `_world_specs` installs reads the registry's links."""
-    from nox.ipc.dispatch import RequestContext, RequestRegistry
-    from nox.node.hub.install import _world_specs
-    from nox.tools.registry import ToolRegistry
+    """The `linked()` that `build_world` installs reads the registry's links."""
+    from nox.ipc.dispatch import RequestContext
+    from nox.node.hub.install.control import build_world
+    from tests.unit.node.support_wiring import fake_security, fake_services
 
     laptop = registry_entry(LAPTOP, "Laptop", linked=BROWSER)
 
@@ -111,14 +111,8 @@ async def test_the_installed_link_lookup_finds_the_controlled_browser() -> None:
         def entries(self) -> list[Any]:
             return [laptop]
 
-    core = SimpleNamespace(
-        registry=RequestRegistry(),
-        tool_registry=ToolRegistry(),
-        config=SimpleNamespace(),
-        security=SimpleNamespace(gate=PinGate()),
-        device_pin_guard=None,
-    )
-    _specs, control = _world_specs(core, Registry(), dict, [])  # type: ignore[arg-type]
+    core = fake_services(security=fake_security(engine=None, gate=PinGate()))
+    _specs, control = build_world(core, Registry(), dict, None)  # type: ignore[arg-type]
     assert not control.controls_browser(BROWSER)
     control.answered(LAPTOP, session_report(2, True))
     assert control.controls_browser(BROWSER) and not control.controls_browser(OTHER_PHONE)
@@ -269,14 +263,16 @@ def test_the_conversation_requests_are_exactly_these() -> None:
 def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine() -> None:
     """`wire_guards` installs a condition whose chat rule has these answers."""
     from nox.ipc.dispatch import RequestRegistry
-    from nox.node.hub.install import wire_guards
+    from nox.node.hub.install.control import wire_guards
 
     observed = {"host": "192.168.1.20"}
     control = NodeControl(
         None,
         lambda _n: None,
-        addresses=lambda: {LAPTOP: (observed["host"], [])},
-        own_addresses=lambda: ["192.168.1.5"],
+        NodeLookups(
+            addresses=lambda: {LAPTOP: (observed["host"], [])},
+            own_addresses=lambda: ["192.168.1.5"],
+        ),
     )
     core = SimpleNamespace(registry=RequestRegistry(), security=SimpleNamespace(gate=PinGate()))
     wire_guards(core, control)
@@ -297,7 +293,9 @@ def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine
 
 
 async def test_on_the_controlled_machine_its_own_dashboard_cannot_approve() -> None:
-    control = NodeControl(None, lambda _n: None, addresses=lambda: {LAPTOP: ("::1", [])})
+    control = NodeControl(
+        None, lambda _n: None, NodeLookups(addresses=lambda: {LAPTOP: ("::1", [])})
+    )
     control.answered(LAPTOP, session_report(2, True))
     control.pull()
 

@@ -104,7 +104,7 @@ async def _paired_online(
     return node.node_id, entry
 
 
-# ---- what is registered ---------------------------------------------------------------------------
+# ---- what is registered ------------------------------------------------------------------------
 
 
 async def test_install_registers_the_node_requests_and_routes_the_tools(
@@ -130,7 +130,7 @@ async def test_without_network_access_only_the_requests_exist(tmp_path: Path, db
         assert core.registry.policy.condition_names() == ()
 
 
-# ---- the turn facts ---------------------------------------------------------------------------------
+# ---- the turn facts ----------------------------------------------------------------------------
 
 
 async def test_the_turn_facts_name_the_devices_after_the_cores_own_facts(
@@ -176,7 +176,7 @@ async def test_a_failing_device_line_costs_the_whole_facts_not_the_turn(
         assert core.orchestrator._facts() == ""
 
 
-# ---- the capability report ------------------------------------------------------------------------
+# ---- the capability report ---------------------------------------------------------------------
 
 
 async def test_a_tool_only_nodes_have_is_unavailable_while_none_with_it_is_online(
@@ -195,9 +195,9 @@ async def test_a_tool_only_nodes_have_is_unavailable_while_none_with_it_is_onlin
 async def test_a_tool_the_core_has_itself_is_never_reported_missing(
     tmp_path: Path, db: Database
 ) -> None:
-    from tests.unit.node.support_wiring import build_core
-    from nox.node.hub.install import install
     from nox.node.device.hands import PathArgs
+    from nox.node.hub.install import install
+    from tests.unit.node.support_wiring import build_core
 
     async def list_folder(_payload: dict[str, Any]) -> dict[str, Any]:
         return {}
@@ -222,7 +222,7 @@ async def test_a_tool_the_core_has_itself_is_never_reported_missing(
         core.security.close()
 
 
-# ---- how a satellite is named in a question -------------------------------------------------------
+# ---- how a satellite is named in a question ----------------------------------------------------
 
 
 async def test_a_satellite_is_named_by_its_node_in_a_question(tmp_path: Path, db: Database) -> None:
@@ -233,7 +233,7 @@ async def test_a_satellite_is_named_by_its_node_in_a_question(tmp_path: Path, db
         assert name_of_satellite(core, unknown) == unknown[:8]
 
 
-# ---- a connecting node: what happens, and in which order -----------------------------------------
+# ---- a connecting node: what happens, and in which order ---------------------------------------
 
 
 async def test_a_connecting_node_is_listed_and_given_the_games_before_its_gates_are_pushed(
@@ -242,9 +242,9 @@ async def test_a_connecting_node_is_listed_and_given_the_games_before_its_gates_
     async with installed(tmp_path, db) as (core, runtime):
         recorder = Recorder()
         node_id, _entry = await _paired_online(core, runtime, tmp_path, "Laptop", {})
-        runtime.registry.on_connected = recorder.spy("registry.on_connected")  # type: ignore[method-assign]
-        runtime.satellites.push_gates = recorder.spy("satellites.push_gates")  # type: ignore[method-assign]
-        runtime.satellites.panic = recorder.spy("satellites.panic")  # type: ignore[method-assign]
+        recorder.replace(runtime.registry, "on_connected", "registry.on_connected")
+        recorder.replace(runtime.satellites, "push_gates", "satellites.push_gates")
+        recorder.replace(runtime.satellites, "panic", "satellites.panic")
         session = recording_session(node_id, recorder)
         await fire_connected(runtime.listener, session)
         assert recorder.calls == [
@@ -261,9 +261,9 @@ async def test_a_node_connecting_during_a_panic_gets_the_panic_after_its_gates(
     async with installed(tmp_path, db) as (core, runtime):
         recorder = Recorder()
         node_id, _entry = await _paired_online(core, runtime, tmp_path, "Stream PC", {})
-        runtime.registry.on_connected = recorder.spy("registry.on_connected")  # type: ignore[method-assign]
-        runtime.satellites.push_gates = recorder.spy("satellites.push_gates")  # type: ignore[method-assign]
-        runtime.satellites.panic = recorder.spy("satellites.panic")  # type: ignore[method-assign]
+        recorder.replace(runtime.registry, "on_connected", "registry.on_connected")
+        recorder.replace(runtime.satellites, "push_gates", "satellites.push_gates")
+        recorder.replace(runtime.satellites, "panic", "satellites.panic")
         await core.security.privacy.set_panic(True)
         recorder.calls.clear()  # the panic itself reached the satellites that were online
         await fire_connected(runtime.listener, recording_session(node_id, recorder))
@@ -283,9 +283,9 @@ async def test_a_node_whose_hello_claims_a_session_is_dropped_before_it_is_liste
     async with installed(tmp_path, db) as (core, runtime):
         recorder = Recorder()
         node_id, _entry = await _paired_online(core, runtime, tmp_path, "Laptop", {})
-        runtime.registry.on_connected = recorder.spy("registry.on_connected")  # type: ignore[method-assign]
-        runtime.satellites.push_gates = recorder.spy("satellites.push_gates")  # type: ignore[method-assign]
-        runtime.listener.drop = recorder.spy("listener.drop")  # type: ignore[method-assign]
+        recorder.replace(runtime.registry, "on_connected", "registry.on_connected")
+        recorder.replace(runtime.satellites, "push_gates", "satellites.push_gates")
+        recorder.replace(runtime.listener, "drop", "listener.drop")
         session = recording_session(node_id, recorder)
         session.computer = SessionReport(gen=4, active=True, id="")
         await fire_connected(runtime.listener, session)
@@ -314,7 +314,7 @@ async def test_a_node_that_goes_is_forgotten_by_the_satellites_before_it_is_mark
         assert entry.online is False and entry.session is None
 
 
-# ---- events -------------------------------------------------------------------------------------------
+# ---- events ------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -325,8 +325,8 @@ async def test_these_events_push_the_gates_to_the_satellites(
 ) -> None:
     async with installed(tmp_path, db) as (core, runtime):
         recorder = Recorder()
-        runtime.satellites.push_gates = recorder.spy("push_gates")  # type: ignore[method-assign]
-        runtime.satellites.panic = recorder.spy("panic")  # type: ignore[method-assign]
+        recorder.replace(runtime.satellites, "push_gates", "push_gates")
+        recorder.replace(runtime.satellites, "panic", "panic")
         await core.bus.fire(event)
         assert recorder.calls == ["push_gates"]
 
@@ -336,13 +336,13 @@ async def test_the_panic_event_pushes_the_gates_and_then_the_panic(
 ) -> None:
     async with installed(tmp_path, db) as (core, runtime):
         recorder = Recorder()
-        runtime.satellites.push_gates = recorder.spy("push_gates")  # type: ignore[method-assign]
-        runtime.satellites.panic = recorder.spy("panic")  # type: ignore[method-assign]
+        recorder.replace(runtime.satellites, "push_gates", "push_gates")
+        recorder.replace(runtime.satellites, "panic", "panic")
         await core.bus.fire(E.SECURITY_PANIC)
         assert recorder.calls == ["push_gates", "panic"]
 
 
-# ---- the kill switch -----------------------------------------------------------------------------------
+# ---- the kill switch ---------------------------------------------------------------------------
 
 
 async def test_the_kill_switch_stops_and_resumes_the_nodes(tmp_path: Path, db: Database) -> None:
@@ -356,14 +356,14 @@ async def test_the_kill_switch_stops_and_resumes_the_nodes(tmp_path: Path, db: D
             return {}
 
         runtime.listener.broadcast_kill = kill  # type: ignore[method-assign]
-        runtime.listener.broadcast_resume = recorder.spy("broadcast_resume")  # type: ignore[method-assign]
+        recorder.replace(runtime.listener, "broadcast_resume", "broadcast_resume")
         await core.security.killswitch.engage("user", "test")
         assert recorder.calls == ["broadcast_kill"] and sent == ["kill switch"]
         await core.security.killswitch.resume(pin_ok=True)
         assert recorder.calls == ["broadcast_kill", "broadcast_resume"]
 
 
-# ---- removing a node ---------------------------------------------------------------------------------
+# ---- removing a node ---------------------------------------------------------------------------
 
 
 async def test_removing_a_node_forgets_its_grants_and_its_overlay_credential(
@@ -414,7 +414,7 @@ async def test_narrowing_obs_takes_the_overlay_credential_away(
         assert not lan_accepts(core.tokens, credential["token"])
 
 
-# ---- pairing over HTTP, the lock, the routes -------------------------------------------------------------
+# ---- pairing over HTTP, the lock, the routes ---------------------------------------------------
 
 
 async def test_the_pairing_route_answers_starting_until_the_listener_runs(
@@ -432,3 +432,41 @@ async def test_the_computer_use_lock_is_one_of_the_access_conditions(
     async with installed(tmp_path, db) as (core, runtime):
         assert core.registry.policy.condition_names() == ("node_session",)
         assert runtime.registry.may_delegate("a" * 32) is True  # no session runs
+
+
+async def test_while_nox_controls_a_node_its_lock_reaches_the_registry_and_the_satellites(
+    tmp_path: Path, db: Database
+) -> None:
+    async with installed(tmp_path, db) as (core, runtime):
+        laptop = await _paired_online(core, runtime, tmp_path, "Laptop", {})
+        other = await _paired_online(core, runtime, tmp_path, "Desk PC", {})
+        assert not runtime.satellites.session_active() and not runtime.satellites.controlled(
+            laptop[0]
+        )
+        runtime.control.answered(laptop[0], {"gen": 2, "active": True, "id": "ab" * 16})
+        assert runtime.registry.may_delegate(laptop[0]) is True  # the controlled PC's own dialog
+        assert runtime.registry.may_delegate(other[0]) is False  # no other node's dialog
+        assert runtime.satellites.session_active() is True
+        assert runtime.satellites.controlled(laptop[0]) is True
+        assert runtime.satellites.controlled(other[0]) is False
+
+
+async def test_removing_the_controlled_node_ends_its_lock(tmp_path: Path, db: Database) -> None:
+    async with installed(tmp_path, db) as (core, runtime):
+        node_id, _entry = await _paired_online(core, runtime, tmp_path, "Laptop", {})
+        runtime.control.answered(node_id, {"gen": 2, "active": True, "id": "ab" * 16})
+        assert runtime.control.locked(node_id)
+        assert await runtime.pairing.revoke(node_id, reason="dashboard")
+        assert not runtime.control.locked(node_id) and not runtime.control.active()
+
+
+async def test_the_listener_serves_the_satellites_and_the_runtime_keeps_its_three_tasks(
+    tmp_path: Path, db: Database
+) -> None:
+    async with installed(tmp_path, db) as (core, runtime):
+        assert runtime.listener.on_satellite == runtime.satellites.handle
+        assert {task.get_name() for task in runtime.tasks} == {
+            "nox-node-overlay-sweep",
+            "nox-node-computer",
+            "nox-node-listener",
+        }

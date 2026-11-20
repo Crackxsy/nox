@@ -192,7 +192,7 @@ async def test_the_panic_button_switches_and_latches_until_this_device_resumes(
 def test_only_a_node_label_passes_even_with_a_permissive_check(tmp_path: Path) -> None:
     store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
     tokens = TokenStore(overlay=store)
-    tokens.node_overlay_allowed = lambda _device: True
+    tokens.add_node_overlay_check("test", lambda _device: True)
     _obs, obs_token = store.issue("obs")
     _x, odd_token = store.issue("nodes:" + PI)
     assert not lan_accepts(tokens, obs_token) and not lan_accepts(tokens, odd_token)
@@ -242,31 +242,23 @@ async def test_the_record_folder_stays_on_the_node(tmp_path: Path) -> None:
 async def test_a_node_connecting_during_a_panic_gets_it(
     nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
 ) -> None:
-    from nox.node.hub.install import NodeRuntime, install_satellites
+    from nox.node.hub.install.satellites import install_satellites
     from nox.node.hub.registry import NodeRegistry
     from tests.unit.node.support import pair_node
+    from tests.unit.node.support_wiring import fake_security, fake_services
 
     registry = NodeRegistry(pairing, nodes)
     stream_pc = (await pair_node(pairing, tmp_path, name="Stream PC")).node_id
     entry = registry._entry(stream_pc, "Stream PC")
     entry.online, entry.tools = True, {"obs.request": "low"}
     session = fake_session(stream_pc)
-    listener = SimpleNamespace(
-        sessions={stream_pc: session}, _on_connected=None, _on_disconnected=None
-    )
+    listener = SimpleNamespace(sessions={stream_pc: session})
     privacy = SimpleNamespace(panic=True, allows_capture=lambda _kind: False)
-    core = SimpleNamespace(
-        security=SimpleNamespace(privacy=privacy, killswitch=None, audit=None, engine=None),
-        orchestrator=None,
-        tokens=None,
-        hub=None,
-        bus=None,
-    )
-    runtime = NodeRuntime(pairing=pairing, enabled=True)
-    install_satellites(core, runtime, registry, listener, pairing)
-    await listener._on_connected(session)
+    core = fake_services(security=fake_security(privacy=privacy))
+    wiring = install_satellites(core, registry, listener, pairing)  # type: ignore[arg-type]
+    await wiring.on_connected(session)
     assert (p.M_OBS_PANIC, {"reason": "panic"}) in session.client.sent
-    await runtime.stop()
+    await wiring.hub.close()
 
 
 async def test_an_empty_record_folder_is_hidden(tmp_path: Path) -> None:

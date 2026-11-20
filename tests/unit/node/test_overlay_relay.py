@@ -181,7 +181,7 @@ def test_offline_or_switched_off_the_page_is_closed_and_retries(tmp_path: Path) 
 
 def _tokens(store: OverlayTokenStore, may_hold: set[str]) -> TokenStore:
     tokens = TokenStore(overlay=store)
-    tokens.node_overlay_allowed = lambda device: device in may_hold
+    tokens.add_node_overlay_check("test", lambda device: device in may_hold)
     return tokens
 
 
@@ -204,8 +204,9 @@ async def test_a_node_with_obs_gets_a_read_only_rotating_credential(tmp_path: Pa
     may_hold.clear()
     assert not lan_accepts(tokens, first["token"])
     assert not lan_accepts(TokenStore(overlay=store), first["token"])  # no check installed: no
-    tokens.node_overlay_allowed = lambda _device: 1 / 0  # type: ignore[assignment,return-value]
-    assert not lan_accepts(tokens, first["token"])  # a failing check: no
+    failing = TokenStore(overlay=store)
+    failing.add_node_overlay_check("test", lambda _device: 1 / 0)  # type: ignore[arg-type,return-value]
+    assert not lan_accepts(failing, first["token"])  # a failing check: no
     may_hold.add(PI)
     tokens = _tokens(store, may_hold)
     again = await hub.handle(session, p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())

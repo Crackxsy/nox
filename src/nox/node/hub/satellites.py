@@ -59,6 +59,7 @@ from pydantic import BaseModel
 
 from nox.core.logging import get_logger
 from nox.core.orchestrator import Orchestrator
+from nox.ipc.overlay_tokens import OverlayTokenStore
 from nox.ipc.tokens import NODE_OVERLAY_PREFIX
 from nox.memory.capture import turn_origin
 from nox.node.hub.router import VOICE_NODE_CHANNEL, CannotShow, routed_spec
@@ -73,7 +74,10 @@ log = get_logger(__name__)
 
 __all__ = [
     "MAX_UTTERANCES",
+    "NodeDirectory",
+    "OverlayAccess",
     "SatelliteHub",
+    "VoiceAssistant",
     "clean_label",
     "node_overlay_label",
     "voice_context_note",
@@ -156,52 +160,96 @@ def _within(window: deque[float], now: float, limit: int, span: float = 60.0) ->
     return True
 
 
+def _no(*_args: str) -> bool:
+    return False
+
+
+def _short_id(device_id: str) -> str:
+    return device_id[:8]
+
+
+@dataclass(frozen=True)
+class NodeDirectory:
+    """What the hub asks about the paired nodes (the registry and the database answer)."""
+
+    #: Whether node `device_id` offers tool `name` right now (`NodeEntry.offers`).
+    offers: Callable[[str, str], bool]
+    #: Whether the device itself enabled `group` (narrowed here or not), as it last said.
+    enabled_on_device: Callable[[str, str], bool]
+    #: The connected nodes' sessions.
+    sessions: Callable[[], Iterable[Any]]
+    #: The owner's second key for `voice` on this node, from the database (blocking: read in a
+    #: worker thread). Default and on any failure: no.
+    opted_in: Callable[[str, str], bool] = _no
+    #: How a node is named in a question and in the model's context.
+    label: Callable[[str], str] = _short_id
+
+
+@dataclass(frozen=True)
+class VoiceAssistant:
+    """What the hub needs from the assistant to answer a node that spoke."""
+
+    #: Runs one turn; None: there is no assistant, and no word from a node becomes a turn.
+    turn: TurnFn | None
+    #: Why a microphone may not listen now, or None.
+    capture_refusal: CaptureFn
+    #: Publishes an event on the core's bus (`tts.level`).
+    publish: Callable[[str, dict[str, Any]], None]
+
+
+@dataclass(frozen=True)
+class OverlayAccess:
+    """The overlay credentials a node with OBS may hold, and who may keep one."""
+
+    #: The persisted credentials; None: no node gets one.
+    store: OverlayTokenStore | None = None
+    #: Closes the connections of revoked credentials.
+    disconnect: Callable[[list[str]], Awaitable[int]] | None = None
+    #: Whether node `device_id` may hold an overlay credential: paired and not removed, `obs`
+    #: enabled on the device as it last said and not narrowed here - online or not. Blocking (the
+    #: database): read in a worker thread. Default and on failure: no.
+    allowed: Callable[[str], bool] = _no
+
+
 class SatelliteHub:
     def __init__(
         self,
+        directory: NodeDirectory,
+        assistant: VoiceAssistant,
+        overlay: OverlayAccess | None = None,
         *,
-        offers: Callable[[str, str], bool],
-        enabled_on_device: Callable[[str, str], bool],
-        sessions: Callable[[], Iterable[Any]],
-        turn: TurnFn | None,
-        capture_refusal: CaptureFn,
-        publish: Callable[[str, dict[str, Any]], None],
         audit: AuditLog | None = None,
-        overlay: Any = None,
-        disconnect_credential: Callable[[list[str]], Awaitable[int]] | None = None,
-        overlay_allowed: Callable[[str], bool] = lambda _device_id: False,
-        opted_in: Callable[[str, str], bool] = lambda _device_id, _group: False,
-        controlled: Callable[[str], bool] = lambda _device_id: False,
-        label: Callable[[str], str] = lambda device_id: device_id[:8],
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        #: Whether node `device_id` offers tool `name` right now (`NodeEntry.offers`).
-        self._offers = offers
-        #: Whether the device itself enabled `group` (narrowed here or not), as it last said.
-        self._enabled_on_device = enabled_on_device
-        self._sessions = sessions
-        self._turn = turn
-        self._capture_refusal = capture_refusal
-        self._publish = publish
+        overlay = overlay if overlay is not None else OverlayAccess()
+        self._offers = directory.offers
+        self._enabled_on_device = directory.enabled_on_device
+        self._sessions = directory.sessions
+        self._opted_in = directory.opted_in
+        self._label = directory.label
+        self._turn = assistant.turn
+        self._capture_refusal = assistant.capture_refusal
+        self._publish = assistant.publish
         self._audit = audit
-        self._overlay = overlay
-        self._disconnect = disconnect_credential
-        #: Whether node `device_id` may hold an overlay credential: paired and not removed,
-        #: `obs` enabled on the device as it last said and not narrowed here - online or not.
-        #: Blocking (the database): read in a worker thread. Default and on failure: no.
-        self._overlay_allowed = overlay_allowed
-        #: The owner's second key for `voice` on this node, from the database (blocking: read in
-        #: a worker thread). Default and on any failure: no.
-        self._opted_in = opted_in
+        self._overlay = overlay.store
+        self._disconnect = overlay.disconnect
+        self._overlay_allowed = overlay.allowed
         #: Whether Nox controls mouse and keyboard on that node right now (`NodeControl.locked`).
-        #: Failing: yes.
-        self.controlled = controlled
+        #: Failing: yes. Set by `bind_control`.
+        self.controlled: Callable[[str], bool] = _no
         #: Whether Nox controls mouse and keyboard on any node right now (`NodeControl.active`).
         self.session_active: Callable[[], bool] = lambda: False
-        self._label = label
         self._clock = clock
         self._nodes: dict[str, _Node] = {}
         self._background: set[asyncio.Task[Any]] = set()
+
+    def bind_control(
+        self, *, controlled: Callable[[str], bool], session_active: Callable[[], bool]
+    ) -> None:
+        """Tell the hub where computer use stands (`NodeControl`): which node is controlled right
+        now, and whether any is. Until then no node is."""
+        self.controlled = controlled
+        self.session_active = session_active
 
     def _node(self, device_id: str) -> _Node:
         node = self._nodes.get(device_id)

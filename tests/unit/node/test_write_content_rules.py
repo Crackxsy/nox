@@ -153,11 +153,11 @@ async def test_a_link_cannot_turn_a_data_name_into_a_hidden_folder(
 
 def test_structured_formats_are_always_high_and_passive_ones_medium_when_new() -> None:
     from nox.node.device.hands import write_risk
-    from nox.node.hub.install import _write_risk
+    from nox.node.hub.install.routes import write_risk_of
 
     for name in ("a.json", "a.YAML", "a.yml"):
         assert write_risk(name, False, False) == "high", name
-        assert _write_risk({"path": f"notes/{name}"}) is Risk.HIGH
+        assert write_risk_of({"path": f"notes/{name}"}) is Risk.HIGH
     for name in ("a.txt", "a.md", "a.csv", "a.tsv", "a.log", "a.ics", "a.vcf", "a.srt"):
         assert write_risk(name, False, False) == "medium", name
         assert write_risk(name, True, False) == "high"

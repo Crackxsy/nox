@@ -14,7 +14,7 @@ import pytest
 from nox.lan.tls import TlsMaterial
 from nox.node.hub.listener import NodeListener
 from nox.node.hub.pairing import NodePairing
-from nox.node.hub.world_routes import NodeControl
+from nox.node.hub.world_routes import NodeActions, NodeControl, NodeLookups
 from nox.node.wire import protocol as p
 from tests.unit.fakes import wait_until
 from tests.unit.node.support import session_of, start_node
@@ -42,7 +42,7 @@ def test_addresses_are_compared_in_one_spelling() -> None:
 
 def _addressed(reported: list[str]) -> NodeControl:
     control = NodeControl(
-        None, lambda _n: None, addresses=lambda: {LAPTOP: ("192.168.1.20", reported)}
+        None, lambda _n: None, NodeLookups(addresses=lambda: {LAPTOP: ("192.168.1.20", reported)})
     )
     control.answered(LAPTOP, session_report(2, True))
     control.pull()
@@ -73,7 +73,7 @@ def test_a_disconnected_but_locked_node_keeps_its_addresses_until_the_lock_lifts
     control = NodeControl(
         None,
         lambda _n: None,
-        addresses=lambda: {LAPTOP: ("192.168.1.20", [])} if connected["value"] else {},
+        NodeLookups(addresses=lambda: {LAPTOP: ("192.168.1.20", [])} if connected["value"] else {}),
     )
     control.answered(LAPTOP, session_report(2, True))
     control.pull()
@@ -179,8 +179,9 @@ def test_this_machine_is_recognised_whatever_its_number_of_adapters(
     control = NodeControl(
         None,
         lambda _n: None,
-        addresses=lambda: {LAPTOP: ("192.168.1.5", [])},
-        own_addresses=all_local_addresses,
+        NodeLookups(
+            addresses=lambda: {LAPTOP: ("192.168.1.5", [])}, own_addresses=all_local_addresses
+        ),
     )
     control.answered(LAPTOP, session_report(2, True))
     control.pull()
@@ -189,7 +190,7 @@ def test_this_machine_is_recognised_whatever_its_number_of_adapters(
 
 def test_an_address_that_cannot_be_classified_counts_as_this_machine() -> None:
     control = NodeControl(
-        None, lambda _n: None, addresses=lambda: {LAPTOP: ("pc.example.invalid", [])}
+        None, lambda _n: None, NodeLookups(addresses=lambda: {LAPTOP: ("pc.example.invalid", [])})
     )
     control.answered(LAPTOP, session_report(2, True))
     control.pull()
@@ -199,7 +200,9 @@ def test_an_address_that_cannot_be_classified_counts_as_this_machine() -> None:
 def test_the_binding_only_grows_while_the_lock_holds() -> None:
     now: dict[str, Any] = {"peer": "192.168.1.20", "reported": ["192.168.1.21", "fd00::21"]}
     control = NodeControl(
-        None, lambda _n: None, addresses=lambda: {LAPTOP: (now["peer"], now["reported"])}
+        None,
+        lambda _n: None,
+        NodeLookups(addresses=lambda: {LAPTOP: (now["peer"], now["reported"])}),
     )
     control.answered(LAPTOP, session_report(2, True))
     control.pull()
@@ -223,7 +226,7 @@ def test_a_full_binding_drops_nothing_and_treats_everyone_as_the_controlled_pc()
     from nox.node.hub.world_routes import MAX_REPORTED_BOUND
 
     audited: list[str] = []
-    control = NodeControl(None, lambda _n: None, audit=audited.append)
+    control = NodeControl(None, lambda _n: None, actions=NodeActions(audit=audited.append))
     now = _saturating(control)
     control.answered(LAPTOP, session_report(2, True))
     control.pull()
@@ -328,7 +331,7 @@ def test_unreadable_own_addresses_count_as_this_machine_during_a_session(
 ) -> None:
     import psutil
 
-    from nox.node.hub.world_routes import NodeControl
+    from nox.node.hub.world_routes import NodeControl, NodeLookups
     from nox.node.wire.addresses import ADDRESSES_UNREADABLE, all_local_addresses
 
     def broken() -> Any:
@@ -339,8 +342,9 @@ def test_unreadable_own_addresses_count_as_this_machine_during_a_session(
     control = NodeControl(
         None,
         lambda _n: None,
-        addresses=lambda: {LAPTOP: ("192.0.2.20", [])},  # some other address on the LAN
-        own_addresses=all_local_addresses,
+        NodeLookups(
+            addresses=lambda: {LAPTOP: ("192.0.2.20", [])}, own_addresses=all_local_addresses
+        ),
     )
     assert not control.controls_local()  # no session: nothing to protect
     control.answered(LAPTOP, session_report(2, True))
@@ -349,7 +353,7 @@ def test_unreadable_own_addresses_count_as_this_machine_during_a_session(
 
 
 def test_an_own_address_lookup_that_raises_fails_closed() -> None:
-    from nox.node.hub.world_routes import NodeControl
+    from nox.node.hub.world_routes import NodeControl, NodeLookups
 
     def raising() -> list[str]:
         raise RuntimeError("psutil is gone")
@@ -357,8 +361,7 @@ def test_an_own_address_lookup_that_raises_fails_closed() -> None:
     control = NodeControl(
         None,
         lambda _n: None,
-        addresses=lambda: {LAPTOP: ("192.0.2.20", [])},
-        own_addresses=raising,
+        NodeLookups(addresses=lambda: {LAPTOP: ("192.0.2.20", [])}, own_addresses=raising),
     )
     control.answered(LAPTOP, session_report(2, True))
     control.pull()

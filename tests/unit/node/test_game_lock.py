@@ -192,7 +192,7 @@ def test_the_core_can_only_add_games() -> None:
 
 
 async def test_the_core_sends_its_games_on_every_connection() -> None:
-    from nox.node.hub.install import send_games
+    from nox.node.hub.install.games import send_games
 
     sent: list[tuple[str, Any]] = []
 
@@ -201,12 +201,10 @@ async def test_the_core_sends_its_games_on_every_connection() -> None:
             sent.append((method, params))
             return {"ok": True}
 
-    core = SimpleNamespace(
-        config=SimpleNamespace(
-            sensors=SimpleNamespace(game=SimpleNamespace(process_names=["RocketLeague.exe"]))
-        )
+    config = SimpleNamespace(
+        sensors=SimpleNamespace(game=SimpleNamespace(process_names=["RocketLeague.exe"]))
     )
-    await send_games(core, SimpleNamespace(client=Client(), device_id=LAPTOP))
+    await send_games(config, SimpleNamespace(client=Client(), device_id=LAPTOP))  # type: ignore[arg-type]
     assert sent == [("nox/games", {"add": ["RocketLeague.exe"]})]
 
 
@@ -285,7 +283,7 @@ def test_removing_a_game_without_a_confirmation_writes_nothing(tmp_path: Path) -
 
 
 async def test_the_core_sends_its_games_again_when_they_change() -> None:
-    from nox.node.hub.install import resend_games_if_changed
+    from nox.node.hub.install.games import resend_games_if_changed
 
     sent: list[Any] = []
 
@@ -295,14 +293,12 @@ async def test_the_core_sends_its_games_again_when_they_change() -> None:
             return {}
 
     names = ["RocketLeague.exe"]
-    core = SimpleNamespace(
-        config=SimpleNamespace(sensors=SimpleNamespace(game=SimpleNamespace(process_names=names)))
-    )
+    config = SimpleNamespace(sensors=SimpleNamespace(game=SimpleNamespace(process_names=names)))
     listener = SimpleNamespace(
         sessions={LAPTOP: SimpleNamespace(client=Client(), device_id=LAPTOP)}
     )
     known: list[list[str]] = [["RocketLeague.exe"]]
-    assert await resend_games_if_changed(core, listener, known) is False
+    assert await resend_games_if_changed(config, listener, known) is False
     names.append("ExampleGame.exe")
-    assert await resend_games_if_changed(core, listener, known) is True
+    assert await resend_games_if_changed(config, listener, known) is True
     assert sent == [["RocketLeague.exe", "ExampleGame.exe"]]

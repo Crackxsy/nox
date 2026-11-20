@@ -461,11 +461,12 @@ class World:
         tool schemas, whatever order the tasks run in (an older checkout without nodes: none)."""
         try:
             from kann_alles.nodes import WorldNodes  # noqa: PLC0415 - newer checkouts only
-            from nox.node.hub.install import _install_routes  # noqa: PLC0415
+            from nox.node.hub.install.routes import install_node_routes  # noqa: PLC0415
+            from nox.node.hub.ports import CoreServices  # noqa: PLC0415
         except ImportError:
             return
         self.nodes = WorldNodes(self.root / "node-receipts")
-        _install_routes(core, self.nodes)
+        install_node_routes(CoreServices.of(core), self.nodes, None)
         self.connect_kill_switch(core.security.killswitch)
 
     def connect_kill_switch(self, killswitch: Any) -> None:

@@ -400,7 +400,9 @@ async def test_the_core_routes_tool_calls_to_the_right_device(
     )
     assert nobody.data is not None and nobody.data["error"] == "no_device"
     assert shown == [("Nox", "Wäsche aufhängen")]  # nothing queued, nothing sent elsewhere
-    assert core.node_probe("notify.show") is not None  # not offered while no node has it
+    assert (
+        core.tool_registry.availability("notify.show") is not None
+    )  # not offered while no node has it
 
 
 async def test_unpairing_a_node_revokes_its_remembered_grants(

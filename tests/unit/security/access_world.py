@@ -19,7 +19,7 @@ from nox.ipc.dispatch import RequestContext, RequestRegistry
 from nox.ipc.errors import IpcError
 from nox.ipc.handlers.core import CoreHandlers, PermissionReply
 from nox.ipc.protocol import Envelope, Kind, Source
-from nox.node.hub.world_routes import NodeControl
+from nox.node.hub.world_routes import NodeControl, NodeLookups
 from nox.security.access import InputLock
 from nox.security.model import Decision, Risk
 from tests.unit.node.support_sessions import (
@@ -112,8 +112,8 @@ class World:
 
 def build_world(*, pin: PinGate | None = None) -> World:
     """A dispatcher with the requests of the table, the local input lock and the node lock wired
-    like `nox.desktop.install` and `nox.node.hub.install.wire_guards`."""
-    from nox.node.hub.install import wire_guards
+    like `nox.desktop.install` and `nox.node.hub.install.control.wire_guards`."""
+    from nox.node.hub.install.control import wire_guards
 
     remote: list[bool | None] = [False]
     gate = pin if pin is not None else PinGate()
@@ -137,9 +137,11 @@ def build_world(*, pin: PinGate | None = None) -> World:
     control = NodeControl(
         None,
         lambda _n: None,
-        linked=lambda d: BROWSER if d == LAPTOP else None,
-        addresses=lambda: addresses,
-        own_addresses=lambda: ("192.168.1.10",),
+        NodeLookups(
+            linked=lambda d: BROWSER if d == LAPTOP else None,
+            addresses=lambda: addresses,
+            own_addresses=lambda: ("192.168.1.10",),
+        ),
     )
     core.registry.policy.pins.gate = lambda: gate
     core.registry.policy.pins.device_guard = guard

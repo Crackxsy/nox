@@ -35,6 +35,10 @@ class Recorder:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
+    def replace(self, owner: Any, name: str, label: str) -> None:
+        """Make `owner.name` an async function that records `label` and does nothing else."""
+        setattr(owner, name, self.spy(label))
+
     def spy(self, label: str, original: Callable[..., Awaitable[Any]] | None = None) -> Any:
         """An async function that records `label` and then runs `original`, if there is one."""
 
@@ -170,26 +174,75 @@ async def installed(
         core.security.close()
 
 
-# ---- the places where a test reaches into the wiring ----------------------------------------------
+# ---- the places where a test reaches into the wiring -------------------------------------------
 # Kept in one spot: these are the only lines that name how the core's side is hooked up.
 
 
 async def fire_connected(listener: NodeListener, session: Any) -> None:
     """What the listener does once a node is authenticated and ready."""
-    await listener._on_connected(session)  # noqa: SLF001
+    for hook in listener.on_connected:
+        await hook(session)
 
 
 async def fire_disconnected(listener: NodeListener, session: Any) -> None:
     """What the listener does after a node's connection ended."""
-    await listener._on_disconnected(session)  # noqa: SLF001
+    for hook in listener.on_disconnected:
+        await hook(session)
 
 
 def capability_probe(core: WiredCore, tool: str) -> Any:
-    """The answer the capability report gets for `tool` from the node extension."""
-    probe = getattr(core, "node_probe", None)  # not set while network access is off
-    return probe(tool) if probe is not None else None
+    """The answer the capability report gets for `tool` from the extensions that probe tools."""
+    return core.tool_registry.availability(tool)
 
 
 def name_of_satellite(core: WiredCore, device_id: str) -> str:
     """How the permission engine names the voice satellite `device_id` in a question."""
     return core.security.engine._satellite_of(f"voice:node:{device_id}#c0ffee")  # noqa: SLF001
+
+
+async def _no_credentials(_ids: Any, reason: str = "") -> int:
+    return 0
+
+
+def fake_security(**parts: Any) -> Any:
+    """The core's security services as fakes that allow capture, are not engaged and not in panic;
+    `parts` replace the ones a test is about."""
+    services: dict[str, Any] = {
+        "audit": SimpleNamespace(append=lambda **_kw: 0),
+        "killswitch": SimpleNamespace(is_engaged=lambda: False),
+        "privacy": SimpleNamespace(panic=False, allows_capture=lambda _kind: True),
+        "engine": SimpleNamespace(
+            add_satellite_label=lambda _name, _label: None,
+            mark_tainted=lambda _conversation, _content=None: None,
+            is_tainted=lambda _conversation: False,
+        ),
+    }
+    services.update(parts)
+    return SimpleNamespace(**services)
+
+
+def fake_services(**parts: Any) -> Any:
+    """A `CoreServices` of fakes, for the tests of one piece of the wiring: every part the hub
+    reads is there and does nothing, and `parts` replace the ones a test is about."""
+    from nox.tools.registry import ToolRegistry as Tools
+
+    config = SimpleNamespace(
+        devices=SimpleNamespace(defaults={}),
+        desktop=SimpleNamespace(computer_use=SimpleNamespace(stop_hotkey="ctrl+alt+shift+k")),
+        paths=SimpleNamespace(runtime_dir="."),
+        sensors=SimpleNamespace(game=SimpleNamespace(process_names=[])),
+    )
+    services: dict[str, Any] = {
+        "config": config,
+        "db": None,
+        "bus": FakeBus(),
+        "security": fake_security(),
+        "registry": RequestRegistry(),
+        "tool_registry": Tools(),
+        "orchestrator": SimpleNamespace(add_fact_source=lambda _name, _source: None),
+        "tokens": SimpleNamespace(overlay=None, add_node_overlay_check=lambda _n, _check: None),
+        "hub": SimpleNamespace(disconnect_credential=_no_credentials),
+        "lan": None,
+    }
+    services.update(parts)
+    return SimpleNamespace(**services)

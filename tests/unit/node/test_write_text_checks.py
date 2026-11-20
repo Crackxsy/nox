@@ -60,7 +60,7 @@ def test_the_node_refuses_bad_structured_text_before_the_dialog_and_the_budget(
 
 
 async def test_the_core_refuses_bad_structured_text_before_asking_anyone() -> None:
-    from nox.node.hub.install import _write_precheck, _write_target
+    from nox.node.hub.install.routes import write_precheck, write_target
     from nox.node.hub.router import routed_spec
 
     laptop = registry_entry("a" * 32, "Laptop", tools={"file.write": "medium"})
@@ -72,8 +72,8 @@ async def test_the_core_refuses_bad_structured_text_before_asking_anyone() -> No
         side_effects=True,
         registry=registry,  # type: ignore[arg-type]
         input_model=WriteArgs,
-        node_target=_write_target,
-        precheck=_write_precheck,
+        node_target=write_target,
+        precheck=write_precheck,
     )
     payload = spec.input_model.model_validate(
         {"path": "plan.yml", "text": "a: !!python/name:os.system", "device": "Laptop"}
@@ -135,7 +135,7 @@ async def test_the_core_runs_the_text_check_in_a_thread_with_a_time_limit(
     import threading
     import time
 
-    from nox.node.hub.install import _write_target
+    from nox.node.hub.install.routes import write_target
     from nox.node.hub.router import routed_spec
     from nox.node.wire import offload as offload_module
 
@@ -155,7 +155,7 @@ async def test_the_core_runs_the_text_check_in_a_thread_with_a_time_limit(
         side_effects=True,
         registry=FakeRegistry([laptop]),  # type: ignore[arg-type]
         input_model=WriteArgs,
-        node_target=_write_target,
+        node_target=write_target,
         precheck=slow,
     )
     payload = spec.input_model.model_validate(

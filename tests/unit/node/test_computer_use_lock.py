@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from nox.node.device.world import world_tools
-from nox.node.hub.world_routes import MAX_SESSION_MINUTES, NodeControl
+from nox.node.hub.world_routes import MAX_SESSION_MINUTES, NodeActions, NodeControl, NodeLookups
 from nox.node.wire.protocol import NodeHello, Ping, SessionReport
 from nox.security.model import PermissionRequest, Risk
 from nox.security.permissions import grant_matches
@@ -206,7 +206,7 @@ async def test_disconnected_or_silent_nodes_keep_the_lock_for_the_longest_sessio
 async def test_a_stop_lifts_the_lock_only_through_the_nodes_report() -> None:
     pongs: list[tuple[str, Any]] = []
     notices: list[dict[str, Any]] = []
-    control = NodeControl(None, notices.append, reports=lambda: list(pongs))
+    control = NodeControl(None, notices.append, NodeLookups(reports=lambda: list(pongs)))
     control.answered(LAPTOP, session_report(2, True))  # the answer to this core's own start
     pongs.append((LAPTOP, session_report(2, True)))
     assert control.active() and notices[-1]["active"]
@@ -377,18 +377,20 @@ def test_the_owner_releases_a_stuck_lock_and_a_live_session_locks_again() -> Non
 async def test_the_release_request_needs_the_pin_here() -> None:
     from nox.ipc.dispatch import RequestRegistry
     from nox.ipc.errors import IpcError
-    from nox.node.hub.install import ReleaseRequest, _register_control_requests
+    from nox.node.hub.install.control import ReleaseRequest, register_control_requests
+    from tests.unit.node.support_wiring import fake_services
 
     audit: list[str] = []
     ipc = RequestRegistry()
     control = locked_control()
-    core = SimpleNamespace(
+    core = fake_services(
+        registry=ipc,
         security=SimpleNamespace(
             audit=SimpleNamespace(append=lambda **kw: audit.append(kw["decision"]))
-        )
+        ),
     )
     ipc.policy.pins.gate = lambda: PinGate()
-    _register_control_requests(core, ipc, control)
+    register_control_requests(core, control)
     handler = ipc._handlers["node.computer.release"].handler
     with pytest.raises(IpcError):
         await handler(request_ctx("dashboard", "dashboard:1"), ReleaseRequest(pin="0000"))
@@ -402,8 +404,8 @@ def _violations() -> tuple[NodeControl, list[tuple[str, str]]]:
     control = NodeControl(
         None,
         lambda _n: None,
-        linked=lambda d: BROWSER if d == LAPTOP else None,
-        on_violation=lambda device, why: seen.append((device, why)),
+        NodeLookups(linked=lambda d: BROWSER if d == LAPTOP else None),
+        NodeActions(on_violation=lambda device, why: seen.append((device, why))),
     )
     return control, seen
 
@@ -450,7 +452,7 @@ def test_a_new_connection_forgets_the_started_session() -> None:
 
 
 async def test_the_connection_hook_drops_a_node_whose_hello_claims_a_session() -> None:
-    from nox.node.hub.install import connection_hook
+    from nox.node.hub.install.control import connection_hook
 
     control, _seen = _violations()
     dropped: list[tuple[str, str]] = []
@@ -462,16 +464,15 @@ async def test_the_connection_hook_drops_a_node_whose_hello_claims_a_session() -
             return True
 
     registry = SimpleNamespace(on_connected=lambda s: listed.append(s.device_id))
-    hook = connection_hook(SimpleNamespace(), registry, [control], [Listener()])  # type: ignore[arg-type]
+    hook = connection_hook(SimpleNamespace(), registry, control, Listener())  # type: ignore[arg-type]
     session = SimpleNamespace(device_id=LAPTOP, computer=SessionReport(gen=4, active=True, id=""))
     await hook(session)
     assert dropped == [(LAPTOP, "session_in_hello")] and listed == []
 
 
 def _world_control(sessions: dict[str, Any], tools: dict[str, dict[str, str]]) -> Any:
-    from nox.ipc.dispatch import RequestRegistry
-    from nox.node.hub.install import _world_specs
-    from nox.tools.registry import ToolRegistry
+    from nox.node.hub.install.control import build_world
+    from tests.unit.node.support_wiring import fake_services
 
     dropped: list[tuple[str, str]] = []
 
@@ -487,14 +488,7 @@ def _world_control(sessions: dict[str, Any], tools: dict[str, dict[str, str]]) -
         for d, s in sessions.items()
     ]
     registry = SimpleNamespace(known=lambda: entries, entries=lambda: entries)
-    core = SimpleNamespace(
-        config=SimpleNamespace(desktop=None, paths=None),
-        registry=RequestRegistry(),
-        tool_registry=ToolRegistry(),
-        security=None,
-        bus=None,
-    )
-    _specs, control = _world_specs(core, registry, dict, [listener])  # type: ignore[arg-type]
+    _specs, control = build_world(fake_services(), registry, dict, listener)  # type: ignore[arg-type]
     return control, registry, dropped
 
 
