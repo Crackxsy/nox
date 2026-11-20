@@ -70,7 +70,7 @@ CHILD = r"""
 import asyncio, os, sqlite3, sys, threading
 from pathlib import Path
 
-from nox.node import agent as agent_module
+from nox.node.device import agent as agent_module
 from nox.node.device.agent import NodeAgent
 from nox.node.device.gate import NodeGate
 from nox.node.device.hands import NodeHands, default_sandbox, hand_tools
