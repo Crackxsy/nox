@@ -1,7 +1,7 @@
 /**
  * GENERATED — do not edit by hand.
  *
- * Source of truth: `src/nox/ipc/protocol.py` and `src/nox/core/events.py` (PAYLOAD_MODELS).
+ * Source of truth: `src/nox/ipc/protocol.py` and `src/nox/core/events/` (PAYLOAD_MODELS).
  * Regenerate with:
  *   .venv/Scripts/python.exe scripts/gen_ts_types.py
  * `scripts/gen_ts_types.py --check` fails CI when this file is stale: the pydantic models are

@@ -1,5 +1,5 @@
 """Generate `ui/shared/generated/ipc.ts` from the pydantic models in `src/nox/ipc/protocol.py`
-and the event payload models in `src/nox/core/events.py` (`PAYLOAD_MODELS`).
+and the event payload models in `src/nox/core/events/` (`PAYLOAD_MODELS`).
 
 The Python payload models are the single source of truth for the wire contract; the TypeScript
 side must never hand-guess a shape (that is exactly the `chunk`/`delta`/`text` drift this
@@ -31,7 +31,7 @@ OUTPUT_PATH = REPO_ROOT / "ui" / "shared" / "generated" / "ipc.ts"
 HEADER = """/**
  * GENERATED — do not edit by hand.
  *
- * Source of truth: `src/nox/ipc/protocol.py` and `src/nox/core/events.py` (PAYLOAD_MODELS).
+ * Source of truth: `src/nox/ipc/protocol.py` and `src/nox/core/events/` (PAYLOAD_MODELS).
  * Regenerate with:
  *   .venv/Scripts/python.exe scripts/gen_ts_types.py
  * `scripts/gen_ts_types.py --check` fails CI when this file is stale: the pydantic models are

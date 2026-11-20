@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import re
+import textwrap
 import tomllib
 from collections.abc import Iterator
 from functools import cache
@@ -183,9 +184,7 @@ def test_the_console_script_points_at_a_function_that_exists() -> None:
         assert function in _names(found), f"{name}: {module} has no {function}"
 
 
-def _imports_of(path: Path) -> Iterator[tuple[str, tuple[str, ...]]]:
-    """Every absolute `nox` import in a file - lazy ones inside functions included."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+def _walk_imports(tree: ast.AST) -> Iterator[tuple[str, tuple[str, ...]]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             if node.module == "nox" or node.module.startswith("nox."):
@@ -194,6 +193,25 @@ def _imports_of(path: Path) -> Iterator[tuple[str, tuple[str, ...]]]:
             for alias in node.names:
                 if alias.name == "nox" or alias.name.startswith("nox."):
                     yield alias.name, ()
+
+
+def _imports_of(path: Path) -> Iterator[tuple[str, tuple[str, ...]]]:
+    """Every absolute `nox` import in a file - lazy ones inside functions included, and those in
+    string literals that are Python programs themselves (the scripts a test starts as a child
+    process, `python -c` code), which no import of the test module ever reaches."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    yield from _walk_imports(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "import" not in node.value or "nox" not in node.value:
+                continue
+            if "\n" not in node.value.strip() and ";" not in node.value:
+                continue  # one bare statement is data (a fixture to scan), not a program
+            try:
+                program = ast.parse(textwrap.dedent(node.value))
+            except SyntaxError:
+                continue
+            yield from _walk_imports(program)
 
 
 def _python_files() -> Iterator[Path]:
@@ -258,3 +276,33 @@ def test_every_extension_the_core_installs_has_its_install_module() -> None:
 
         assert found is not None, f"{name}: {module}"
         assert "install" in _names(found), f"{name}: {module} has no install()"
+
+
+#: `src/nox/...` as the workflows and scripts spell a source path, or as Python joins it.
+SLASH_PATH = re.compile(
+    r"(?<![\w.\-])src/nox((?:/[A-Za-z0-9_]+)+(?:\.[A-Za-z0-9_.]*[A-Za-z0-9_])?)"
+)
+JOINED_PATH = re.compile(r'"src"\s*/\s*"nox"((?:\s*/\s*"[A-Za-z0-9_.]+")+)')
+
+
+def _source_paths() -> list[tuple[str, str]]:
+    found = []
+    for path in _files():
+        if path.relative_to(REPO).parts[0] == "src":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        where = path.relative_to(REPO).as_posix()
+        found += [(where, "src/nox" + m.group(1)) for m in SLASH_PATH.finditer(text)]
+        for m in JOINED_PATH.finditer(text):
+            parts = re.findall(r'"([A-Za-z0-9_.]+)"', m.group(1))
+            found.append((where, "src/nox/" + "/".join(parts)))
+    return found
+
+
+def test_every_source_path_a_script_or_the_ci_names_exists() -> None:
+    """`sed` in the release workflow and the bundle builder read `protocol.py` by its path."""
+    paths = _source_paths()
+    missing = sorted({f"{where}: {rel}" for where, rel in paths if not (REPO / rel).exists()})
+
+    assert any(rel.endswith("wire/protocol.py") for _, rel in paths), "the scan found no path"
+    assert missing == []
