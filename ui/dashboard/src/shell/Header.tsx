@@ -13,7 +13,7 @@ import { Suspense, lazy, useRef, useState } from 'react';
 
 import { ChunkBoundary } from './ChunkBoundary';
 
-import { type Key, type T, fill, modeHeadline, privacyLabel, withCopy } from '../i18n';
+import { type Key, type T, modeHeadline, privacyLabel, withCopy } from '../i18n';
 import type { DashboardState } from '../model';
 import { Icon } from './icons';
 import type { Presence } from './presence';
@@ -111,12 +111,15 @@ export function Header({
             type="button"
             className="chip chip--wait"
             onClick={onWaiting}
-            aria-label={fill(waiting === 1 ? t('ux_waiting_one') : t('ux_waiting_many'), waiting)}
+            // The visible words are "3 warten auf dich": the name must contain them (WCAG 2.5.3).
+            aria-label={`${waiting} ${waiting === 1 ? t('ux_waiting_word_one') : t('ux_waiting_word_many')}`}
           >
             <Icon name="bell" size={18} />
             <span className="num" aria-hidden="true">
               {waiting}
             </span>
+            {/* A real space between the two words: a checker reads the button's text as one string. */}
+            {' '}
             <span className="chip-long" aria-hidden="true">
               {waiting === 1 ? t('ux_waiting_word_one') : t('ux_waiting_word_many')}
             </span>
@@ -128,18 +131,20 @@ export function Header({
           className="chip"
           aria-haspopup="dialog"
           onClick={() => setMenu('privacy')}
-          aria-label={`${t('privacy_title')}: ${privacy}${mic ? `, ${t('ux_mic_on')}` : ''}`}
+          // The visible words are the privacy level, then "an" while something is captured: the
+          // name starts with the same words in the same order (WCAG 2.5.3, label in name).
+          aria-label={`${t('privacy_title')}: ${privacy}${mic || recording ? ` ${t('ux_on')}` : ''}${mic ? `, ${t('ux_mic_on')}` : ''}`}
         >
           <span className="chip-shield">
             <Icon name="shield" size={18} />
           </span>
           <span className="chip-long" aria-hidden="true">
             {privacy}
-          </span>
+          </span>{' '}
           {/* On a phone a short word in place of the shield (the full name is in the label). */}
           <span className="chip-short" aria-hidden="true">
             {state.privacyMode ? t(PRIVACY_SHORT[state.privacyMode] ?? 'ux_privacy_short_balanced') : '?'}
-          </span>
+          </span>{' '}
           {(mic || recording) && (
             <span className="chip-rec" aria-hidden="true">
               {mic && <Icon name="mic" size={16} />}
