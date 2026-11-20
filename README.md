@@ -55,7 +55,7 @@ Nox is **pre-1.0**. Honest state as of the latest release:
 | Voice: push-to-talk, wake word, local STT (faster-whisper) + TTS (Supertonic 3 by default, Piper as the fallback, Kokoro) | Works, needs the `voice` extras and a model download (one click in the dashboard); see [Voice](#voice-microphone-and-speech) |
 | AI routing: Claude Code CLI → Ollama → deterministic rules fallback | Works; each provider reports its real health |
 | Memory: SQLite + `sqlite-vec`, vault indexing | Works; first start indexes the whole vault once |
-| Twitch chat bot, OBS scene control, Funken ledger, dashboard Stream page | Works (stream profile only) |
+| Twitch chat bot, OBS scene control, Funken ledger, dashboard Stream page | Works (stream and rocket_league profiles) |
 | Telegram bridge | Works once a bot token is set |
 | Smart home via Home Assistant: lights, sockets, scenes, media, thermostats, blinds, dashboard Zuhause page | Works against the documented API; never tested against a real instance yet — see [Home Assistant](#home-assistant-smart-home) |
 | Rocket League coach | Stage 1: observation and replay pipeline; coaching quality is early |
@@ -152,8 +152,9 @@ generate a chat OAuth token for your bot account, then
 Both commands read the value from a hidden prompt — never from the command line, so it does not
 end up in your shell history.
 
-The Twitch plugin only loads in the **stream** profile, and its egress allowlist is limited to
-`irc.chat.twitch.tv:6697` and `api.twitch.tv:443`.
+The Twitch plugin only loads in the **stream** and **rocket_league** profiles, and its egress
+allowlist is limited to `irc.chat.twitch.tv:6697`. The Twitch login endpoint (`id.twitch.tv`) is
+not reachable from `rocket_league`, so renewing the token waits until you leave the game.
 
 ### OBS Studio (scene control)
 
@@ -330,11 +331,11 @@ tray or the dashboard.
 | Profile | Purpose |
 | --- | --- |
 | `companion` | Default: desktop pet, voice, memory. |
-| `stream` | Twitch/OBS plugins load **only here**; no screenshots to the cloud. |
+| `stream` | Twitch/OBS plugins load here (and in `rocket_league`); no screenshots to the cloud. |
 | `coding` | Claude Code sessions, filesystem limited to the workspaces you configure. |
 | `research` | Cloud and web access allowed. |
 | `work` | No cloud, no memory writes; local models only. |
-| `rocket_league` | Observation-only game coaching; no cloud. |
+| `rocket_league` | Observation-only game coaching; no cloud. The one exception: the Twitch chat connection and the local OBS websocket, so the chat bot keeps answering during a game. |
 | `offline` | Nothing leaves the machine. |
 
 Shipped profiles contain **placeholder** paths only (`%USERPROFILE%/Projects`). Your real
