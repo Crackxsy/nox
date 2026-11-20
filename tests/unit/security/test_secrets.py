@@ -151,7 +151,7 @@ def test_pin_hash_format_and_argon2_fallback_report() -> None:
     scheme, iterations, salt_hex, digest_hex = stored.split("$")
     assert (scheme, iterations) == ("pbkdf2_sha256", "600000")
     assert "4711" not in (scheme, iterations, salt_hex, digest_hex)
-    assert len(salt_hex) >= 32 and len(digest_hex) >= 64  # far longer than any PIN
+    assert (len(salt_hex), len(digest_hex)) == (32, 64)  # 16 and 32 bytes, far longer than any PIN
     auto = PinManager(store)
     assert auto.verify_pin("4711").ok  # verifies pbkdf2 regardless of argon2 presence
     assert auto.algorithm in ("argon2id", "pbkdf2_sha256")
