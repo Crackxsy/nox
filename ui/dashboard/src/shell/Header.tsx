@@ -118,6 +118,8 @@ export function Header({
             <span className="num" aria-hidden="true">
               {waiting}
             </span>
+            {/* A real space between the two words: a checker reads the button's text as one string. */}
+            {' '}
             <span className="chip-long" aria-hidden="true">
               {waiting === 1 ? t('ux_waiting_word_one') : t('ux_waiting_word_many')}
             </span>
@@ -138,11 +140,11 @@ export function Header({
           </span>
           <span className="chip-long" aria-hidden="true">
             {privacy}
-          </span>
+          </span>{' '}
           {/* On a phone a short word in place of the shield (the full name is in the label). */}
           <span className="chip-short" aria-hidden="true">
             {state.privacyMode ? t(PRIVACY_SHORT[state.privacyMode] ?? 'ux_privacy_short_balanced') : '?'}
-          </span>
+          </span>{' '}
           {(mic || recording) && (
             <span className="chip-rec" aria-hidden="true">
               {mic && <Icon name="mic" size={16} />}
