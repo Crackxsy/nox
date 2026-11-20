@@ -60,6 +60,11 @@ jobs:
       - name: mypy
         run: mypy src/nox
 
+      # The node code's layers (wire, device, hub) and what a device may import: the contracts in
+      # pyproject.toml. Fast (a graph of src/nox, no tests run).
+      - name: import contracts
+        run: lint-imports
+
       - name: mypy (benchmark harness)
         env:
           MYPYPATH: evals

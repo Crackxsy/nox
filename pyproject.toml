@@ -71,6 +71,7 @@ dev = [
     "mypy>=2.4.0",
     "types-PyYAML",
     "types-psutil",
+    "import-linter>=2.3",
 ]
 e2e = ["playwright>=1.64.0", "pytest-playwright>=0.10.0"]
 # `browser.*`: Nox's own headless Chromium. Apache-2.0. After installing, `playwright install
@@ -170,3 +171,59 @@ markers = [
     "network: needs network or external services",
     "e2e: browser smoke test against a live NoxCore (Playwright); needs ui/*/dist built",
 ]
+
+# Import contracts, checked in CI (`lint-imports`) next to ruff and mypy. The node code is three
+# packages (docs/ARCHITECTURE-NODES.md, "Module map"): `wire` is what both sides agree on, `device`
+# runs on a device, `hub` runs on the core.
+[tool.importlinter]
+root_package = "nox"
+
+[[tool.importlinter.contracts]]
+name = "Node code: wire below device and hub, which never import each other"
+type = "layers"
+layers = ["nox.node.hub | nox.node.device", "nox.node.wire"]
+# Each entry is a debt, not a rule: it names why the import exists and what removes it. The list
+# may only get shorter (an entry that no longer matches an import fails the check).
+ignore_imports = [
+    # The core builds the routed specs of the file tools from the same argument models and refusal
+    # words the device runs (`PathArgs`, `write_risk`, `move_refusal`, ...). They call the write
+    # rules inside `device.safe_fs`, so they cannot move to `wire` before `safe_fs` is split into
+    # its pure rules and its file-system access.
+    "nox.node.hub.install -> nox.node.device.hands",
+    # The voice satellite builds its pipeline from the voice worker's builders. `worker.main`
+    # reaches the core application only through its `voice setup` command (a lazy import of
+    # `entrypoints`), which a device never runs. It goes once the builders live in a module of
+    # their own.
+    "nox.node.device.voice -> nox.worker.main",
+]
+
+[[tool.importlinter.contracts]]
+name = "Node device code does not import the core runtime"
+type = "forbidden"
+source_modules = ["nox.node.device"]
+# What a device must not drag in: the application, the turn and tool loops, the database and the
+# memory, the core's own network listeners and the registries it routes through. Libraries a device
+# shares with the core (security, sandbox, hands, desktop, voice, release, `lan.tls`,
+# `ipc.tokens`, the logger and the config models) are not on this list.
+forbidden_modules = [
+    "nox.app",
+    "nox.entrypoints",
+    "nox.core.orchestrator",
+    "nox.core.toolloop",
+    "nox.core.boot",
+    "nox.core.statemgr",
+    "nox.ipc.dispatch",
+    "nox.ipc.handlers",
+    "nox.remote",
+    "nox.data",
+    "nox.memory",
+    "nox.lan.app",
+    "nox.lan.install",
+    "nox.tools.executor",
+    "nox.mcp.client",
+    "nox.ai",
+    "nox.noxos",
+]
+# Direct imports only: the voice satellite's helpers lead to the application through the worker
+# (see the layers contract above), and that edge is listed there once.
+allow_indirect_imports = true
