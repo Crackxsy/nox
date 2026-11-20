@@ -57,9 +57,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from nox.core.events.names import E
 from nox.core.logging import get_logger
-from nox.node.device.cli_text import t
 from nox.node.device.tools import NodeRefusal, NodeTool
-from nox.node.device.world import installed
 from nox.node.wire import protocol as p
 from nox.node.wire.arguments import SayArgs
 from nox.node.wire.speech import say_refusal, speakable
@@ -161,6 +159,9 @@ def voice_support(has_module: Callable[[str], bool] | None = None) -> str | None
 
 
 def installed_module() -> Callable[[str], bool]:
+    # Loaded here: `world` pulls in the agent and with it the TLS and token stack, which the
+    # speech setup commands and the tray's state reads never need (start time on a small device).
+    from nox.node.device.world import installed  # noqa: PLC0415
 
     return installed
 
@@ -803,6 +804,7 @@ def voice_setup(
     `voice.models_dir`) - only after a yes (`confirm`; None: the person said `--yes`). Speech
     recognition (Whisper, sized for this device) and the configured voice (Supertonic 3; Piper
     voices are placed by hand). 0 when everything is there, 1 when refused or failed."""
+    from nox.node.device.cli_text import t  # noqa: PLC0415 - the words load only for this command
     from nox.voice.models import engine_models_dir  # noqa: PLC0415
 
     support = voice_support()
