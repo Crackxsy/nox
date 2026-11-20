@@ -1,10 +1,11 @@
 # Security overview
 
 Audience: technical users and the external security reviewer (see `EXTERNAL_SECURITY_REVIEW.md`).
-This is a summary of the project's internal Security Model (the authoritative source —
-if this document and the Security Model disagree, the Security Model wins) plus
-`docs/ENGINEERING.md`'s hard rules. Security guarantees in Nox are enforced in code, below the AI
-layer, never as prompt instructions to the model (Security Model principle P1).
+This is the public summary of Nox's security design, plus the hard rules in
+[`ENGINEERING.md`](ENGINEERING.md#hard-rules-security). The code and its tests are the authority:
+where this document and the code disagree, the code wins and the difference is a bug in this
+document - please open an issue. Security guarantees in Nox are enforced in code, below the AI
+layer, never as prompt instructions to the model (the first hard rule in `ENGINEERING.md`).
 
 ## Reporting a vulnerability
 
@@ -604,7 +605,7 @@ Every control above has negative tests, not just positive/happy-path coverage: a
 hard-prohibition bypass attempt via config removal, PRIVATE mode with a cloud provider selected, a
 capture attempt while a zone is active, a kill switch triggered during streaming TTS, an audit
 chain tamper, a secret appearing in a log line, an unauthenticated IPC client, and a
-wrong-role request. These are tracked as a standing obligation (Security Model §11) and are part
+wrong-role request. These are tracked as a standing obligation and are part
 of what `EXTERNAL_SECURITY_REVIEW.md` asks a reviewer to confirm is green before relying on this
 document.
 
@@ -885,8 +886,8 @@ voice satellites included (`nox.home.boundary`).
   node only (`device:<id>|session:computer/*`, medium at most, `granted_by: node-session`); the
   grant and the header line ("Nox steuert gerade Maus und Tastatur auf ...", sent again to a
   dashboard that reconnects) follow the derived state. **No new input-synthesis code:** the node
-  calls `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the Security Model
-  §10 CI guard allows, so the guard needs no exception. Remote-control tools, privacy zones on node
+  calls `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the input-synthesis
+  CI guard allows, so the guard needs no exception. Remote-control tools, privacy zones on node
   screenshots, headless cameras and full-screen video are covered in
   [Accepted limits (nodes)](#accepted-limits-nodes).
 - **Only the core's methods** (`CORE_TO_NODE`) are answered; a node never acts while disconnected

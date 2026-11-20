@@ -13,8 +13,8 @@ arranged.
 - This document, plus:
   - `docs/SECURITY.md` (permission model, hard prohibitions, kill switch, Rocket League boundary,
     audit logging, secrets handling, plugin sandboxing, IPC auth — summarized for a reviewer).
-  - On request, the full internal Security Model document that `docs/SECURITY.md` summarizes
-    (shared with the reviewer under NDA if one is in place).
+  - On request, the longer internal design notes that `docs/SECURITY.md` summarizes (shared with
+    the reviewer under NDA if one is in place).
   - `docs/PRIVACY.md` (what the product claims about capture/storage/egress — useful as a claim to
     verify, not just background).
   - `docs/PLUGIN_AUTHORING.md` (the plugin sandboxing boundary from the author's side).
@@ -24,8 +24,8 @@ that is itself a finding about this package, not the reviewer's problem to route
 
 ## 2. Threat model and hard prohibitions (given as input, not to be discovered)
 
-See `docs/SECURITY.md` "Threat model" and "Hard prohibitions" — reproduced there directly from
-Security Model §1 and §4 so the reviewer has both the "what we defend against" table and the exact
+See `docs/SECURITY.md` "Threat model" and "Hard prohibitions" — written out there in full
+so the reviewer has both the "what we defend against" table and the exact
 prohibited-action list (`game.input.send`, `game.memory.read`, `game.process.inject`,
 `anticheat.bypass`, `stream.key.read`, `stream.stop`, `recording.delete`,
 `security.core.modify_without_pin`, `permission.self_elevate`) without having to grep for it.
@@ -34,18 +34,18 @@ prohibited-action list (`game.input.send`, `game.memory.read`, `game.process.inj
 
 The review should cover, at minimum:
 
-1. **Permission engine** (`nox.security.permissions`, Security Model §2) — evaluation order,
+1. **Permission engine** (`nox.security.permissions`, `docs/SECURITY.md` "Permission model") — evaluation order,
    whether hard prohibitions and kill-switch/safe-mode really do short-circuit everything else,
    whether the default-by-risk table is actually enforced where tools are registered.
-2. **Rocket League observation-only boundary** (Security Model §10) and its CI-enforced technical
+2. **Rocket League observation-only boundary** (`docs/SECURITY.md` "Rocket League observation-only boundary") and its CI-enforced technical
    barrier — the `guard-security-model` job in `.github/workflows/ci.yml` that greps `src/` for
    `SendInput|pydirectinput|pyautogui|ReadProcessMemory|WriteProcessMemory`. Confirm the pattern
    list is actually sufficient (are there other input-synthesis/memory APIs worth adding?) and
    that the job is a required check, not merely present.
-3. **Secrets handling** (Security Model §7) — keyring-only storage, naming convention
+3. **Secrets handling** (`docs/SECURITY.md` "Secrets handling") — keyring-only storage, naming convention
    (`nox/<component>/<key>`), never logged/serialized/prompted. Cross-check against
    `scripts/secrets_scan.py`'s findings (§5 below) rather than trusting the policy alone.
-4. **Kill switch** (Security Model §6) — every trigger path, the SAFE_MODE effect, the
+4. **Kill switch** (`docs/SECURITY.md` "Kill switch and panic mode") — every trigger path, the SAFE_MODE effect, the
    role-restricted resume path, and the PIN-on-security-path-resume rule. Specifically worth
    attacking: can a plugin, worker, or AI-originated request resume from a kill? (It should be
    rejected outright.)
