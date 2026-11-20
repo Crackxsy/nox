@@ -229,7 +229,8 @@ def _session_control() -> Any:
 
 async def test_a_session_on_one_pc_keeps_that_pc_quiet_and_saturation_all_of_them() -> None:
     from nox.node.install import attach_control
-    from nox.node.world_routes import REFUSE_SATURATED, session_refusal
+    from nox.security.access import REFUSE_SATURATED
+    from tests.unit.node.support_sessions import request_ctx, session_refusal
 
     control = _session_control()
     hub, _ = voice_hub(offers={(PI, "voice.say"), (PC, "voice.say")})
@@ -241,7 +242,7 @@ async def test_a_session_on_one_pc_keeps_that_pc_quiet_and_saturation_all_of_the
     # A binding that is full: nobody can be told apart from the controlled PC - neither the
     # dashboard (#167) nor any satellite.
     control.saturated.add(PC)
-    ctx = SimpleNamespace(role="dashboard", client_id="dashboard:1", peer="")
+    ctx = request_ctx("dashboard", "dashboard:1")
     refusal = await session_refusal(
         control, ctx, None, action="chat.send", gate=None, device_guard=None, remote=lambda: False
     )

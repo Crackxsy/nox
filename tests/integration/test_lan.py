@@ -687,7 +687,7 @@ async def test_a_device_sees_whether_a_pin_is_set_but_no_local_detail(core: NoxC
 
 
 #: Every registered request the calm rule lets through while Nox controls mouse and keyboard
-#: (`nox.ipc.dispatch.calm_ui_request`: the explicit list, `ipc.*`, `*.list`, `*.status`). A new
+#: (`nox.security.access.calm_ui_request`: the explicit list, `ipc.*`, `*.list`, `*.status`). A new
 #: name here must only read or stop: a state-changing `x.status` turns this red on purpose.
 CALM_SNAPSHOT = frozenset(
     {
@@ -735,12 +735,123 @@ CALM_SNAPSHOT = frozenset(
 )
 
 
+#: Every other registered request: refused to a UI client while synthetic input is in play or a
+#: node session runs (`nox.security.access`). A request added to the core must be written into
+#: this list or into `CALM_SNAPSHOT` - nothing is left undecided by default.
+LOCKED_SNAPSHOT = frozenset(
+    {
+        "ai.providers",
+        "ai.setup.check",
+        "ai.setup.start",
+        "capabilities.report",
+        "chat.send",
+        "clip.export",
+        "clip.tag",
+        "clip.trim",
+        "config.set",
+        "consent.grant",
+        "consent.revoke",
+        "day.reminder.add",
+        "day.reminder.cancel",
+        "home.command",
+        "home.light",
+        "home.scene",
+        "home.switch",
+        "home.test",
+        "lan.pair.start",
+        "lan.unpair",
+        "mcp.servers.add",
+        "mcp.servers.approve",
+        "mcp.servers.enable",
+        "mcp.servers.remove",
+        "mcp.tools.call",
+        "memory.profile.add",
+        "memory.profile.confirm",
+        "memory.profile.forget",
+        "mode.set",
+        "node.computer.release",
+        "node.defaults.set",
+        "node.link",
+        "node.narrow",
+        "node.pair.start",
+        "node.unpair",
+        "noxos.ssh.disable",
+        "noxos.ssh.enable",
+        "noxos.ssh.keys.set",
+        "noxos.ssh.passphrase.change",
+        "noxos.ssh.passphrase.set",
+        "personality.set",
+        "pet.interact",
+        "plans.approve",
+        "plans.discard",
+        "plugin.register",
+        "plugin.secret.get",
+        "plugin.tool.call",
+        "presets.activate",
+        "presets.test_action",
+        "privacy.set",
+        "remote.pair.start",
+        "remote.unpair",
+        "secrets.delete",
+        "secrets.set",
+        "security.resume",
+        "skills.activate",
+        "skills.deactivate",
+        "skills.forget",
+        "stream.audio_track.setup",
+        "stream.funken.top",
+        "stream.overlay.revoke",
+        "stream.overlay.setup",
+        "twitch.auth.disconnect",
+        "twitch.auth.start",
+        "views.clear",
+        "voice.model.download",
+        "voice.ptt",
+        "watch.delete",
+        "worker.heartbeat",
+        "worker.ready",
+        "worker.register",
+    }
+)
+
+
 async def test_the_calm_requests_are_exactly_the_snapshot(core: NoxCore) -> None:
-    from nox.ipc.dispatch import calm_ui_request
+    from nox.security.access import calm_ui_request
 
     assert core.registry is not None
     calm = {n for n in core.registry.names() if calm_ui_request(n)}
     assert calm == CALM_SNAPSHOT
+
+
+async def test_no_registered_request_is_left_undecided_by_the_locks(core: NoxCore) -> None:
+    """Under a lock, every request of the real registry is calm or refused to a UI client - and
+    the two lists above name each one, so a new request is a reviewed decision."""
+    from nox.ipc.dispatch import client_context
+    from nox.security.access import AccessPolicy, Allow, InputLock
+
+    assert core.registry is not None
+    names = set(core.registry.names())
+    assert names == CALM_SNAPSHOT | LOCKED_SNAPSHOT
+    assert not CALM_SNAPSHOT & LOCKED_SNAPSHOT
+    policy = AccessPolicy()
+    policy.add_condition(InputLock(lambda: True))
+    for role in ("dashboard", "shell", "device"):
+        client = client_context(f"{role}:1", role)
+        for name in sorted(names):
+            payload = {"muted": True} if name == "voice.mute" else {}
+            verdict = await policy.decide(client, name, payload)
+            assert isinstance(verdict, Allow) == (name in CALM_SNAPSHOT), (role, name)
+
+
+async def test_the_real_core_installs_the_locks_its_platform_has(core: NoxCore) -> None:
+    """The node lock everywhere; the local input lock only where computer use exists (Windows,
+    as `nox.desktop.install` does). The order when both are there is fixed by precedence, see
+    `test_access.py::test_the_real_locks_speak_in_a_fixed_order`."""
+    import sys
+
+    assert core.registry is not None
+    expected = ("input_lock", "node_session") if sys.platform == "win32" else ("node_session",)
+    assert core.registry.policy.condition_names() == expected
 
 
 async def test_a_paired_devices_request_carries_its_network_address(core: NoxCore) -> None:
@@ -780,3 +891,55 @@ async def test_a_paired_devices_request_carries_its_network_address(core: NoxCor
                 break
         assert reply.kind is Kind.RESPONSE, reply.payload
     assert seen == [("device", "127.0.0.1"), ("dashboard", "")]
+
+
+async def test_a_device_at_the_controlled_pcs_address_is_refused_by_the_hub_context(
+    core: NoxCore,
+) -> None:
+    """The hub builds each connection's `ClientContext` with the address the network listener saw:
+    a paired device connecting from the address of the PC Nox controls is that PC's browser."""
+    from pydantic import BaseModel
+
+    from nox.node.session_access import NodeSessionCondition
+    from nox.node.world_routes import NodeControl
+
+    assert core.registry is not None
+    seen: list[tuple[str, str]] = []
+    ran: list[str] = []
+
+    class Empty(BaseModel):
+        pass
+
+    async def handler(ctx: Any, _p: Empty) -> dict[str, Any]:
+        seen.append((ctx.client.peer, ctx.client.peer_class.value))
+        ran.append("zz.change")
+        return {}
+
+    class Probe(NodeSessionCondition):
+        """The node condition under its own name, beside the one the core installed."""
+
+        name = "zz_session"
+
+    controlled = "a" * 32
+    control = NodeControl(None, lambda _n: None)
+    control.answered(controlled, {"gen": 2, "active": True, "id": "ab" * 16})
+    control.node_observed[controlled] = {"127.0.0.1"}  # where the controlled PC connects from
+    policy = core.registry.policy
+    policy.add_condition(Probe(control, policy.pins, lambda: False))
+    core.registry.register("zz.change", Empty, handler, roles=("device",))
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        reply = await _request(ws, paired["client_id"], "zz.change", {})
+    assert reply.kind is Kind.ERROR, reply.payload
+    assert reply.payload["details"] == {
+        "reason": "node_session",
+        "sub_reason": "node_session_linked",
+    }
+    assert ran == [] and seen == []
+    control.observe(controlled, {"gen": 3, "active": False, "id": ""})  # the session is over
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        reply = await _request(ws, paired["client_id"], "zz.change", {})
+    assert reply.kind is Kind.RESPONSE, reply.payload
+    assert seen == [("127.0.0.1", "local")]

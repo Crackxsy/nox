@@ -23,6 +23,7 @@ import weakref
 from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cached_property
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,7 @@ from nox.core.events import E, Event, EventBus
 from nox.core.globbing import name_matches, name_matches_any
 from nox.ipc import pet_view
 from nox.ipc._log import get_logger
-from nox.ipc.dispatch import RequestContext, RequestRegistry, service_patterns
+from nox.ipc.dispatch import RequestContext, RequestRegistry, client_context, service_patterns
 from nox.ipc.errors import (
     CORE_SOURCE,
     ERR_AUTH_DENIED,
@@ -66,6 +67,7 @@ from nox.ipc.protocol import (
     Source,
 )
 from nox.ipc.tokens import TokenStore, constant_time_equals, generate_token
+from nox.security.access import ClientContext
 
 log = get_logger(__name__)
 
@@ -369,6 +371,11 @@ class ClientSession:
     #: The node whose own overlay credential that was (`node:<id>`): only it gets that
     #: node's speech (`pet_view`).
     overlay_node: str = ""
+
+    @cached_property
+    def access(self) -> ClientContext:
+        """Who this connection is to the access rule, built once (after `peer` is known)."""
+        return client_context(self.client_id, self.role, self.peer if self.via_lan else "")
 
     @property
     def client_id(self) -> str:
@@ -848,6 +855,7 @@ class IpcHub:
                     services=frozenset(client.services),
                     stream=self._stream_fn(client, env),
                     peer=client.peer if client.via_lan else "",
+                    connection=client.access,
                 )
                 reply = await self._registry.dispatch(ctx, env)
         except asyncio.CancelledError:

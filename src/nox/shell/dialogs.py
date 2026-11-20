@@ -280,7 +280,7 @@ class PermissionDialog:
             details.append(f"{t['mode']}: {request['mode']}")
         self.box.setDetailedText("\n".join(details))
         # While Nox controls mouse and keyboard on a paired PC, "allow" needs the security PIN
-        # (`nox.node.world_routes.session_refusal`); otherwise there is no field at all.
+        # (`nox.node.session_access.NodeSessionCondition`); otherwise there is no field at all.
         self.node_control = node_control
         self.pin_label = QLabel(t["pin"])
         self.pin = QLineEdit()

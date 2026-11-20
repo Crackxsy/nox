@@ -50,8 +50,8 @@ from nox.noxos.claim import ClaimGate, ClaimService
 from nox.noxos.helper import unix_helper
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
+from nox.security.access import Allow
 from nox.security.device_pin import DevicePinGuard
-from nox.security.gate import PinRequiredError
 
 log = get_logger(__name__)
 
@@ -293,7 +293,7 @@ def install(core: Any) -> LanRuntime:
             "nox-lan-remove",
         )
 
-    core.device_pin_guard = DevicePinGuard(lambda: core.security.gate, revoke)
+    core.registry.policy.pins.device_guard = DevicePinGuard(lambda: core.security.gate, revoke)
     hub_host = core.hub.settings.host
 
     def current_tls() -> TlsMaterial:
@@ -382,22 +382,15 @@ def _add_health_check(core: Any, runtime: LanRuntime) -> None:
 async def authorize_admin(
     core: Any, ctx: RequestContext, pin: str | None, action: str, *, local_needs_pin: bool
 ) -> None:
-    """From a paired device: the PIN, always (`DevicePinGuard`, which also removes a device after
-    repeated wrong PINs). Locally: the PIN gate as configured where `local_needs_pin`, nothing
-    otherwise - removing a device only ever narrows access, and a thief must not be able to block
-    it by locking the PIN. Shared by every pairing surface (`nox.lan`, `nox.node`)."""
-    if ctx.role == DEVICE_ROLE:
-        guard = getattr(core, "device_pin_guard", None)
-        if guard is None:
-            raise IpcError(ERR_PERMISSION, f"{action} is not possible from a paired device")
-        await guard.require(ctx, pin, action)
-        return
-    if not local_needs_pin:
-        return
-    try:
-        await core.security.gate.require(pin, action=action, by=ctx.client_id or ctx.role)
-    except PinRequiredError as exc:
-        raise IpcError(ERR_PERMISSION, exc.reason) from exc
+    """Administration - pairing, removing, narrowing - from a paired device only with the PIN,
+    locally with the PIN gate as configured where `local_needs_pin`
+    (`nox.security.access.PinChecks.admin`). Raises `permission.denied` otherwise. Shared by every
+    pairing surface (`nox.lan`, `nox.node`)."""
+    verdict = await core.registry.policy.pins.admin(
+        ctx.client, pin, action, local_needs_pin=local_needs_pin
+    )
+    if not isinstance(verdict, Allow):
+        raise IpcError(ERR_PERMISSION, verdict.reason)
 
 
 def _register_requests(core: Any, runtime: LanRuntime) -> None:

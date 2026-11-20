@@ -38,6 +38,7 @@ from nox.desktop.computer_use import (
 from nox.desktop.tools import register_desktop_tools
 from nox.desktop.win32 import RealWindowProbe
 from nox.security._events import publish_nowait
+from nox.security.access import InputLock
 from nox.security.model import Risk, TemporaryGrant
 from nox.tools.registry import ToolRegistry
 
@@ -171,7 +172,7 @@ def _install_computer_use(core: CoreLike) -> ComputerUse:
     registry = getattr(core, "registry", None)
     if registry is not None:
         # The core refuses "allow" answers and privileged UI requests while this could click.
-        registry.input_lock = computer.blocks_confirmation
+        registry.policy.add_condition(InputLock(computer.blocks_confirmation))
 
     def grant(minutes: int) -> str:
         grant_id = f"computer-{uuid.uuid4().hex[:12]}"
