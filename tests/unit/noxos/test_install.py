@@ -122,7 +122,8 @@ def make_core(tmp_path: Path, *, pin: str | None = PIN, nox_os: bool = True):  #
         revoked=revoked,
         protected=[],
     )
-    core.device_pin_guard = DevicePinGuard(lambda: core.security.gate, revoke)
+    core.registry.policy.pins.gate = lambda: core.security.gate
+    core.registry.policy.pins.device_guard = DevicePinGuard(lambda: core.security.gate, revoke)
     helper = Helper()
     install(
         core,

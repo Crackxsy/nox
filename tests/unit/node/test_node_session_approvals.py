@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from nox.node.world_routes import (
+from nox.node.world_routes import NodeControl
+from nox.security.access import (
     REFUSE_LINKED,
     REFUSE_NO_PIN,
     REFUSE_REMOTE,
@@ -19,10 +20,8 @@ from nox.node.world_routes import (
     SUB_NO_PIN,
     SUB_PIN,
     SUB_SATURATED,
-    NodeControl,
-    Refusal,
-    escape_refusal,
-    session_refusal,
+    NeedsPin,
+    Refuse,
 )
 from tests.unit.node.support_sessions import (
     BROWSER,
@@ -40,9 +39,12 @@ from tests.unit.node.support_sessions import (
     request_ctx,
     request_envelope,
     send_from,
+    session_refusal,
     session_report,
     wired_core,
 )
+
+ASK_PIN = NeedsPin("x requires the security PIN", SUB_PIN)
 
 
 @pytest.mark.parametrize(
@@ -52,10 +54,10 @@ from tests.unit.node.support_sessions import (
         ("device", "device:" + BROWSER, "4711", False, PinGate(), REFUSE_LINKED),
         # 2. any other paired device and this machine: with the PIN
         ("device", "device:" + OTHER_PHONE, "4711", False, PinGate(), None),
-        ("device", "device:" + OTHER_PHONE, None, False, PinGate(), "x requires the security PIN"),
+        ("device", "device:" + OTHER_PHONE, None, False, PinGate(), ASK_PIN),
         ("dashboard", "dashboard:1", "4711", False, PinGate(), None),
         ("shell", "shell:1", "4711", False, PinGate(), None),
-        ("dashboard", "dashboard:1", None, False, PinGate(), "x requires the security PIN"),
+        ("dashboard", "dashboard:1", None, False, PinGate(), ASK_PIN),
         # 3. this machine from a remote session, or when that cannot be told: refused
         ("dashboard", "dashboard:1", "4711", True, PinGate(), REFUSE_REMOTE),
         ("dashboard", "dashboard:1", "4711", None, PinGate(), REFUSE_REMOTE),
@@ -67,7 +69,12 @@ from tests.unit.node.support_sessions import (
     ],
 )
 async def test_who_may_approve_or_change_while_nox_controls_a_node(
-    role: str, client: str, pin: str | None, remote: bool | None, gate: Any, expected: str | None
+    role: str,
+    client: str,
+    pin: str | None,
+    remote: bool | None,
+    gate: Any,
+    expected: Refuse | NeedsPin | None,
 ) -> None:
     refusal = await session_refusal(
         locked_control(),
@@ -100,15 +107,15 @@ async def test_a_slow_remote_check_never_blocks_and_counts_as_unknown(
 ) -> None:
     import time as time_module
 
-    from nox.node import world_routes
+    from nox.node import session_access
 
-    monkeypatch.setattr(world_routes, "REMOTE_CHECK_S", 0.05)
+    monkeypatch.setattr(session_access, "REMOTE_CHECK_S", 0.05)
 
     def slow() -> bool:
         time_module.sleep(0.3)
         return False
 
-    assert await world_routes.remote_now(slow) is None
+    assert await session_access.remote_now(slow) is None
 
 
 async def test_changes_go_through_the_same_rule_on_the_real_dispatch_path(
@@ -117,11 +124,9 @@ async def test_changes_go_through_the_same_rule_on_the_real_dispatch_path(
     """Not only "allow" - adding an MCP server, approving a plan, any change."""
     from pydantic import BaseModel
 
-    import nox.node.install as install_module
     from nox.ipc.dispatch import RequestContext
     from nox.ipc.protocol import Kind
 
-    monkeypatch.setattr(install_module, "console_is_remote", lambda: False)
     core, control, _guard, _audit = wired_core(PinGate())
     ran: list[tuple[str, dict[str, Any]]] = []
 
@@ -167,13 +172,11 @@ async def test_changes_go_through_the_same_rule_on_the_real_dispatch_path(
 async def test_the_reply_handler_follows_the_rule_and_deny_always_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import nox.node.install as install_module
     from nox.ipc.handlers.core import CoreHandlers, PermissionReply
     from nox.security.model import Decision
 
     remote: dict[str, bool | None] = {"value": False}
-    monkeypatch.setattr(install_module, "console_is_remote", lambda: remote["value"])
-    core, _control, guard, audit = wired_core(PinGate())
+    core, _control, guard, audit = wired_core(PinGate(), remote=lambda: remote["value"])
     handlers = CoreHandlers(core)  # type: ignore[arg-type]
     linked = request_ctx("device", "device:" + BROWSER)
     phone = request_ctx("device", "device:" + OTHER_PHONE)
@@ -201,7 +204,7 @@ async def test_the_real_wiring_registers_status_release_and_the_hello_reset() ->
     core, control, _guard, _audit = wired_core(PinGate())
     assert core.registry.get("node.computer.status") is not None
     assert core.registry.get("node.computer.release") is not None
-    assert core.registry.node_guard is not None and core.node_approval_guard is not None
+    assert core.registry.policy.condition_names() == ("node_session",)
     connected: list[str] = []
 
     class Registry:
@@ -278,7 +281,7 @@ async def test_saturation_binds_approvals_and_messages_only() -> None:
     gate = PinGate()
     shell = request_ctx("shell", "shell:cli")
 
-    async def refusal(action: str, pin: str | None = "4711") -> Refusal | None:
+    async def refusal(action: str, pin: str | None = "4711") -> Refuse | NeedsPin | None:
         return await session_refusal(
             control, shell, pin, action=action, gate=gate, device_guard=None, remote=lambda: False
         )
@@ -298,17 +301,16 @@ async def test_the_escapes_work_with_the_pin_even_remotely_and_from_the_linked_b
     control = _saturated()
     gate = PinGate()
 
-    linked = SimpleNamespace(role="device", client_id="device:" + BROWSER, peer="192.0.2.5")
+    linked = request_ctx("device", "device:" + BROWSER, "192.0.2.5")
+
+    async def escape(ctx: Any, pin: str | None, action: str, gate: Any, guard: Any) -> Any:
+        return await session_refusal(
+            control, ctx, pin, action=action, gate=gate, device_guard=guard, remote=lambda: False
+        )
+
     for action in ("node.unpair", "node.computer.release", "security.resume"):
-        assert (
-            await escape_refusal(
-                linked, "4711", action=action, gate=gate, device_guard=DeviceGuard(gate)
-            )
-            is None
-        )  # noqa: E501
-        refused = await escape_refusal(
-            linked, None, action=action, gate=gate, device_guard=DeviceGuard(gate)
-        )  # noqa: E501
+        assert await escape(linked, "4711", action, gate, DeviceGuard(gate)) is None
+        refused = await escape(linked, None, action, gate, DeviceGuard(gate))
         assert refused is not None and refused.code == SUB_PIN
     remote_shell = request_ctx("shell", "shell:ssh")
     assert (
@@ -323,13 +325,7 @@ async def test_the_escapes_work_with_the_pin_even_remotely_and_from_the_linked_b
         )
         is None
     )
-    no_pin = await escape_refusal(
-        remote_shell,
-        None,
-        action="security.resume",
-        gate=PinGate(required=False),
-        device_guard=None,
-    )
+    no_pin = await escape(remote_shell, None, "security.resume", PinGate(required=False), None)
     assert no_pin is not None and no_pin.code == SUB_NO_PIN
 
 
@@ -342,12 +338,10 @@ def test_removing_a_node_lifts_its_lock_binding_and_saturation_at_once() -> None
     assert LAPTOP not in control.node_reported and LAPTOP not in control.devices
 
 
-async def test_release_and_unpair_pass_the_dispatch_guard_while_saturated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_release_and_unpair_pass_the_dispatch_guard_while_saturated() -> None:
     from nox.ipc.protocol import Kind
 
-    core, control, ran = conversation_registry(monkeypatch)
+    core, control, ran = conversation_registry()
     control.saturated.add(LAPTOP)
 
     async def unpair(_ctx: Any, _p: Any) -> dict[str, Any]:
@@ -364,12 +358,10 @@ async def test_release_and_unpair_pass_the_dispatch_guard_while_saturated(
     assert refused.payload["details"]["sub_reason"] == SUB_PIN
 
 
-async def test_a_refused_request_carries_a_stable_sub_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_a_refused_request_carries_a_stable_sub_reason() -> None:
     from nox.ipc.protocol import Kind
 
-    core, _control, _ran = conversation_registry(monkeypatch)
+    core, _control, _ran = conversation_registry()
     linked = await send_from(core, "plans.approve", "device:" + BROWSER, {"pin": "4711"}, "")
     assert linked.kind is Kind.ERROR
     assert linked.payload["details"] == {"reason": "node_session", "sub_reason": SUB_LINKED}
@@ -378,11 +370,12 @@ async def test_a_refused_request_carries_a_stable_sub_reason(
     assert phone.payload["details"]["sub_reason"] == SUB_PIN
 
 
-async def test_the_input_lock_counts_unmuting_as_a_change(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_input_lock_counts_unmuting_as_a_change() -> None:
     """One rule for "calm": what the input lock lets through is what the node lock lets
     through - and unmuting the microphone is not calm."""
     from nox.ipc.dispatch import RequestContext, RequestRegistry
     from nox.ipc.protocol import Kind
+    from nox.security.access import InputLock
 
     registry = RequestRegistry()
 
@@ -390,7 +383,7 @@ async def test_the_input_lock_counts_unmuting_as_a_change(monkeypatch: pytest.Mo
         return {}
 
     registry.register("voice.mute", Mute, mute, roles=("dashboard",))
-    registry.input_lock = lambda: True
+    registry.policy.add_condition(InputLock(lambda: True))
     for muted, kind in ((True, Kind.RESPONSE), (False, Kind.ERROR)):
         envelope = request_envelope("voice.mute", "dashboard", LOCAL, {"muted": muted})
         ctx = RequestContext(client_id=LOCAL, role="dashboard", request=envelope)

@@ -55,7 +55,7 @@ def register_plan_ipc(
             guard = device_guard() if device_guard is not None else None
             if guard is None:
                 raise IpcError(ERR_PERMISSION, "a paired device cannot approve plans here")
-            await guard.require(ctx, payload.pin, "plans.approve")
+            await guard.require(ctx.client, payload.pin, "plans.approve")
         try:
             row = await book.start(payload.plan)
         except KeyError as exc:

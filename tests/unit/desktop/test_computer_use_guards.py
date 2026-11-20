@@ -17,6 +17,7 @@ from nox.desktop.computer_use import (
 )
 from nox.ipc.dispatch import RequestContext, RequestRegistry
 from nox.ipc.protocol import Envelope, Kind, Source
+from nox.security.access import InputLock
 
 NOX = (4242, "Nox - Berechtigung", "Qt6110QWindowIcon")
 EDITOR = (100, "Editor", "Notepad")
@@ -176,7 +177,7 @@ async def test_privileged_ui_requests_are_refused_while_nox_could_be_clicking() 
     for name in ("skills.activate", "skills.list", "security.kill", "mcp.servers.approve"):
         registry.register(name, Empty, handler, roles=("dashboard", "shell"))
     locked = [True]
-    registry.input_lock = lambda: locked[0]
+    registry.policy.add_condition(InputLock(lambda: locked[0]))
     for name in ("skills.activate", "mcp.servers.approve"):
         reply = await _dispatch(registry, name)
         assert reply.kind is Kind.ERROR and "stop hotkey" in reply.payload["message"], name
@@ -195,7 +196,7 @@ async def test_a_paired_device_is_locked_out_too_while_nox_could_be_clicking() -
 
     registry.register("plans.approve", Empty, handler, roles=("dashboard", "shell", "device"))
     registry.register("plans.list", Empty, handler, roles=("dashboard", "shell", "device"))
-    registry.input_lock = lambda: True
+    registry.policy.add_condition(InputLock(lambda: True))
     reply = await _dispatch(registry, "plans.approve", role="device")
     assert reply.kind is Kind.ERROR and "stop hotkey" in reply.payload["message"]
     assert (await _dispatch(registry, "plans.list", role="device")).kind is Kind.RESPONSE
@@ -211,10 +212,18 @@ async def test_an_allow_answer_does_not_count_while_nox_could_be_clicking() -> N
     engine = SimpleNamespace(reply=lambda _gid, decision, **_kw: replies.append(decision) or True)
     registry = RequestRegistry()
     locked = [True]
-    registry.input_lock = lambda: locked[0]
+    registry.policy.add_condition(InputLock(lambda: locked[0]))
     core = SimpleNamespace(registry=registry, security=SimpleNamespace(engine=engine))
     handlers = CoreHandlers(core)  # type: ignore[arg-type]
-    ctx = SimpleNamespace(role="dashboard", client_id="dashboard:1")
+    ctx = RequestContext(
+        client_id="dashboard:1",
+        role="dashboard",
+        request=Envelope(
+            kind=Kind.REQUEST,
+            name="security.permission.reply",
+            src=Source(role="dashboard", id="dashboard:1"),
+        ),
+    )
     allow = PermissionReply(grant_id="g", decision=Decision.ALLOW)
     deny = PermissionReply(grant_id="g", decision=Decision.DENY)
     assert (await handlers.permission_reply(ctx, allow))["ok"] is False  # type: ignore[arg-type]

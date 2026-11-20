@@ -9,7 +9,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
 from pydantic import BaseModel
 
 from nox.desktop.computer_use import DryRunSender
@@ -212,11 +211,11 @@ class DeviceGuard:
     def __init__(self, gate: PinGate) -> None:
         self.gate, self.wrong = gate, 0
 
-    async def require(self, ctx: Any, pin: str | None, action: str) -> None:
+    async def require(self, client: Any, pin: str | None, action: str) -> None:
         from nox.ipc.errors import IpcError
 
         try:
-            await self.gate.require(pin, action=action, by=ctx.client_id)
+            await self.gate.require(pin, action=action, by=client.client_id)
         except PinRequiredError as exc:
             self.wrong += 1
             raise IpcError("permission.denied", exc.reason) from exc
@@ -229,12 +228,37 @@ def locked_control() -> NodeControl:
     return control
 
 
-def request_ctx(role: str, client: str) -> Any:
-    """The part of a request context the approval rule reads: role and client id."""
-    return SimpleNamespace(role=role, client_id=client)
+def request_ctx(role: str, client: str, peer: str = "") -> Any:
+    """A request context of the given role and client, connecting from `peer`."""
+    from nox.ipc.dispatch import RequestContext
+
+    envelope = request_envelope("test.request", role, client, {})
+    return RequestContext(client_id=client, role=role, request=envelope, peer=peer)
 
 
-def wired_core(gate: PinGate) -> tuple[Any, NodeControl, DeviceGuard, list[str]]:
+async def session_refusal(
+    control: NodeControl,
+    ctx: Any,
+    pin: str | None,
+    *,
+    action: str,
+    gate: Any,
+    device_guard: Any,
+    remote: Callable[[], bool | None],
+) -> Any:
+    """What the node-session condition says about `action` from `ctx`: the refusal, or None."""
+    from nox.node.session_access import NodeSessionCondition
+    from nox.security.access import Allow, Call, PinChecks
+
+    pins = PinChecks(gate=lambda: gate)
+    pins.device_guard = device_guard
+    verdict = await NodeSessionCondition(control, pins, remote).check(ctx.client, Call(action, pin))
+    return None if isinstance(verdict, Allow) else verdict
+
+
+def wired_core(
+    gate: PinGate, remote: Callable[[], bool | None] = lambda: False
+) -> tuple[Any, NodeControl, DeviceGuard, list[str]]:
     """A core wired exactly like `nox.node.install` (`wire_guards`), with fakes behind it."""
     from nox.ipc.dispatch import RequestRegistry
     from nox.node.install import wire_guards
@@ -251,10 +275,11 @@ def wired_core(gate: PinGate) -> tuple[Any, NodeControl, DeviceGuard, list[str]]
             ),
             audit=SimpleNamespace(append=lambda **kw: audit.append(kw["decision"])),
         ),
-        device_pin_guard=device_guard,
     )
+    core.registry.policy.pins.gate = lambda: gate
+    core.registry.policy.pins.device_guard = device_guard
     control = locked_control()
-    wire_guards(core, control)
+    wire_guards(core, control, remote=remote)
     return core, control, device_guard, audit
 
 
@@ -280,12 +305,9 @@ class Text(BaseModel):
     text: str = "hallo"
 
 
-def conversation_registry(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, NodeControl, list[str]]:
+def conversation_registry() -> tuple[Any, NodeControl, list[str]]:
     """A wired core with the conversation requests registered; returns it with the session
     control and the list of handlers that really ran."""
-    import nox.node.install as install_module
-
-    monkeypatch.setattr(install_module, "console_is_remote", lambda: False)
     core, control, _guard, _audit = wired_core(PinGate())
     ran: list[str] = []
 

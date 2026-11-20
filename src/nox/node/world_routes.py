@@ -22,9 +22,10 @@ gate, budget and audit. What this module adds:
   `computer.session_start` on its connection are not read for "open" at all. The lock holds while
   that session is open (unreachable: until the node says otherwise or the longest session time
   has passed since it last said so) or while a start is on its way. While it holds,
-  `session_refusal` decides every "allow" and every request that changes something: the browser
-  on the controlled PC never, every other device and this machine only with the PIN (not from a
-  remote session). Saturation of a node's address binding binds approvals and messages only.
+  `NodeSessionCondition` (`nox.node.session_access`) decides every "allow" and every request
+  that changes something: the browser on the controlled PC never, every other device and this
+  machine only with the PIN (not from a remote session). Saturation of a node's address binding
+  binds approvals and messages only.
   Removing the node (`node.unpair`), lifting the lock by hand (`node.computer.release`) and
   resuming after a stop (`security.resume`) always work with the PIN; removing works from this
   machine's own shell and dashboard without one, and lifts that node's lock, address binding and
@@ -407,7 +408,7 @@ class NodeControl:
     def may_delegate(self, device_id: str) -> bool:
         """Whether a high-risk call may be left to `device_id`'s own dialog right now: always
         while no session runs; while one does, only on the node it runs on - any
-        other node's question is asked here, under `session_refusal` (the PIN)."""
+        other node's question is asked here, under `NodeSessionCondition` (the PIN)."""
         if not self.active():
             return True
         device = self.devices.get(device_id)
@@ -864,193 +865,3 @@ def world_specs(
             )
         )
     return specs
-
-
-# ---- approvals while Nox controls a node ---------------------------------------------------------
-
-
-class Refusal(str):
-    """Why a request is refused while Nox controls a node: an English sentence (a fallback for
-    logs, the audit and clients without the code) that carries a stable `code` - the dashboard
-    shows its own text for the code (`details.sub_reason`)."""
-
-    code: str
-
-    def __new__(cls, code: str, text: str) -> Refusal:
-        refusal = super().__new__(cls, text)
-        refusal.code = code
-        return refusal
-
-
-#: The stable codes (`details.sub_reason` of a refused request, `sub_reason` of a refused "allow").
-SUB_LINKED = "node_session_linked"
-SUB_REMOTE = "node_session_remote"
-SUB_NO_PIN = "node_session_no_pin"
-SUB_SATURATED = "node_session_saturated"
-SUB_ROLE = "node_session_role"
-SUB_PIN = "node_session_pin"
-
-REFUSE_LINKED = Refusal(
-    SUB_LINKED,
-    "Nox controls mouse and keyboard on the PC this runs on; nothing can be approved or changed "
-    "from here until that ends - deny or stop",
-)
-REFUSE_REMOTE = Refusal(
-    SUB_REMOTE,
-    "Nox controls mouse and keyboard on a paired PC and this computer is used remotely (or that "
-    "cannot be told); approve at the computer itself with the PIN, or deny or stop",
-)
-REFUSE_NO_PIN = Refusal(
-    SUB_NO_PIN,
-    "Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs "
-    "the security PIN, and none is set - deny, stop, or set a PIN first",
-)
-REFUSE_SATURATED = Refusal(
-    SUB_SATURATED,
-    "Nox controls a device with very many addresses; approvals and messages wait until the "
-    "session ends - deny and stop always work",
-)
-REFUSE_ROLE = Refusal(
-    SUB_ROLE, "Nox controls mouse and keyboard on a paired PC; this client cannot approve now"
-)
-#: How long the remote-session check may take (it may start `loginctl`); slower is "unknown".
-REMOTE_CHECK_S = 3.0
-#: An "allow" - what a saturated binding refuses, with talking to Nox (`conversation_request`).
-APPROVAL = "security.permission.reply"
-#: Always possible with the PIN, whatever the session: removing a node (which needs no PIN from
-#: this machine's own shell and dashboard), lifting a stuck lock, resuming after a stop. None of
-#: them can be bound by a saturated binding or a node's addresses - they are how the owner gets
-#: out of a lock a node holds.
-ESCAPES: frozenset[str] = frozenset({"node.unpair", "node.computer.release", "security.resume"})
-
-
-async def remote_now(remote: Callable[[], bool | None]) -> bool | None:
-    """`console_is_remote`, off the event loop and with a time limit (unknown when too slow)."""
-    try:
-        return await asyncio.wait_for(asyncio.to_thread(remote), REMOTE_CHECK_S)
-    except TimeoutError:
-        return None
-
-
-async def pin_refusal(ctx: Any, pin: str | None, *, gate: Any, action: str) -> Refusal | None:
-    """This machine's own shell or dashboard with the security PIN - from a remote session too
-    (an SSH login to a headless core), because only the owner knows the PIN."""
-    from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
-    from nox.security.gate import PinRequiredError  # noqa: PLC0415
-
-    if getattr(ctx, "role", "") not in LOCAL_UI_ROLES:
-        return REFUSE_ROLE
-    if gate is None or not gate.is_required():
-        return REFUSE_NO_PIN
-    try:
-        await gate.require(pin, action=action, by=getattr(ctx, "client_id", "") or ctx.role)
-    except PinRequiredError as exc:
-        return Refusal(SUB_PIN, exc.reason)
-    return None
-
-
-async def local_pin_refusal(
-    ctx: Any, pin: str | None, *, gate: Any, remote: Callable[[], bool | None], action: str
-) -> Refusal | None:
-    """The computer Nox runs on - a local UI, not used remotely - with the security PIN."""
-    from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
-
-    if getattr(ctx, "role", "") not in LOCAL_UI_ROLES:
-        return REFUSE_ROLE
-    if await remote_now(remote) is not False:
-        return REFUSE_REMOTE
-    return await pin_refusal(ctx, pin, gate=gate, action=action)
-
-
-async def _device_pin(
-    ctx: Any, pin: str | None, action: str, gate: Any, device_guard: Any
-) -> Refusal | None:
-    from nox.ipc.errors import IpcError  # noqa: PLC0415
-
-    if gate is None or not gate.is_required():
-        return REFUSE_NO_PIN
-    if device_guard is None:
-        return REFUSE_ROLE
-    try:
-        await device_guard.require(ctx, pin, action)
-    except IpcError as exc:
-        return Refusal(SUB_PIN, exc.message)
-    return None
-
-
-async def escape_refusal(
-    ctx: Any, pin: str | None, *, action: str, gate: Any, device_guard: Any
-) -> Refusal | None:
-    """`ESCAPES` while a lock holds: the PIN, from any client that may send the request at all;
-    `node.unpair` from this machine's own shell and dashboard without one (removing narrows)."""
-    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
-
-    role = getattr(ctx, "role", "")
-    if action == "node.unpair" and role in LOCAL_UI_ROLES:
-        return None
-    if role == DEVICE_ROLE:
-        return await _device_pin(ctx, pin, action, gate, device_guard)
-    return await pin_refusal(ctx, pin, gate=gate, action=action)
-
-
-async def session_refusal(
-    control: NodeControl,
-    ctx: Any,
-    pin: str | None,
-    *,
-    action: str,
-    gate: Any,
-    device_guard: Any,
-    remote: Callable[[], bool | None],
-) -> Refusal | None:
-    """Why an "allow" or a request that changes something is refused while Nox controls a node,
-    or None. Nox does not know the PIN, so the PIN is the guard:
-
-    1. the browser on a node Nox controls never approves or changes anything - linked to it in
-       the dashboard, or connecting from that node's address;
-    2. any other paired device, and this machine's dashboard or shell, only with the PIN (with
-       the PIN's usual lockout; a paired device is removed after repeated wrong PINs);
-    3. this machine's dashboard or shell not from a remote session - a remote desktop could be
-       opened from the very PC Nox controls; a core running as a service without a login
-       session counts as not remote (the PIN still applies);
-    4. no PIN set: refused. Reading, "deny" and Stopp are never asked here;
-    5. a saturated address binding (nobody can be told apart from the controlled PC) refuses
-       approvals and messages only;
-    6. `ESCAPES` - removing the node, lifting the lock, resuming - always work with the PIN
-       (`escape_refusal`), and removing from this machine's shell and dashboard without one.
-
-    Talking to Nox (`chat.send`, `voice.ptt`) needs no PIN - except from the browser on the PC
-    Nox controls, which could otherwise be the one typing; the remote-session check still holds
-    for this machine's own dashboard and shell."""
-    from nox.ipc.dispatch import conversation_request  # noqa: PLC0415
-    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
-    from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
-
-    if not control.active():
-        return None
-    if action in ESCAPES:
-        return await escape_refusal(ctx, pin, action=action, gate=gate, device_guard=device_guard)
-    talking = conversation_request(action)
-    binds = talking or action == APPROVAL
-    if binds and control.is_saturated():
-        # A node's binding is full: nobody is told apart from the controlled PC any more.
-        return REFUSE_SATURATED
-    role = getattr(ctx, "role", "")
-    if role == DEVICE_ROLE:
-        device = str(getattr(ctx, "client_id", "")).removeprefix(DEVICE_CLIENT_PREFIX)
-        peer = getattr(ctx, "peer", "")
-        if control.controls_browser(device) or control.from_controlled(peer, saturation=binds):
-            return REFUSE_LINKED
-        if talking:
-            return None
-        return await _device_pin(ctx, pin, action, gate, device_guard)
-    if role in LOCAL_UI_ROLES:
-        if talking:
-            # Only the PIN is waived for talking, never the remote check (and talking on the
-            # controlled machine itself counts as untrusted, `wire_guards`).
-            return REFUSE_REMOTE if (await remote_now(remote)) is not False else None
-        if control.controls_local(saturation=binds):
-            # The controlled PC is this machine: its own dashboard and shell are that PC.
-            return REFUSE_LINKED
-        return await local_pin_refusal(ctx, pin, gate=gate, remote=remote, action=action)
-    return REFUSE_ROLE
