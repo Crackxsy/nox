@@ -19,7 +19,7 @@ from nox.core.events import E, Event
 from nox.node.hub.listener import NodeListener, NodeSession, SessionFn
 from nox.node.hub.pairing import NodePairing
 from nox.node.hub.policy import group_of
-from nox.node.hub.ports import CoreServices
+from nox.node.hub.ports import HOOK_NAME, CoreServices
 from nox.node.hub.registry import NodeEntry, NodeRegistry
 from nox.node.hub.satellites import (
     NodeDirectory,
@@ -34,8 +34,6 @@ __all__ = ["OVERLAY_CHECK_TTL_S", "SatelliteWiring", "TtlCache", "install_satell
 
 #: How long the hub may reuse its answer to "may this node hold an overlay credential?".
 OVERLAY_CHECK_TTL_S = 2.0
-#: The name under which the node extension registers on the core's extension points.
-HOOK_NAME = "nodes"
 
 
 class TtlCache:

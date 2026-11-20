@@ -36,7 +36,7 @@ from nox.node.hub.install.runtime import NodeRuntime, keep, serve
 from nox.node.hub.install.satellites import install_satellites
 from nox.node.hub.listener import NodeListener
 from nox.node.hub.pairing import NodePairing
-from nox.node.hub.ports import CoreLike, CoreServices, NodeWiringError
+from nox.node.hub.ports import HOOK_NAME, CoreLike, CoreServices, NodeWiringError
 from nox.node.hub.registry import NodeRegistry
 from nox.node.hub.repo import NodeRepository
 from nox.node.wire.receipts import ReceiptSigner
@@ -79,11 +79,16 @@ def install(core: CoreLike) -> NodeRuntime:
 
     # The core signs every call with a side effect; nodes pin the public half at pairing.
     signer = ReceiptSigner(tls_dir)
+
+    def core_id() -> str:
+        # The registry is built before the listener whose id this is: "" until it exists.
+        return runtime.listener.core_id if runtime.listener is not None else ""
+
     registry = NodeRegistry(
         pairing,
         NodeRepository(services.db),
         signer=signer,
-        core_id=lambda: listener.core_id,  # the listener below: asked only once nodes connect
+        core_id=core_id,
     )
     runtime.registry = registry
 
@@ -120,8 +125,8 @@ def install(core: CoreLike) -> NodeRuntime:
         await listener.broadcast_resume()
 
     killswitch = services.security.killswitch
-    killswitch.register_stop_hook("nodes", stop_nodes)
-    killswitch.register_resume_hook("nodes", resume_nodes)
+    killswitch.register_stop_hook(HOOK_NAME, stop_nodes)
+    killswitch.register_resume_hook(HOOK_NAME, resume_nodes)
     control = install_node_routes(services, registry, listener)
     runtime.control = control
 

@@ -32,7 +32,7 @@ from nox.node.device.hands import (
 )
 from nox.node.hub.install.control import build_world
 from nox.node.hub.listener import NodeListener
-from nox.node.hub.ports import CoreServices
+from nox.node.hub.ports import HOOK_NAME, CoreServices
 from nox.node.hub.registry import NodeRegistry
 from nox.node.hub.router import CannotShow, core_only_spec, install_routes, routed_spec
 from nox.node.hub.satellites import obs_route, voice_say_spec
@@ -57,8 +57,6 @@ __all__ = [
     "write_target",
 ]
 
-#: The name under which the node extension registers on the core's extension points.
-HOOK_NAME = "nodes"
 #: Longest permission target a node call may have. Longer is refused, never cut: a target the
 #: person cannot read in full is a target that can hide its dangerous tail (padding).
 MAX_TARGET_CHARS = 1000

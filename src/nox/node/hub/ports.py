@@ -33,6 +33,7 @@ from nox.security.privacy import CaptureKind
 from nox.tools.registry import ToolRegistry
 
 __all__ = [
+    "HOOK_NAME",
     "CoreLike",
     "CoreServices",
     "HubPort",
@@ -46,6 +47,11 @@ __all__ = [
     "SecurityPort",
     "TokensPort",
 ]
+
+
+#: The name under which the node extension registers on the core's extension points
+#: (`Orchestrator.add_fact_source`, `ToolRegistry.add_availability_probe`, the kill switch, ...).
+HOOK_NAME = "nodes"
 
 
 class NodeWiringError(RuntimeError):
