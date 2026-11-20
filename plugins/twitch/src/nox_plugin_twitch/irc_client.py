@@ -171,6 +171,11 @@ class TwitchIrcClient:
             try:
                 await self._connect_once()
             except Exception as exc:  # noqa: BLE001 - the reconnect loop must never die
+                if self.joined:
+                    # The server accepted the login and the channel before this connection ended
+                    # (a `RECONNECT`, a silent line): the next attempt starts from the shortest
+                    # wait again. A refused login never gets here - the join comes after it.
+                    backoff.succeeded()
                 backoff.failed(exc)
             else:
                 backoff.succeeded()

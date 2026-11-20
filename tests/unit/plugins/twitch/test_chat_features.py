@@ -255,6 +255,27 @@ async def test_subs_gifts_and_raids_request_funken(
         await plugin.stop()
 
 
+async def test_a_mass_gift_is_counted_once_not_again_per_recipient(server: RawIrcServer) -> None:
+    client = FakeClient()
+    _api, plugin = await _plugin(server, client)
+    try:
+        await server.send_raw(
+            "@msg-id=submysterygift;login=viewer1;user-id=42;msg-param-mass-gift-count=3;"
+            "msg-param-community-gift-id=777 :tmi.twitch.tv USERNOTICE #testchannel"
+        )
+        for recipient in ("a", "b", "c"):
+            await server.send_raw(
+                f"@msg-id=subgift;login=viewer1;user-id=42;msg-param-recipient-user-name={recipient};"
+                "msg-param-community-gift-id=777 :tmi.twitch.tv USERNOTICE #testchannel"
+            )
+        await server.chat("viewer2", "danach", user_id="7")  # arrives after all of the above
+        await _wait_until(lambda: any(a["viewer_id"] == "7" for a in _awards(client)))
+        gifter = [a for a in _awards(client) if a["viewer_id"] == "42"]
+        assert [(a["reason"], a["units"]) for a in gifter] == [("sub", 3.0)]
+    finally:
+        await plugin.stop()
+
+
 async def test_other_notices_earn_nothing(server: RawIrcServer) -> None:
     client = FakeClient()
     _api, plugin = await _plugin(server, client)
@@ -329,6 +350,23 @@ async def test_reconnect_command_makes_the_client_reconnect(server: RawIrcServer
         await server.send_raw(":tmi.twitch.tv RECONNECT")
         await _wait_until(lambda: _joins(server) >= 2)
         await _wait_until(lambda: client.joined)
+    finally:
+        await client.stop()
+
+
+async def test_the_wait_starts_over_after_every_connection_that_had_joined(
+    server: RawIrcServer,
+) -> None:
+    client = _make_client(server)  # waits 0.05 s, at most 0.2 s
+    client.start()
+    try:
+        for expected_joins in (2, 3, 4):
+            await _wait_until(lambda: client.joined)
+            await server.send_raw(":tmi.twitch.tv RECONNECT")
+            await _wait_until(lambda n=expected_joins: _joins(server) >= n)
+        await _wait_until(lambda: client.joined)
+        # Each connection had joined before it ended, so the wait never grew past its start.
+        assert client.backoff_s == pytest.approx(0.05)
     finally:
         await client.stop()
 

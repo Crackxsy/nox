@@ -239,6 +239,10 @@ class TwitchPlugin:
         if kind in ("sub", "resub"):
             await self._award(user_id, "sub")
         elif kind == "subgift":
+            if tags.get("msg-param-community-gift-id"):
+                # One gift of several: Twitch announced it with a `submysterygift` (counted
+                # there) and then sends one `subgift` per recipient, tagged with the same id.
+                return
             await self._award(user_id, "sub")  # the gifter earns; the recipient is not the actor
         elif kind == "submysterygift":
             count = non_negative_int(tags.get("msg-param-mass-gift-count", 1))

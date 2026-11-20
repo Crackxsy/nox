@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from nox.core.config import FunkenConfig, StreamTwitchConfig
 from nox.core.events import E, Event
-from nox.stream.booking import FunkenBooking
+from nox.stream.booking import MAX_FUNKEN_PER_EVENT, FunkenBooking
 
 
 class _Funken:
@@ -84,6 +84,47 @@ async def test_worthless_requests_book_nothing(payload: dict[str, Any]) -> None:
     funken = _Funken()
     await _booking(funken)._on_awarded(_award(**payload))
     assert funken.earned == []
+
+
+@pytest.mark.parametrize(
+    "units",
+    [float("nan"), float("inf"), float("-inf"), -1.0, 0.0, "many", None, [5]],
+)
+@pytest.mark.parametrize("cap", [200.0, 0.0])  # 0 = no daily cap: the per-event limits still hold
+async def test_units_that_are_not_a_positive_finite_number_book_nothing(
+    units: Any, cap: float
+) -> None:
+    funken = _Funken()
+    await _booking(funken, cap=cap)._on_awarded(
+        _award(viewer_id="42", delta=0.0, reason="bit", units=units)
+    )
+    assert funken.earned == []
+
+
+@pytest.mark.parametrize("delta", [float("nan"), float("inf"), "lots", None])
+async def test_an_explicit_delta_that_is_not_finite_books_nothing(delta: Any) -> None:
+    funken = _Funken()
+    await _booking(funken, cap=0.0)._on_awarded(
+        _award(viewer_id="42", delta=delta, reason="rps_win")
+    )
+    assert funken.earned == []
+
+
+async def test_a_huge_count_is_cut_even_without_a_daily_cap() -> None:
+    funken = _Funken()
+    await _booking(funken, cap=0.0)._on_awarded(
+        _award(viewer_id="42", delta=0.0, reason="sub", units=1e12)
+    )
+    # 100,000 units at 50 Funken each is above the per-event ceiling, which wins.
+    assert funken.earned == [("42", "sub", MAX_FUNKEN_PER_EVENT)]
+
+
+async def test_a_huge_explicit_delta_is_cut_even_without_a_daily_cap() -> None:
+    funken = _Funken()
+    await _booking(funken, cap=0.0)._on_awarded(
+        _award(viewer_id="42", delta=1e30, reason="rps_win")
+    )
+    assert funken.earned == [("42", "rps_win", MAX_FUNKEN_PER_EVENT)]
 
 
 async def test_nothing_is_booked_outside_a_live_stream() -> None:

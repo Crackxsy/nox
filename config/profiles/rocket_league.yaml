@@ -1,5 +1,5 @@
-# Nox permission profile "rocket_league". No
-# egress of any kind while the game is in the foreground, so nothing competes with it;
+# Nox permission profile "rocket_league". No egress while the game is in the foreground, so
+# nothing competes with it - except the one Twitch chat connection named in `egress_allowlist`;
 # observation only (Security Model §10). `security:` here mirrors `stream.yaml`'s convention
 # (informational alongside `permissions:`, which is what `nox.security.profiles.load_profile`
 # actually parses).
@@ -8,7 +8,7 @@ security:
 
 permissions:
   id: rocket_league
-  description: Rocket League is in the foreground. Observation only, minimal proactivity, no egress.
+  description: Rocket League is in the foreground. Observation only, minimal proactivity, no egress except the Twitch chat.
   cloud_allowed: false
   # Exactly one exception to "no egress": the Twitch chat connection (a few bytes per message).
   # Streaming a game is the main reason to run the chat bot, and a bot that goes silent the moment

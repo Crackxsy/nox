@@ -210,7 +210,7 @@ pet:
 
 plugins:                         # plugin workers (plugins/<id>/manifest.yaml)
   enabled: [twitch, obs]         # plugin ids allowed to run; each still runs only under the
-                                 # profiles its manifest names - Twitch and OBS only while streaming
+                                 # profiles its manifest names - Twitch and OBS while streaming (and in rocket_league)
   dir: null                      # null = the plugins folder shipped with Nox
 
 stream:                          # the stream bot. Every rate below is a conservative starting
