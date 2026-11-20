@@ -8,7 +8,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from nox.ipc.dispatch import RequestContext, RequestRegistry
 from nox.ipc.handlers.core import ChatSend, CoreHandlers
+from nox.ipc.protocol import Envelope, Kind, Source
 from nox.security.model import Decision, PermissionRequest, Risk
 from nox.security.permissions import DefaultPermissionEngine
 
@@ -59,17 +61,33 @@ async def test_a_paired_devices_message_during_a_session_never_directs_a_lookup(
             )
 
     session = {"active": True}
+
+    class Session:
+        """A condition that taints a paired device's words while a session runs."""
+
+        name, precedence, wire_reason, reads_pin = "session", 20, "node_session", True
+
+        def chat_untrusted(self, client: Any) -> bool:
+            return bool(client.role == "device" and session["active"])
+
+    registry = RequestRegistry()
+    registry.policy.add_condition(Session())  # type: ignore[arg-type]
     core = SimpleNamespace(
         orchestrator=Orchestrator(),
+        registry=registry,
         security=SimpleNamespace(engine=engine),
-        node_chat_untrusted=lambda ctx: ctx.role == "device" and session["active"],
     )
     handlers = CoreHandlers(core)  # type: ignore[arg-type]
 
     async def stream(_payload: Any, _done: bool) -> None:
         return None
 
-    phone = SimpleNamespace(role="device", client_id=PHONE, stream=stream)
+    phone = RequestContext(
+        client_id=PHONE,
+        role="device",
+        request=Envelope(kind=Kind.REQUEST, name="chat.send", src=Source(role="device", id=PHONE)),
+        stream=stream,
+    )
     await handlers.chat_send(phone, ChatSend(text=MESSAGE))  # type: ignore[arg-type]
     conversation = f"chat:{PHONE}#1"
     # The URL and the search are word for word in the message - and still asked.

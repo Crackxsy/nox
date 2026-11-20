@@ -69,6 +69,7 @@ async def test_a_node_write_is_high_when_it_replaces_and_never_remembered() -> N
 def test_the_routes_never_remember_a_write_on_a_node() -> None:
     from types import SimpleNamespace
 
+    from nox.ipc.dispatch import RequestRegistry
     from nox.node.install import _install_routes
     from nox.tools.registry import ToolRegistry
 
@@ -77,6 +78,7 @@ def test_the_routes_never_remember_a_write_on_a_node() -> None:
     registry = FakeRegistry([laptop])
     registry.any_online_with = lambda _t: True  # type: ignore[attr-defined]
     core = SimpleNamespace(
+        registry=RequestRegistry(),
         tool_registry=ToolRegistry(),
         config=SimpleNamespace(devices=SimpleNamespace(defaults={})),
     )

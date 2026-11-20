@@ -377,7 +377,7 @@ def test_the_owner_releases_a_stuck_lock_and_a_live_session_locks_again() -> Non
     assert control.active()
 
 
-async def test_the_release_request_needs_the_pin_here(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_release_request_needs_the_pin_here() -> None:
     from nox.ipc.dispatch import RequestRegistry
     from nox.ipc.errors import IpcError
     from nox.node.install import ReleaseRequest, _register_control_requests
@@ -390,11 +390,9 @@ async def test_the_release_request_needs_the_pin_here(monkeypatch: pytest.Monkey
             audit=SimpleNamespace(append=lambda **kw: audit.append(kw["decision"]))
         )
     )
-    _register_control_requests(core, ipc, control, lambda: PinGate())
+    ipc.policy.pins.gate = lambda: PinGate()
+    _register_control_requests(core, ipc, control)
     handler = ipc._handlers["node.computer.release"].handler
-    import nox.node.install as install_module
-
-    monkeypatch.setattr(install_module, "console_is_remote", lambda: False)
     with pytest.raises(IpcError):
         await handler(request_ctx("dashboard", "dashboard:1"), ReleaseRequest(pin="0000"))
     done = await handler(request_ctx("dashboard", "dashboard:1"), ReleaseRequest(pin="4711"))
@@ -474,6 +472,7 @@ async def test_the_connection_hook_drops_a_node_whose_hello_claims_a_session() -
 
 
 def _world_control(sessions: dict[str, Any], tools: dict[str, dict[str, str]]) -> Any:
+    from nox.ipc.dispatch import RequestRegistry
     from nox.node.install import _world_specs
     from nox.tools.registry import ToolRegistry
 
@@ -493,6 +492,7 @@ def _world_control(sessions: dict[str, Any], tools: dict[str, dict[str, str]]) -
     registry = SimpleNamespace(known=lambda: entries, entries=lambda: entries)
     core = SimpleNamespace(
         config=SimpleNamespace(desktop=None, paths=None),
+        registry=RequestRegistry(),
         tool_registry=ToolRegistry(),
         security=None,
         bus=None,

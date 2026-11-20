@@ -514,7 +514,7 @@ const IPC_REASON_KEYS: Record<string, Key> = {
   pin_required: 'reason_pin_required',
   pin_wrong: 'reason_pin_wrong',
   removed: 'reason_removed',
-  // While Nox controls mouse and keyboard on a paired PC (`nox.node.world_routes.session_refusal`).
+  // While Nox controls mouse and keyboard on a paired PC (`nox.node.session_access.NodeSessionCondition`).
   node_session_linked: 'reason_node_session_linked',
   node_session_remote: 'reason_node_session_remote',
   node_session_no_pin: 'reason_node_session_no_pin',

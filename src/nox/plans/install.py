@@ -86,7 +86,7 @@ def install(core: CoreLike) -> PlansRuntime:
 
     register_plan_tools(core.tool_registry, book)
     register_plan_ipc(
-        core.registry, book, device_guard=lambda: getattr(core, "device_pin_guard", None)
+        core.registry, book, device_guard=lambda: core.registry.policy.pins.device_guard
     )
     queue.start()
 

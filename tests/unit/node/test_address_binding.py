@@ -257,15 +257,13 @@ def test_too_many_connection_addresses_saturate_as_well() -> None:
     assert "192.168.2.0" in control.node_observed[LAPTOP] and control.is_saturated()
 
 
-async def test_while_saturated_approvals_and_messages_wait_the_rest_follows_the_pin(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_while_saturated_approvals_and_messages_wait_the_rest_follows_the_pin() -> None:
     from nox.ipc.handlers.core import CoreHandlers, PermissionReply
     from nox.ipc.protocol import Kind
-    from nox.node.world_routes import REFUSE_SATURATED
+    from nox.security.access import REFUSE_SATURATED
     from nox.security.model import Decision
 
-    core, control, ran = conversation_registry(monkeypatch)
+    core, control, ran = conversation_registry()
     roles = ("dashboard", "shell", "device")
 
     async def kill(_ctx: Any, _p: Any) -> dict[str, Any]:
@@ -276,7 +274,7 @@ async def test_while_saturated_approvals_and_messages_wait_the_rest_follows_the_
     control.saturated.add(LAPTOP)
     for client in (LOCAL, PHONE):
         reply = await send_from(core, "chat.send", client, {}, "192.0.2.99")
-        assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_SATURATED
+        assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_SATURATED.reason
         assert reply.payload["details"]["sub_reason"] == "node_session_saturated"
         # Saturation binds approvals and messages only: the rest follows the PIN.
         approve = await send_from(core, "plans.approve", client, {"pin": "4711"}, "192.0.2.99")

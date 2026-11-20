@@ -47,7 +47,7 @@ this repository's tooling can verify.
 - [ ] **11. External security review scope delivered; findings triaged** — needs a reviewer
       identified first (open point, see `docs/EXTERNAL_SECURITY_REVIEW.md`). _Evidence: review
       report + triage log._
-- [ ] **12. Security Model §11 negative-test suite green** — run as part of release CI, not just ad
+- [ ] **12. Security negative-test suite green** (`docs/SECURITY.md` "Security test obligations") — run as part of release CI, not just ad
       hoc. _Evidence: CI run link._
 - [ ] **13. Secrets scan clean on tree and full history** —
       `python scripts/secrets_scan.py --check` exits 0. **Verified 2026-09-14: 0 open findings**

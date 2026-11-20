@@ -55,6 +55,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   --progress-json` and refuses before starting it in the privacy modes `offline`/`private`), an
   optional step in `nox onboard`, and `nox voice setup`. Until the files are there, Nox speaks with
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
+- **One access policy for the two locks** (`nox.security.access`; no change in behavior): who may
+  approve or change something while Nox's own hands are on the machine - synthetic input here
+  (computer use) or a session on a paired PC - used to be spread over the request dispatcher, the
+  permission-prompt handler, the node routes and the pairing helpers, with two single slots
+  (`input_lock`, `node_guard`) that a third lock would have overwritten. It is now one
+  `AccessPolicy` with a list of conditions (`InputLock`, `NodeSessionCondition`), a `ClientContext`
+  built once per connection, and verdicts (`Allow`, `Refuse`, `NeedsPin`) that each surface turns
+  into its own answer; the words of every refusal live next to it. Both locks use the same
+  definition of "calm": unmuting the microphone counts as a change under either (the local lock
+  had already been aligned with the node lock; it is now one function and pinned by a table of
+  every client in every state). Wire format, PIN rules and approval behavior are unchanged.
 
 ### Added
 - **Twitch chat, every interaction (Stream Bot):** `!befehle` (English `!commands`) lists all chat

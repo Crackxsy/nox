@@ -259,6 +259,34 @@ async def test_response_validated_against_registered_model(
     assert reply.payload["code"] == "internal"
 
 
+async def test_a_failing_access_condition_ends_the_request_as_internal_and_runs_nothing(
+    raw: RawFactory, tokens: TokenStore, registry: RequestRegistry
+) -> None:
+    """Fail closed: when the access rule itself breaks, the handler never runs and the caller
+    gets `internal` - not a silent "allowed"."""
+    ran: list[str] = []
+
+    async def change(_ctx: Any, _p: Any) -> dict[str, Any]:
+        ran.append("plans.approve")
+        return {}
+
+    class Broken:
+        name, precedence, wire_reason, reads_pin = "broken", 10, "", False
+
+        async def check(self, _client: Any, _call: Any) -> Any:
+            raise RuntimeError("the rule broke")
+
+        def chat_untrusted(self, _client: Any) -> bool:
+            return False
+
+    registry.register("plans.approve", EmptyPayload, change, roles=("dashboard",))
+    registry.policy.add_condition(Broken())  # type: ignore[arg-type]
+    c = await authed(raw, tokens, "dashboard", "dash:1")
+    reply = await c.request("plans.approve", {})
+    assert reply.kind is Kind.ERROR and reply.payload["code"] == "internal"
+    assert ran == []
+
+
 # ---- subscriptions and redaction ---------------------------------------------------------------
 
 
