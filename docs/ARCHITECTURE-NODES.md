@@ -83,7 +83,7 @@ The rules are a contract that CI checks (`lint-imports`, configured in `pyprojec
    What both need lives in `wire`.
 3. `device` does not import the core runtime directly (`app`, `core.orchestrator`,
    `core.toolloop`, `core.boot`, `core.statemgr`, `ipc.dispatch`, `ipc.handlers`, `remote`,
-   `data`, `memory`, `lan.app`, `lan.install`, `tools.executor`, `mcp.client`, `ai`, `noxos`).
+   `data`, `memory`, `lan.app`, `lan.install`, `desktop.install`, `tools.executor`, `mcp.client`, `ai`, `noxos`).
    The shared libraries a device does use (`security`, `sandbox`, `hands`, `desktop`, `voice`,
    `release`, `lan.tls`, `ipc.tokens`, the logger and the config models) are not part of it.
 

@@ -35,6 +35,12 @@ from nox.desktop.computer_use import (
     foreground_pid,
     stop_hotkey_vks,
 )
+from nox.desktop.process_probe import (
+    is_nox_process,
+    nox_pids,
+    process_name_of,
+    running_names_on_machine,
+)
 from nox.desktop.tools import register_desktop_tools
 from nox.desktop.win32 import RealWindowProbe
 from nox.security._events import publish_nowait
@@ -77,52 +83,6 @@ DRY_RUN_ENV = "NOX_COMPUTER_USE_DRY_RUN"
 #: Anti-cheat processes, services and drivers live in `nox.desktop.anticheat`.
 
 
-def _running_names() -> set[str]:
-    names: set[str] = set()
-    for process in psutil.process_iter(["name"]):
-        try:
-            names.add(str(process.info.get("name") or "").lower())
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return names
-
-
-def _process_name(pid: int) -> str:
-    try:
-        return psutil.Process(pid).name().lower()
-    except (psutil.Error, ValueError):
-        return ""
-
-
-def _nox_pids() -> set[int]:
-    """This core and every process it started (workers, the shell when it is a child)."""
-    me = psutil.Process(os.getpid())
-    pids = {me.pid}
-    try:
-        pids |= {child.pid for child in me.children(recursive=True)}
-        parent = me.parent()
-        if parent is not None and "nox" in " ".join(parent.cmdline()).lower():
-            pids.add(parent.pid)
-    except psutil.Error:
-        pass
-    return pids
-
-
-def _is_nox_process(pid: int) -> bool:
-    """Nox's own processes - the core and its children, or a Nox process started separately
-    (the shell from a shortcut): judged by the process, never by a window title alone."""
-    if pid in _nox_pids():
-        return True
-    try:
-        process = psutil.Process(pid)
-        name = process.name().lower()
-        if not name.startswith(("python", "pythonw", "nox")):
-            return False
-        return any("nox" in part.lower() for part in process.cmdline()[1:3])
-    except (psutil.Error, ValueError, OSError):
-        return False
-
-
 def _install_computer_use(core: CoreLike) -> ComputerUse:
     """The second input-synthesis module (`nox.desktop.computer_use`); off until enabled."""
     settings = core.config.desktop.computer_use
@@ -130,10 +90,10 @@ def _install_computer_use(core: CoreLike) -> ComputerUse:
     engine = core.security.engine
 
     def game_running() -> bool:
-        return bool(_game_pids(core)) or any(is_anti_cheat(n) for n in _running_names())
+        return bool(_game_pids(core)) or any(is_anti_cheat(n) for n in running_names_on_machine())
 
     def game_in_foreground() -> bool:
-        name = _process_name(foreground_pid())
+        name = process_name_of(foreground_pid())
         return name in watched or is_anti_cheat(name)
 
     def audit(action: str, target: str, result: str) -> None:
@@ -158,7 +118,7 @@ def _install_computer_use(core: CoreLike) -> ComputerUse:
         enabled=lambda: bool(core.config.desktop.computer_use.enabled),
         game_running=game_running,
         game_in_foreground=game_in_foreground,
-        nox_pids=_nox_pids,
+        nox_pids=nox_pids,
         sender=lambda: (
             DryRunSender()
             if os.environ.get(DRY_RUN_ENV)
@@ -166,7 +126,7 @@ def _install_computer_use(core: CoreLike) -> ComputerUse:
         ),
         audit=audit,
         notice=notice,
-        nox_process=_is_nox_process,
+        nox_process=is_nox_process,
         confirmation_pending=lambda: bool(engine.pending()),
     )
     registry = getattr(core, "registry", None)

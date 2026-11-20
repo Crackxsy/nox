@@ -197,9 +197,9 @@ def default_games() -> tuple[str, ...]:
 
 def _foreground_name() -> str:
     from nox.desktop.computer_use import foreground_pid  # noqa: PLC0415
-    from nox.desktop.install import _process_name  # noqa: PLC0415
+    from nox.desktop.process_probe import process_name_of  # noqa: PLC0415
 
-    return _process_name(foreground_pid())
+    return process_name_of(foreground_pid())
 
 
 def _running_services() -> set[str]:
@@ -242,10 +242,10 @@ class GameLock:
     def running(self) -> bool:
         """A watched game or anti-cheat software runs (True when that cannot be told)."""
         from nox.desktop.anticheat import is_anti_cheat  # noqa: PLC0415
-        from nox.desktop.install import _running_names  # noqa: PLC0415
+        from nox.desktop.process_probe import running_names_on_machine  # noqa: PLC0415
 
         try:
-            names = (self.running_names or _running_names)()
+            names = (self.running_names or running_names_on_machine)()
             if names & self._names() or any(is_anti_cheat(n) for n in names):
                 return True
             return bool(self.services())
@@ -725,7 +725,7 @@ def _desktop_and_computer(world: World) -> list[NodeTool]:
     from nox.core.config.hands import ComputerUseConfig  # noqa: PLC0415
     from nox.desktop.computer_tools import register_computer_tools  # noqa: PLC0415
     from nox.desktop.computer_use import ComputerUse, terminal_runs_nox  # noqa: PLC0415
-    from nox.desktop.install import _is_nox_process, _nox_pids  # noqa: PLC0415
+    from nox.desktop.process_probe import is_nox_process, nox_pids  # noqa: PLC0415
     from nox.desktop.tools import register_desktop_tools  # noqa: PLC0415
 
     settings = ComputerUseConfig()
@@ -739,14 +739,14 @@ def _desktop_and_computer(world: World) -> list[NodeTool]:
         enabled=world.computer_enabled,
         game_running=world.lock.running,
         game_in_foreground=world.lock.in_front,
-        nox_pids=_nox_pids,
+        nox_pids=nox_pids,
         sender=world.sender,
         audit=world.audit,
         notice=notice,
-        nox_process=_is_nox_process,
+        nox_process=is_nox_process,
         confirmation_pending=world.dialog_open,
         # A terminal running `nox-node` is Nox's own window here: never clicked.
-        terminal_nox=lambda pid: terminal_runs_nox(pid, is_nox=_is_nox_process),
+        terminal_nox=lambda pid: terminal_runs_nox(pid, is_nox=is_nox_process),
     )
     scratch = ToolRegistry()
     # The permission side is the core's (a grant for this device); here the session is the

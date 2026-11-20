@@ -219,6 +219,7 @@ forbidden_modules = [
     "nox.memory",
     "nox.lan.app",
     "nox.lan.install",
+    "nox.desktop.install",
     "nox.tools.executor",
     "nox.mcp.client",
     "nox.ai",
