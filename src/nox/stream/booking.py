@@ -103,7 +103,13 @@ class FunkenBooking:
         if not viewer_id:
             return
         reason = str(ev.payload.get("reason", ""))
-        delta = _finite(ev.payload.get("delta", 0.0))
+        raw_delta = ev.payload.get("delta", 0.0)
+        delta = _finite(raw_delta, default=math.nan)
+        if math.isnan(delta):
+            log.warning(
+                "stream.funken_award_ignored", reason="delta_not_finite", viewer_id=viewer_id
+            )
+            return
         if delta <= 0:
             # No explicit amount: the configured rate for this reason, times the units. Reasons
             # without a rate, and units that are not a positive finite number, are worth nothing

@@ -357,7 +357,7 @@ async def test_reconnect_command_makes_the_client_reconnect(server: RawIrcServer
 async def test_the_wait_starts_over_after_every_connection_that_had_joined(
     server: RawIrcServer,
 ) -> None:
-    client = _make_client(server)  # waits 0.05 s, at most 0.2 s
+    client = _make_client(server, min_stable_s=0.0)  # waits 0.05 s, at most 0.2 s
     client.start()
     try:
         for expected_joins in (2, 3, 4):
@@ -367,6 +367,22 @@ async def test_the_wait_starts_over_after_every_connection_that_had_joined(
         await _wait_until(lambda: client.joined)
         # Each connection had joined before it ended, so the wait never grew past its start.
         assert client.backoff_s == pytest.approx(0.05)
+    finally:
+        await client.stop()
+
+
+async def test_a_server_that_accepts_and_cuts_at_once_keeps_the_wait_growing(
+    server: RawIrcServer,
+) -> None:
+    # `min_stable_s` stays at its default: these joins last milliseconds, not 30 s.
+    client = _make_client(server)
+    client.start()
+    try:
+        for expected_joins in (2, 3, 4):
+            await _wait_until(lambda: client.joined)
+            await server.send_raw(":tmi.twitch.tv RECONNECT")
+            await _wait_until(lambda n=expected_joins: _joins(server) >= n)
+        await _wait_until(lambda: client.backoff_s > 0.05)
     finally:
         await client.stop()
 

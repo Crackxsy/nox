@@ -104,9 +104,8 @@ async def test_units_that_are_not_a_positive_finite_number_book_nothing(
 @pytest.mark.parametrize("delta", [float("nan"), float("inf"), "lots", None])
 async def test_an_explicit_delta_that_is_not_finite_books_nothing(delta: Any) -> None:
     funken = _Funken()
-    await _booking(funken, cap=0.0)._on_awarded(
-        _award(viewer_id="42", delta=delta, reason="rps_win")
-    )
+    # "sub" has a rate: a delta that is not a number must not fall back to rate x units.
+    await _booking(funken, cap=0.0)._on_awarded(_award(viewer_id="42", delta=delta, reason="sub"))
     assert funken.earned == []
 
 

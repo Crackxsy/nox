@@ -26,7 +26,7 @@ events:
 # `nox secrets set nox/twitch/oauth_token`. The channel to join is plain config, not a secret.
 secrets: [nox/twitch/oauth_token, nox/twitch/bot_username]
 network:
-  egress: ["irc.chat.twitch.tv:6697", "api.twitch.tv:443"]  # api.twitch.tv: reserved, unused today
+  egress: ["irc.chat.twitch.tv:6697"]  # the one chat connection; the plugin reaches nothing else
 resources:
   memory_mb: 128
   priority: normal

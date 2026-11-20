@@ -52,10 +52,17 @@ def test_twitch_manifest_egress_is_authorized_by_the_real_stream_profile() -> No
     manifest = load_manifest(TWITCH_PLUGIN_DIR)
     stream = load_profile(PROFILES_DIR / "stream.yaml")
     results = check_egress(manifest, stream)
-    assert {(r.entry, r.allowed) for r in results} == {
-        ("irc.chat.twitch.tv:6697", True),
-        ("api.twitch.tv:443", True),
-    }
+    assert {(r.entry, r.allowed) for r in results} == {("irc.chat.twitch.tv:6697", True)}
+
+
+def test_twitch_manifest_egress_is_authorized_by_the_real_rocket_league_profile() -> None:
+    """The chat keeps running in `rocket_league`: one refused entry would fail the whole plugin
+    at spawn time (`check_egress` raises), so every declared entry must be allowed there too."""
+    manifest = load_manifest(TWITCH_PLUGIN_DIR)
+    profile = load_profile(PROFILES_DIR / "rocket_league.yaml")
+    assert manifest.matches_profile("rocket_league") is True
+    results = check_egress(manifest, profile)
+    assert results and all(r.allowed for r in results)
 
 
 def test_the_moved_knobs_are_gone_from_the_shipped_manifest() -> None:

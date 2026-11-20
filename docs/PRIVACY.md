@@ -161,7 +161,7 @@ ever contacted when *you* start or renew that login — Nox never talks to it on
 blocked in privacy mode PRIVATE and OFFLINE like every other non-local host, and the "offline",
 "work" and "rocket_league" profiles do not include it at all. If you never connect Twitch, nothing
 is ever sent there. Everything else Nox may reach comes from the profile you are in (e.g. the
-Twitch chat server in the "stream" profile, the Telegram bot only once you enable the Mobile
+Twitch chat server in the "stream" and "rocket_league" profiles, the Telegram bot only once you enable the Mobile
 Companion), and each of those is listed in that profile's file.
 
 ## Your personality file

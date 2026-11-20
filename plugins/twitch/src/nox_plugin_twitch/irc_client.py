@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import re
 import ssl
+import time
 from collections.abc import Awaitable, Callable
 
 from nox.core.logging import get_logger
@@ -52,6 +53,10 @@ def _require_param(value: str, what: str) -> str:
 #: for longer than this has died without the server saying so (sleep, Wi-Fi drop, NAT timeout):
 #: `readline()` would wait for ever and the bot would look connected while hearing nothing.
 DEFAULT_IDLE_TIMEOUT_S = 360.0
+#: A connection that stayed joined at least this long counts as a good one: the reconnect wait
+#: starts over after it. One that is dropped sooner (a server that accepts and cuts) keeps
+#: backing off.
+DEFAULT_MIN_STABLE_S = 30.0
 
 #: `NOTICE` texts with which Twitch refuses the login (the wrong token format has its own text).
 _AUTH_FAILURES = ("authentication failed", "improperly formatted auth")
@@ -109,6 +114,8 @@ class TwitchIrcClient:
         authorize: Callable[[], None] | None = None,
         on_usernotice: UsernoticeHandler | None = None,
         idle_timeout_s: float = DEFAULT_IDLE_TIMEOUT_S,
+        min_stable_s: float = DEFAULT_MIN_STABLE_S,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.host = host
         self.port = port
@@ -121,6 +128,10 @@ class TwitchIrcClient:
         self._on_privmsg = on_privmsg
         self._on_usernotice = on_usernotice
         self._idle_timeout_s = idle_timeout_s
+        #: How long a joined connection must have lasted for the next wait to start over.
+        self._min_stable_s = min_stable_s
+        self._clock = clock
+        self._joined_at = 0.0
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
         #: Called synchronously before every connection attempt (: raw asyncio streams
@@ -171,10 +182,12 @@ class TwitchIrcClient:
             try:
                 await self._connect_once()
             except Exception as exc:  # noqa: BLE001 - the reconnect loop must never die
-                if self.joined:
-                    # The server accepted the login and the channel before this connection ended
-                    # (a `RECONNECT`, a silent line): the next attempt starts from the shortest
-                    # wait again. A refused login never gets here - the join comes after it.
+                if self.joined and self._clock() - self._joined_at >= self._min_stable_s:
+                    # The server accepted the login and the channel and the connection held for a
+                    # while before it ended (a `RECONNECT`, a silent line): the next attempt
+                    # starts from the shortest wait again. A refused login never gets here (the
+                    # join comes after it), and a server that accepts and drops at once keeps
+                    # backing off because the connection did not last `min_stable_s`.
                     backoff.succeeded()
                 backoff.failed(exc)
             else:
@@ -255,6 +268,7 @@ class TwitchIrcClient:
         if msg.command == "JOIN":
             if msg.nick and self._nick and msg.nick.lower() == self._nick.lower():
                 self.joined = True
+                self._joined_at = self._clock()
             return
         if msg.command == "PRIVMSG":
             channel = msg.params[0].lstrip("#") if msg.params else ""
