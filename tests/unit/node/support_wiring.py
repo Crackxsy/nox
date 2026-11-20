@@ -76,7 +76,12 @@ def recording_session(device_id: str, recorder: Recorder) -> Any:
     ready = asyncio.Event()
     ready.set()
     return SimpleNamespace(
-        device_id=device_id, client=RecordingClient(recorder), ready=ready, computer=None
+        device_id=device_id,
+        client=RecordingClient(recorder),
+        ready=ready,
+        computer=None,
+        peer_host="",
+        reported_addresses=[],
     )
 
 

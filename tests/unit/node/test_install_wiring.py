@@ -470,3 +470,125 @@ async def test_the_listener_serves_the_satellites_and_the_runtime_keeps_its_thre
             "nox-node-computer",
             "nox-node-listener",
         }
+
+
+# ---- fail closed: what the wiring decides when it cannot tell ---------------------------------
+
+
+class _PrivacyThatCannotSay:
+    """A privacy service whose panic flag cannot be read."""
+
+    @property
+    def panic(self) -> bool:
+        raise RuntimeError("cannot tell")
+
+    def allows_capture(self, _kind: str) -> bool:
+        return True
+
+
+class _PrivacyThatFails:
+    """A privacy service that cannot say whether a microphone may listen."""
+
+    panic = False
+
+    def allows_capture(self, _kind: str) -> bool:
+        raise RuntimeError("cannot tell")
+
+
+class _PrivacyThatAllows:
+    panic = False
+
+    def allows_capture(self, _kind: str) -> bool:
+        return True
+
+
+async def _voice_node(core: WiredCore, runtime: Any, tmp_path: Path, privacy: Any) -> Any:
+    """A connected voice node (the fake session leaves with `runtime.listener.sessions.clear()`),
+    with `privacy` in place of the core's."""
+    name = "Living room Pi"
+    node_id, _entry = await _paired_online(core, runtime, tmp_path, name, {"voice.say": "low"})
+    session = recording_session(node_id, Recorder())
+    runtime.listener.sessions[node_id] = session
+    core.security.privacy = privacy
+    return session
+
+
+def _last_gate(session: Any) -> dict[str, Any]:
+    gates = [params for method, params in session.client.sent if method == p.M_VOICE_GATE]
+    assert gates, "the node was never sent a gate"
+    return dict(gates[-1])
+
+
+async def test_a_panic_state_that_cannot_be_read_counts_as_a_panic(
+    tmp_path: Path, db: Database
+) -> None:
+    async with installed(tmp_path, db) as (core, runtime):
+        recorder = Recorder()
+        node_id, _entry = await _paired_online(core, runtime, tmp_path, "Stream PC", {})
+        runtime.registry.on_connected = recorder.spy("registry.on_connected")  # type: ignore[method-assign]
+        runtime.satellites.push_gates = recorder.spy("satellites.push_gates")  # type: ignore[method-assign]
+        runtime.satellites.panic = recorder.spy("satellites.panic")  # type: ignore[method-assign]
+        core.security.privacy = _PrivacyThatCannotSay()
+        await fire_connected(runtime.listener, recording_session(node_id, recorder))
+        assert recorder.calls[-1] == "satellites.panic"
+
+
+async def test_a_microphone_that_cannot_be_checked_stays_closed(
+    tmp_path: Path, db: Database
+) -> None:
+    async with installed(tmp_path, db) as (core, runtime):
+        session = await _voice_node(core, runtime, tmp_path, _PrivacyThatFails())
+        try:
+            await runtime.satellites.push_gates()
+            assert _last_gate(session) == {"capture": False, "reason": "unknown"}
+        finally:
+            runtime.listener.sessions.clear()
+
+
+async def test_an_engaged_kill_switch_closes_the_microphone_of_a_satellite(
+    tmp_path: Path, db: Database
+) -> None:
+    async with installed(tmp_path, db) as (core, runtime):
+        session = await _voice_node(core, runtime, tmp_path, _PrivacyThatAllows())
+        try:
+            await runtime.satellites.push_gates()
+            assert _last_gate(session) == {"capture": True, "reason": ""}  # nothing else stops it
+            await core.security.killswitch.engage("user", "test")
+            await runtime.satellites.push_gates()
+            assert _last_gate(session) == {"capture": False, "reason": "stopped"}
+        finally:
+            runtime.listener.sessions.clear()
+
+
+async def test_widening_obs_again_is_not_answered_from_the_two_second_cache(
+    tmp_path: Path, db: Database
+) -> None:
+    """The hub's answer to "may this node hold an overlay credential" is cached for a moment; a
+    change of the Devices page empties that cache for the node at once."""
+    async with installed(tmp_path, db) as (core, runtime):
+        node_id, _entry = await _paired_online(
+            core, runtime, tmp_path, "Stream PC", {"obs.request": "low"}
+        )
+        nodes = NodeRepository(db)
+        nodes.set_reported_groups(node_id, {"obs": True}, when=datetime.now(UTC))
+        credential = await runtime.satellites.handle(
+            recording_session(node_id, Recorder()),
+            p.M_OVERLAY_CREDENTIAL,
+            p.OverlayCredentialRequest(),
+        )
+        assert credential is not None and lan_accepts(core.tokens, credential["token"])  # cached
+        nodes.narrow(node_id, "obs", True, when=datetime.now(UTC))  # the database now says no ...
+        for hook in runtime.registry.on_narrowed:  # ... and the Devices page says "cleared"
+            await hook(node_id, "obs", False)
+        assert not lan_accepts(core.tokens, credential["token"])  # not the answer from before
+
+
+async def test_the_registry_knows_the_core_id_only_once_the_listener_exists(
+    tmp_path: Path, db: Database
+) -> None:
+    async with installed(tmp_path, db) as (_core, runtime):
+        registry, listener = runtime.registry, runtime.listener
+        assert registry._core_id() == listener.core_id  # noqa: SLF001
+        runtime.listener = None
+        assert registry._core_id() == ""  # noqa: SLF001
+        runtime.listener = listener
