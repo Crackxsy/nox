@@ -21,8 +21,8 @@ not left to a caller: refused when a watched game is running anywhere, and when 
 foreground. The check runs first, and again immediately before every event of an action, because a
 game can start between two clicks. `game.input.send` stays a hard prohibition no profile lifts, and
 the third-party automation libraries and the process-memory calls stay forbidden here as everywhere
-(Security Model §10 names them; the CI scan cannot tell a mention from a call, so they are not
-written out). The Win32 calls below are Nox's own.
+(the CI guard in docs/SECURITY.md names them; the CI scan cannot tell a mention from a call, so
+they are not written out). The Win32 calls below are Nox's own.
 
 **Not on itself.** Nox may not click into, move onto or send keys to its own windows - its
 confirmation dialogs are in them, and a model that can click "Allow" has no permissions left.

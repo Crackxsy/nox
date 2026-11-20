@@ -110,8 +110,8 @@ class _PromptAdapter:
 
 
 #: Read by the model above every retrieved block. The vault holds Nox's own project documentation
-#: next to the user's notes, and without this line a chunk of the PRD was being paraphrased back
-#: to the user as "what you told me".
+#: next to the user's notes, and without this line a chunk of the product requirements document
+#: was being paraphrased back to the user as "what you told me".
 _CONTEXT_NOTE = (
     "(lines tagged `note` are documents from the user's vault, which includes Nox's own project "
     "documentation - they are not things the user said to you; `remembered` lines were learned "

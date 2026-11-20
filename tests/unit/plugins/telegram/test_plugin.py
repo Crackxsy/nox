@@ -77,8 +77,8 @@ async def test_inbound_message_becomes_a_remote_message_event(
 async def test_plugin_never_answers_a_command_itself(
     fake_client: FakeClient, telegram: FakeTelegram, plugin
 ):
-    """Commands are the core's business (Security Model §2): the plugin forwards `/kill` like any
-    other text and sends nothing back on its own."""
+    """Commands are the core's business (docs/SECURITY.md, "Permission model"): the plugin forwards
+    `/kill` like any other text and sends nothing back on its own."""
     telegram.queue_message("/kill", sender_id="999")
 
     for update in await plugin.client.get_updates():

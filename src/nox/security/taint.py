@@ -1,6 +1,6 @@
 """Taint: which conversations hold content Nox did not author, and which tool results put it there.
 
-The Security Model's "tainted turn" rule, made precise:
+The "tainted turn" rule of docs/SECURITY.md, made precise:
 
 * **Every tool result taints, unless the tool is trusted-internal.** A shell command's stdout, a
   vault note, a memory hit, a calendar entry, a transcript, a window title, a screenshot, an MCP or

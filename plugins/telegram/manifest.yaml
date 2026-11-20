@@ -5,8 +5,8 @@
 # The plugin is a *transport*, nothing more. It forwards inbound messages as `remote.message`
 # events carrying the Telegram sender id, and it sends what the core hands it through one tool.
 # It makes no trust decision: whether a sender is paired, whether a kill switch may be engaged and
-# whether a privacy mode may change is decided in `src/nox/remote` (Security Model - security
-# below the AI layer, never in a plugin and never in a prompt).
+# whether a privacy mode may change is decided in `src/nox/remote` (security rules live below the AI layer,
+# never in a plugin and never in a prompt: docs/SECURITY.md).
 #
 # It listens to no events at all (`listens: []`): transcripts, AI responses and memory content are
 # structurally out of reach, so no transcript or secret can ever leave over this channel.

@@ -54,9 +54,9 @@ class _FakeKeyringBackend:
 
 def _twitch_plugin_dir(tmp_path: Path, *, port: int) -> Path:
     """Copy `plugins/twitch`, pointing its config at the fake IRC server (plain TCP, no TLS) and
-    widening the declared egress to that ephemeral loopback port (the shipped manifest declares
-    the fixed production host/port; ADR-013 still requires an explicit declaration, so the test
-    manifest gets its own - same pattern as `test_obs_plugin.py`'s `_obs_plugin_dir`)."""
+    widening the declared egress to that ephemeral loopback port (the shipped manifest declares the
+    fixed production host/port; the plugin egress rule still requires an explicit declaration, so
+    the test manifest gets its own - same pattern as `test_obs_plugin.py`'s `_obs_plugin_dir`)."""
     directory = tmp_path / "plugins"
     directory.mkdir()
     dest = directory / "twitch"
@@ -145,9 +145,9 @@ async def irc_server():
 def _profiles_dir_with_test_port(tmp_path: Path, *, port: int) -> Path:
     """Copy `config/profiles/` and widen the `stream` profile's `loopback_allowlist` to the fake
     server's ephemeral port - the core authorizes a plugin's declared `network.egress` against the
-    *active profile* at spawn time (ADR-013), and `config/profiles/stream.yaml` (owned by the
-    security/config area) is not touched: only this tmp_path copy is. The real, non-loopback
-    Twitch hosts already live in that file's `egress_allowlist`."""
+    *active profile* at spawn time (docs/PLUGIN_AUTHORING.md), and `config/profiles/stream.yaml`
+    (owned by the security/config area) is not touched: only this tmp_path copy is. The real,
+    non-loopback Twitch hosts already live in that file's `egress_allowlist`."""
     directory = tmp_path / "profiles"
     shutil.copytree(PROFILES_DIR, directory)
     stream_path = directory / "stream.yaml"

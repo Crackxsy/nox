@@ -1,5 +1,4 @@
-"""AsyncEventBus: the in-process pub/sub implementing `nox.core.events.EventBus` (Event Model,
-ADR-001).
+"""AsyncEventBus: the in-process pub/sub implementing `nox.core.events.EventBus` (the event model).
 
 Delivery model (deliberate choice): `publish` validates the payload, then awaits delivery to every
 matching handler *in the caller's task*, sequentially, in priority order. There is no dispatcher

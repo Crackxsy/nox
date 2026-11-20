@@ -8,10 +8,10 @@ The rules, in the order they are applied:
 (the only command an unpaired sender has) 3. any other command from an unpaired sender -> deny
 `not_paired` (and it is audited) 4. stale or reused `update_id` -> deny `replay` 5. sender over its
 command budget -> deny `rate_limited` 6. `/resume` -> deny `resume_not_remote`, always. Resume
-stays local-only (Security Model: `remote` is never an accepted resume origin), so it is a named,
+stays local-only (docs/SECURITY.md: `remote` is never an accepted resume origin), so it is a named,
 audited denial rather than an unknown verb. 7. `/privacy <mode>`: `private`/`offline` allow,
 anything else (including back to `full`) -> deny `privacy_upgrade_denied`. Conservative and pending
-approval: a phone may make Nox more private, never less (Spec, Security Model). 8. `/kill`,
+approval: a phone may make Nox more private, never less (docs/SECURITY.md). 8. `/kill`,
 `/status`, `/unpair`, plain chat -> allow for a paired sender.
 """
 

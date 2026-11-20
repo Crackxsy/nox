@@ -16,7 +16,7 @@ Three rules the contract makes explicit, because they are the point of the sandb
   it (AppContainer, bwrap), and read-only-but-reachable on the weaker Windows fallback, which
   `Sandbox.guarantees()` reports honestly.
 * **Fail closed.** If the backend cannot be set up (no `bwrap`), or its guarantees are weaker than
-  the Security Model asks and the user has not explicitly accepted that, `run` raises
+  docs/SECURITY.md asks and the user has not explicitly accepted that, `run` raises
   `SandboxUnavailable` rather than running the code less confined than promised.
 """
 
@@ -219,7 +219,7 @@ class Guarantees:
 
     @property
     def strong(self) -> bool:
-        """Every hard guarantee the Security Model asks of a Wave 1 sandbox holds."""
+        """Every hard guarantee docs/SECURITY.md asks of a sandbox holds."""
         return (
             self.confines_writes
             and self.hides_secrets

@@ -1,4 +1,4 @@
-# Nox permission profile "companion" (Security Model §3). Default everyday profile.
+# Nox permission profile "companion" (the permission-profile rules in docs/SECURITY.md). Default everyday profile.
 # `permissions` is read by nox.security.profiles; every other top-level key is a config overlay
 # merged as the third configuration layer. Hard prohibitions can never be lifted here.
 security:

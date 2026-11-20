@@ -4,7 +4,7 @@ gating and the IPC surface the dashboard's "Remote" page talks to.
 The transport lives in `plugins/telegram`; nothing in this package knows about the Bot API. The
 plugin turns inbound messages into `remote.message` events and exposes exactly one outbound tool
 (`telegram.send`) - every trust decision (is this sender paired? may it kill? may it switch privacy
-mode?) is made here, below the AI layer, per Security Model and the project standards' hard rules.
+mode?) is made here, below the AI layer, per docs/SECURITY.md and the project standards' hard rules.
 """
 
 from __future__ import annotations

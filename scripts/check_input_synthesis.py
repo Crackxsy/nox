@@ -1,4 +1,4 @@
-"""Security Model §10 guard: input synthesis stays in two game-guarded files, nowhere else.
+"""Observation-only guard (docs/SECURITY.md): input synthesis stays in two game-guarded files, nowhere else.
 
 Run by CI (`python scripts/check_input_synthesis.py`) and by the unit tests. It scans every
 Python file under `src/` and under all of `plugins/` (not only one plugin):
@@ -68,7 +68,7 @@ def problems(root: Path = ROOT) -> list[str]:
 def main() -> int:
     found = problems()
     for line in found:
-        print(f"::error::{line} (Security Model §10)")
+        print(f"::error::{line} (observation-only boundary, docs/SECURITY.md)")
     if not found:
         print("clean: input synthesis only in the two game-guarded files")
     return 1 if found else 0

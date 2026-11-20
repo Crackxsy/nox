@@ -107,7 +107,7 @@ def test_egress_entries_must_be_host_port() -> None:
     assert split_endpoint("api.twitch.tv:443") == ("api.twitch.tv", 443)
 
 
-# ---- core-side egress authorization (ADR-013) ----------------------------------------------------
+# ---- core-side egress authorization ----------------------------------------------------
 
 
 def test_egress_outside_the_active_profile_is_rejected() -> None:

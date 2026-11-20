@@ -1,4 +1,4 @@
-"""`Database`: thin sqlite3 wrapper (WAL, foreign keys, migrations, integrity check) per ADR-006.
+"""`Database`: thin sqlite3 wrapper (WAL, foreign keys, migrations, integrity check).
 
 Concurrency model (deliberate choice): one connection opened with `check_same_thread=False` and
 guarded by a `threading.RLock`. Every call is synchronous and short (single statements on a local
