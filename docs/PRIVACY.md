@@ -2,8 +2,8 @@
 
 This document describes, in plain language, what Nox captures, what it stores, what ever leaves
 your device, and how you control all of that. It is derived from and must stay consistent with the
-project's internal Security Model §1 (threat model) and §5 (privacy) — if this file and the Security
-Model ever disagree, the Security Model is authoritative and this file has a bug.
+project's threat model and privacy rules in [`SECURITY.md`](SECURITY.md) - if the two ever
+disagree, one of them has a bug; please open an issue.
 
 **No telemetry.** Nox sends nothing to its developer or anyone else automatically. The only
 outbound network connections Nox ever makes are to providers and integrations *you* configured
@@ -149,7 +149,7 @@ than a hint to the model.
 ## Questions this document does not answer on its own
 
 For *why* each of these controls exists and how it is technically enforced (not just described),
-see `SECURITY.md` and the full Security Model. If anything in this statement seems to conflict
+see `SECURITY.md`. If anything in this statement seems to conflict
 with Nox's actual behavior, please open a GitHub issue — see the support policy in `README.md`.
 
 ## The one host Nox is allowed to reach out of the box
