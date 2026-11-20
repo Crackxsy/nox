@@ -29,7 +29,7 @@ from nox.core.speech_policy import in_quiet_hours
 
 log = get_logger(__name__)
 
-#: Events that pass the quiet-hours gate anyway (PRD: URGENT still gets through).
+#: Events that pass the quiet-hours gate anyway (urgent events still get through).
 CRITICAL_EVENTS: frozenset[str] = frozenset({E.SECURITY_KILL_SWITCH, E.SECURITY_PANIC})
 
 Notify = Callable[[str], Awaitable[None]]

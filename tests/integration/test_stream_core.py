@@ -35,7 +35,7 @@ def _config(tmp_path: Path):
             "logs_dir": str(tmp_path / "logs"),
         },
         "ipc": {"port": base, "http_port": base + 1},
-        # `twitch*` tools are classified "cloud" (Security Model CLOUD_TOOL_PATTERNS) and are
+        # `twitch*` tools are classified "cloud" (`CLOUD_TOOL_PATTERNS`) and are
         # therefore denied outright in PRIVATE/OFFLINE privacy mode - stays at the BALANCED
         # default so the "stream" profile's `stream.twitch.chat: allow` rule can apply.
         "privacy": {"mode": "balanced"},
@@ -53,7 +53,7 @@ async def core(tmp_path: Path):
     core = NoxCore(cfg, voice=False, profiles_dir=PROFILES_DIR)
     await core.start()
     # Stream Bot tools (`twitch*`) are only in the "stream" profile's `integrations_allowed`
-    # (config/profiles/stream.yaml); the default "companion" profile denies them (FR-9.x). Mirror
+    # (config/profiles/stream.yaml); the default "companion" profile denies them. Mirror
     # what `mode.set` does for a real "stream" mode switch instead of going through IPC.
     core.security.engine.set_profile("stream", by="test")
     try:

@@ -3,7 +3,8 @@ position detection, a classical OpenCV backend, an always-empty `NoneDetector`, 
 inert `onnx` stub, and the `FrameSampler` budget guard that runs a backend at a low rate downstream
 of the plugin's existing capture pipeline and disables itself when its own measured processing cost
 crosses the configured budget. Observation only - no backend here ever synthesizes input or reads
-game memory (Security Model; the CI guard greps this package like the rest of `plugins/rl/**`).
+game memory (docs/SECURITY.md, observation-only boundary; the CI guard greps this package like
+the rest of `plugins/rl/**`).
 """
 
 from __future__ import annotations

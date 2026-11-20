@@ -1,9 +1,9 @@
 """`secrets.status` / `secrets.set` / `secrets.delete`: manage credentials without ever showing one.
 
-The Security Model's rule is that secrets live in the Windows Credential Manager and nowhere else -
-not in a config file, not in a log line, not in a prompt, and not in the audit log. This service is
-the dashboard's way to satisfy that rule instead of working around it, so it is deliberately
-narrow:
+The rule (docs/SECURITY.md, "Secrets handling") is that secrets live in the Windows Credential
+Manager and nowhere else - not in a config file, not in a log line, not in a prompt, and not in the
+audit log. This service is the dashboard's way to satisfy that rule instead of working around it, so
+it is deliberately narrow:
 
 * only the *known* names below may be written or deleted (a caller cannot create arbitrary keyring
   entries through the UI, and cannot touch `nox/security/pin`),

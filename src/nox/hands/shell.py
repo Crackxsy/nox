@@ -6,7 +6,7 @@ Two input shapes (both from the spec's "argv oder Befehlszeile"):
   of `;`, `&&`, `|`, `>` means anything; it classifies by its program and subcommand.
 * **command** - one line for the OS shell (`powershell -Command` / `bash -c`). The shell interprets
   operators, so a command line is **always complex**: it always asks and can never match a
-  remembered pattern (Security Model §1).
+  remembered pattern (docs/SECURITY.md, "Permission model").
 
 Classification decides the permission target, which is how the engine tells the cases apart
 without parsing commands itself:

@@ -1,6 +1,6 @@
 """Worker-side `PluginApi`: every boundary is the manifest.
 
-The scoped egress guard (ADR-013) is exercised through a fake transport, so no connection is ever
+The scoped egress guard is exercised through a fake transport, so no connection is ever
 opened; a denied endpoint raises before the transport is reached.
 """
 
@@ -153,7 +153,7 @@ async def test_state_get_goes_through_ipc() -> None:
     assert client.requests == [("state.get", {"path": "system.level"})]
 
 
-# ---- egress (ADR-013) ----------------------------------------------------------------------------
+# ---- egress ----------------------------------------------------------------------------
 
 
 class RecordingTransport(httpx.AsyncBaseTransport):

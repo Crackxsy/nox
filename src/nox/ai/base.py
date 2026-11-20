@@ -1,6 +1,6 @@
 """AI provider abstraction. No vendor is hard-wired; the router chooses by task role, latency,
 privacy
-mode, budget, load and availability (PRD). Claude Code's operational model is validated in.
+mode, budget, load and availability. Claude Code's operational model is validated in.
 """
 
 from __future__ import annotations

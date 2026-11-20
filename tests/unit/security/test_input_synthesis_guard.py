@@ -1,6 +1,6 @@
-"""The CI guard of Security Model §10, run locally (`scripts/check_input_synthesis.py`): input
-synthesis lives in exactly two game-guarded files, across src/ and every plugin, and the
-automation / process-memory APIs appear nowhere."""
+"""The CI observation-only guard (docs/SECURITY.md), run locally
+(`scripts/check_input_synthesis.py`): input synthesis lives in exactly two game-guarded files,
+across src/ and every plugin, and the automation / process-memory APIs appear nowhere."""
 
 from __future__ import annotations
 

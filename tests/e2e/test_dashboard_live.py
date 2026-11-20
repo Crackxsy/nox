@@ -238,7 +238,7 @@ def test_pet_capture_indicator_and_canvas(core: NoxCore, page: Page) -> None:
     page.wait_for_function("() => !location.hash.includes('token=')", timeout=5000)
     assert "token=" not in page.url
 
-    # The capture indicator (PRD NFR-8) is always mounted; no prop can hide it on the desktop pet.
+    # The capture indicator is always mounted; no prop can hide it on the desktop pet.
     indicator = page.get_by_role("status")
     expect(indicator).to_be_visible(timeout=15000)
 

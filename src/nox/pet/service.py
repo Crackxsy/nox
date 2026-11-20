@@ -1,5 +1,5 @@
 """PetService: maps system events to the pet's functional state, mood and expression and publishes
-`pet.state_changed` (Component Model, PRD FR-8.x). Pure event logic; rendering happens in ui/pet."""
+`pet.state_changed`. Pure event logic; rendering happens in ui/pet."""
 
 from __future__ import annotations
 

@@ -32,7 +32,7 @@ export interface PetPalette {
 export interface PetVariant {
   /** Stable id, used as the `?variant=` query value and the PNG/asset filename prefix. */
   id: string;
-  /** Display name for the PRD gallery note. */
+  /** Display name for the gallery note. */
   name: string;
   /** One-line character description (also used verbatim in the gallery note). */
   description: string;
