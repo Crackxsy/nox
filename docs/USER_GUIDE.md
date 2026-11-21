@@ -137,6 +137,16 @@ cannot be turned off or hidden by configuration — if something is being captur
   - **Funken for taking part:** viewers earn Funken by chatting, cheering bits, subscribing,
     gifting subs and raiding - only while the stream is live. Other chat bots (Nightbot,
     StreamElements, ...) are ignored by Nox; add more under `stream.twitch.ignored_chatters`.
+    Funken today: earnings only, spending comes later - `!funken` shows the balance and tier, and
+    there is nothing to spend Funken on yet.
+  - **When Nox answers in chat:** when his name or `@` login is used, when a viewer replies to one
+    of his messages, or with `!nox <question>`. He never answers another bot's command (`!lurk`,
+    `!discord`, ...), and his own commands get their one plain answer, not a second one from the
+    model. Whatever Nox writes passes a fixed filter first: no links or web addresses, no line
+    that starts like a chat command (`/`, `.`, `!`), no `@everyone`-style mass mentions and at
+    most two `@` mentions per line, no invisible characters; a line that breaks one of these is not
+    sent (the log says which rule, never the text). That includes the `!streamplan` text: leave
+    links out of it.
   - **Rocket League:** the chat keeps working while the game is in the foreground. It is the one
     network connection the `rocket_league` profile allows (`irc.chat.twitch.tv:6697`, plus the local
     OBS websocket); nothing else leaves the machine.
