@@ -1,5 +1,6 @@
 # Nox default configuration (layer 1 of 4: defaults -> user -> profile/preset -> runtime override).
-# No secrets in this file. Secrets live in the Windows Credential Manager (see nox.security.secrets).
+# No secrets in this file. Secrets live in the OS keyring (Windows Credential Manager) or, on a Linux
+# server without one, an owner-only file (see nox.security.secrets).
 # Every key here is validated against the JSON schema generated from nox.core.config.NoxConfig.
 
 schema_version: 1

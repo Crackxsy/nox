@@ -7,9 +7,10 @@ arranged.
 
 ## 1. What the reviewer gets, up front
 
-- Repository access (public repo once released, or a private invite before then).
-- A reproducible install: `README.md` "Development" section, or the signed installer once that
-  work is complete.
+- Repository access: the repository is public.
+- A reproducible install: `docs/GETTING_STARTED.md` (from source on Windows) or
+  `docs/RASPBERRY_PI.md` (the Linux server). There is no signed installer to review yet
+  (`docs/RELEASE_CHECKLIST.md`, items 21 and 22).
 - This document, plus:
   - `docs/SECURITY.md` (permission model, hard prohibitions, kill switch, Rocket League boundary,
     audit logging, secrets handling, plugin sandboxing, IPC auth — summarized for a reviewer).
@@ -38,11 +39,17 @@ The review should cover, at minimum:
    whether hard prohibitions and kill-switch/safe-mode really do short-circuit everything else,
    whether the default-by-risk table is actually enforced where tools are registered.
 2. **Rocket League observation-only boundary** (`docs/SECURITY.md` "Rocket League observation-only boundary") and its CI-enforced technical
-   barrier — the `guard-security-model` job in `.github/workflows/ci.yml` that greps `src/` for
-   `SendInput|pydirectinput|pyautogui|ReadProcessMemory|WriteProcessMemory`. Confirm the pattern
-   list is actually sufficient (are there other input-synthesis/memory APIs worth adding?) and
-   that the job is a required check, not merely present.
-3. **Secrets handling** (`docs/SECURITY.md` "Secrets handling") — keyring-only storage, naming convention
+   barrier — the `guard-security-model` job in `.github/workflows/ci.yml`, which runs
+   `scripts/check_input_synthesis.py` over `src/` and every plugin under `plugins/`. It allows the
+   input-synthesis entry points (`SendInput`, `keybd_event`, `mouse_event`, `SetCursorPos`) in exactly
+   two files, `src/nox/desktop/keyboard.py` and `src/nox/desktop/computer_use.py`, each of which must
+   keep its game guard; it forbids window messages that post keyboard or mouse-button input, the
+   third-party automation libraries (`pydirectinput`, `pyautogui`) and the process-memory calls
+   (`ReadProcessMemory`, `WriteProcessMemory`) everywhere. Confirm the pattern list is actually
+   sufficient (are there other input-synthesis or memory APIs worth adding?), that the two allowed
+   files really refuse to act while a game runs, and that the job is a required check on both
+   branches (it is listed among them today; verify it).
+3. **Secrets handling** (`docs/SECURITY.md` "Secrets handling") — OS-keyring storage (on a Linux server without a desktop keyring, an owner-only file), naming convention
    (`nox/<component>/<key>`), never logged/serialized/prompted. Cross-check against
    `scripts/secrets_scan.py`'s findings (§5 below) rather than trusting the policy alone.
 4. **Kill switch** (`docs/SECURITY.md` "Kill switch and panic mode") — every trigger path, the SAFE_MODE effect, the
@@ -79,12 +86,17 @@ python scripts/license_audit.py --check
 python scripts/secrets_scan.py --check
 ```
 
-As of 2026-09-14: the secrets scan is clean (0 open findings across the working tree and full git
-history — 13 findings, all reviewed test fixtures/placeholder literals, documented in
-`docs/scan_policy_secrets.yaml`). The license audit currently fails on one real finding
-(`piper-tts` declares `GPL-3.0-or-later`) — tell the reviewer this is a known, tracked license
-issue, not a secret-handling or security defect, so it doesn't consume review time as if it were
-one.
+As of 2026-11-21: both commands exit 0. The secrets scan finds 40 items across the working tree
+and the history, all reviewed test fixtures or placeholder literals documented in
+`docs/scan_policy_secrets.yaml`, and none open. The license audit passes against
+`docs/license_policy.yaml`, with one documented exception: `piper-tts` (the `voice` extra) declares
+`GPL-3.0-or-later`, so a build that bundles it is distributed under GPL-3.0 terms
+(`NOTICE`). Tell the reviewer this is a known licensing matter, not a secret-handling or security
+defect, so it does not consume review time as if it were one. Both commands also run in the CI job
+"Release hygiene".
+
+There is no dependency vulnerability scan in CI yet (`docs/RELEASE_CHECKLIST.md`, item 14); say so
+in the package rather than implying one.
 
 ## 6. What the reviewer should attack
 
@@ -112,9 +124,8 @@ an acceptable end state for a finding.
 
 ## 8. Open points
 
-- **Reviewer identity** — person, paid service, or community volunteer: not decided. This is the
-  release checklist's second-highest-priority open item after the license decision
-  (`docs/RELEASE_CHECKLIST.md` item 1).
+- **Reviewer identity** — person, paid service, or community volunteer: not decided. This is
+  item 11 of the release checklist (`docs/RELEASE_CHECKLIST.md`).
 - **Budget/timeline**, if a paid service is chosen — not decided.
 - If no reviewer can be arranged in a reasonable window, the "no known critical security
   vulnerabilities" release criterion still applies without external validation — that requires an

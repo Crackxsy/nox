@@ -87,6 +87,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `nox.node.hub.install` is now a package with typed ports for what it reads from the core, and
   installing it twice or on a core that lacks a part it needs fails with a clear message. No
   behavior, wire format, configuration or file format changes.
+- **The documentation says what is true** (no code change): the user guide and getting started
+  describe the installer as it is (per user under `%LOCALAPPDATA%`, no update channels, unsigned,
+  not yet on a clean machine) and add notes on SmartScreen and antivirus, the Windows microphone
+  switch and what Nox does without a model; the README has a platform table, current status rows
+  and a languages section (the docs are English, three guides also exist in German, English is
+  authoritative); the privacy statement says the database and vault are not encrypted at rest,
+  where data lives and how to delete it; the Rocket League text no longer claims game-audio
+  capture; the v1.0 release checklist and the review package carry status and evidence for every
+  item and list what is still missing (signing key, Authenticode, SBOM, dependency scan); the
+  install commands that point at release downloads say that no release carries them yet; secrets
+  are described as the OS keyring or, on a Linux server without one, an owner-only file.
 
 ### Added
 - **Twitch chat, every interaction (Stream Bot):** `!befehle` (English `!commands`) lists all chat
