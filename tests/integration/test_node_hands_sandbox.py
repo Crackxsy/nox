@@ -19,7 +19,9 @@ from pathlib import Path
 import psutil
 import pytest
 
-from nox.node.device.hands import NodeHands, ShellArgs, hand_tools
+from nox.node.device.hands.args import ShellArgs
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.home import HOME_ENV, NodeHome
 from nox.sandbox import Sandbox, SandboxUnavailable
 from nox.sandbox.netguard import NetGuard

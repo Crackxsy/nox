@@ -13,7 +13,8 @@ from typing import Any
 
 from nox.lan.tls import TlsMaterial
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, hand_tools
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.hub.listener import NodeListener
 from nox.node.hub.pairing import NodePairing
 from nox.node.wire.manifest import GROUPS, NodeManifest

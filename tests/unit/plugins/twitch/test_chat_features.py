@@ -116,6 +116,66 @@ async def test_every_listed_command_is_handled(server: RawIrcServer) -> None:
         await plugin.stop()
 
 
+# -- who is addressed ---------------------------------------------------------------------------
+
+
+def _chat_payloads(client: FakeClient) -> list[dict]:
+    return [p for name, p in client.events if name == "twitch.chat_message"]
+
+
+@pytest.mark.parametrize(
+    ("text", "addressed"),
+    [
+        ("!rps rock", False),
+        ("!lurk", False),
+        ("!nox wie gehts", True),
+        ("hey nox", True),
+        ("@noxbot hallo", True),
+    ],
+)
+async def test_chat_message_events_say_who_was_addressed(
+    server: RawIrcServer, text: str, addressed: bool
+) -> None:
+    client = FakeClient()
+    _api, plugin = await _plugin(server, client)
+    try:
+        await server.chat("viewer1", text)
+        await _wait_until(lambda: len(_chat_payloads(client)) == 1)
+        assert _chat_payloads(client)[0]["addressed_to_nox"] is addressed
+    finally:
+        await plugin.stop()
+
+
+async def test_a_reply_to_the_bots_message_is_addressed(server: RawIrcServer) -> None:
+    client = FakeClient()  # the bot's login is "noxbot"
+    _api, plugin = await _plugin(server, client)
+    try:
+        await server.chat(
+            "viewer1",
+            "@NoxBot genau das",
+            tags="reply-parent-user-login=NoxBot;reply-parent-msg-id=x",
+        )
+        await server.chat(
+            "viewer2", "@someone genau das", user_id="456", tags="reply-parent-user-login=someone"
+        )
+        await _wait_until(lambda: len(_chat_payloads(client)) == 2)
+        first, second = _chat_payloads(client)
+        assert (first["addressed_to_nox"], second["addressed_to_nox"]) == (True, False)
+    finally:
+        await plugin.stop()
+
+
+async def test_a_reply_that_is_only_a_command_is_not_addressed(server: RawIrcServer) -> None:
+    client = FakeClient()
+    _api, plugin = await _plugin(server, client)
+    try:
+        await server.chat("viewer1", "!lurk", tags="reply-parent-user-login=noxbot")
+        await _wait_until(lambda: len(_chat_payloads(client)) == 1)
+        assert _chat_payloads(client)[0]["addressed_to_nox"] is False
+    finally:
+        await plugin.stop()
+
+
 # -- !streamplan --------------------------------------------------------------------------------
 
 

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from nox.node.device.world import world_tools
+from nox.node.device.world.catalogue import world_tools
 from nox.node.hub.world_routes import MAX_SESSION_MINUTES, NodeActions, NodeControl, NodeLookups
 from nox.node.wire.protocol import NodeHello, Ping, SessionReport
 from nox.security.model import PermissionRequest, Risk

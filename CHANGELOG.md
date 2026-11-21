@@ -32,6 +32,12 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   twice (provisioned with portal and claim; fresh with the window expiring).
 
 ### Changed
+- **The device side of the node code is cut along its responsibilities** (`nox.node.device`): the seven
+  modules above the size rule in `docs/CODE_STANDARDS.md` (`safe_fs`, `agent`, `cli`, `voice`,
+  `world`, `hands`, `update`) are now packages of modules of 100 to 570 lines, each saying what it
+  owns (`docs/ARCHITECTURE-NODES.md`, module map). Code moved unchanged: behaviour, the wire
+  protocol and the files on a device are the same, and the two imports the layer contract still
+  ignores now name the module that holds them (`device.hands.args`, `device.voice.engines`).
 - **The dashboard is rebuilt around four areas**: Heute, Nox (Gespräch, Ansichten,
   Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one form). Every page
   has the same header - what Nox is doing and its Modus, "n warten auf dich", the privacy level and
@@ -443,6 +449,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the settings page and the voice-device list. The table is corrected, a row now also counts as
   stale when a tool with a longer name (`desktop.audio.volume`) exists, and a test checks the table
   against the tools of a real core.
+- **Twitch chat: Nox answers only when he is spoken to, and what he writes is filtered.** Every
+  `!word` used to count as "addressed to Nox", so another bot's `!lurk` or `!discord` got a model
+  answer, and Nox's own `!rps` or `!funken` got one on top of the real answer. A command now
+  belongs to its owner: only `!nox <question>` (or the bot's login), his name or `@` login as a
+  whole word ("equinox" no longer counts), or a reply to one of his messages is answered by the
+  model. Every line Nox sends - model answer, command reply, `!funken`, the AI-voice notice - now
+  passes an output filter before the moderation gate: invisible characters are removed; links
+  (schemes, `www.`, anything shaped like a domain, spaced or spelled-out dots, IP addresses,
+  punycode, full-width and look-alike letters) and lines that start with `/`, `.`, `!` or a
+  backslash are not sent at all; `@everyone`-style mass mentions lose their `@`, at most two
+  `@` mentions stay, and a line is cut to 450 characters. The log names the rule and the length of a
+  refused line, never its text. The `stream` profile's `twitch` ban and timeout rules are marked as
+  reserved (no plugin has such a tool), and the Funken docs say plainly that Funken can be earned
+  today and spending comes later.
 - **Nodes, external review of part 4:** the node's gate never resolves or opens anything the
   core sent (a UNC path in a notice could make Windows reach out over SMB) and checks the receipt
   before any argument; path aliases (`..`, `~`, 8.3, UNC, device paths) are refused on the text,

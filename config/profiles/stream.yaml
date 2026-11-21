@@ -63,15 +63,21 @@ permissions:
       action: "upload*"
       decision: deny
       reason: "screenshots never leave the machine while streaming"
+    # RESERVED, not active: no plugin offers a ban or a timeout. The Twitch plugin declares only
+    # `twitch.chat.send` and `twitch.chat.status.read` (see its manifest), and nothing in Nox can
+    # moderate a channel. These two rules exist only so that a moderation tool added in the future
+    # is asked about every single time instead of falling to a default; adding such a tool is a
+    # separate, reviewed change. Do not read them as a capability.
     - id: stream.twitch.ban
       tool: "twitch*"
       action: "moderation.ban"
       decision: confirm
-      reason: "a ban is never automatic"
+      reason: "reserved, no such tool exists: a ban would never be automatic"
     - id: stream.twitch.timeout
       tool: "twitch*"
       action: "moderation.timeout"
       decision: confirm
+      reason: "reserved, no such tool exists: a timeout would never be automatic"
     - id: stream.twitch.chat
       tool: "twitch*"
       action: "chat.send"

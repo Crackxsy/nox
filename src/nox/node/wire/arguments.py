@@ -3,7 +3,7 @@
 The core validates a tool call against these before it signs a receipt and the node validates it
 again before a handler runs (`extra="forbid"`: nothing the other side sends beyond the fields
 is accepted). One definition on both sides means the two can never disagree about a field.
-The file tools' arguments stay with their refusal rules in `nox.node.device.hands`.
+The file tools' arguments stay with their refusal rules in `nox.node.device.hands.args`.
 """
 
 from __future__ import annotations
