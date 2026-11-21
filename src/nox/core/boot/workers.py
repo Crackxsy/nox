@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from nox.core.events import HealthStatus
 from nox.core.jobobject import JobObject
 from nox.core.logging import get_logger
 from nox.ipc.errors import IpcError
@@ -43,6 +44,8 @@ class WorkerProcess:
     process: subprocess.Popen[bytes] | None
     client_id: str | None = None
     registered: asyncio.Event = field(default_factory=asyncio.Event)
+    #: What the worker last said about its microphone (voice worker only): `(status, reason)`.
+    capture: tuple[HealthStatus, str] | None = None
 
 
 class WorkerSpeaker:
@@ -112,6 +115,21 @@ class WorkerSupervisor:
         worker = self._workers.get(service)
         return worker.client_id if worker and worker.registered.is_set() else None
 
+    def note_capture(self, worker: WorkerProcess, status: str, reason: str) -> bool:
+        """Record the microphone state from a heartbeat; True when it differs from the last one.
+
+        An empty or unknown status clears it: the worker is not reporting one (it has no
+        microphone, or has not started capturing), which is not a failure.
+        """
+        try:
+            report = (HealthStatus(status), reason) if status else None
+        except ValueError:
+            report = None
+        if report == worker.capture:
+            return False
+        worker.capture = report
+        return True
+
     def spawn(self, service: str) -> None:
         if self._tokens is None:
             log.error("worker.spawn_before_ipc", service=service)
@@ -151,6 +169,7 @@ class WorkerSupervisor:
             if worker.client_id == client_id:
                 worker.client_id = None
                 worker.registered.clear()
+                worker.capture = None
                 log.warning("worker.disconnected", service=worker.service, client=client_id)
                 return worker
         return None

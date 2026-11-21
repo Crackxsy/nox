@@ -31,16 +31,18 @@ async def heartbeat_loop(
     status: Callable[[], str],
     interval_s: float,
     load: Callable[[], float | None] = lambda: None,
+    extra: Callable[[], dict[str, Any]] = dict,
     log_event: str = "worker.heartbeat_failed",
     **log_context: str,
 ) -> None:
     """Send `worker.heartbeat` every `interval_s` seconds until `stop` is set.
 
     `load` returning None omits the field instead of inventing a number: a worker that cannot
-    measure its own load says nothing rather than reporting a perfectly idle process.
+    measure its own load says nothing rather than reporting a perfectly idle process. `extra` adds
+    optional fields the core understands (the voice worker reports its microphone state this way).
     """
     while not stop.is_set():
-        payload: dict[str, Any] = {"status": status()}
+        payload: dict[str, Any] = {**extra(), "status": status()}
         current_load = load()
         if current_load is not None:
             payload["load"] = float(current_load)

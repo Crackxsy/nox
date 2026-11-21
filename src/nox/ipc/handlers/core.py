@@ -153,6 +153,10 @@ class WorkerReady(BaseModel):
 class WorkerHeartbeat(BaseModel):
     load: float = 0.0
     status: str = "running"
+    #: The voice worker's microphone state (`available`, `limited` or `unavailable`) and why. Empty
+    #: from every worker that has no microphone and from a voice worker that is not capturing yet.
+    capture: str = ""
+    capture_reason: str = ""
 
 
 class FunkenTopRequest(BaseModel):
@@ -201,6 +205,7 @@ class CoreHandlers:
         )
         reg("voice.ptt", VoicePtt, self.voice_ptt, roles=("shell",))
         reg("voice.mute", VoiceMute, self.voice_mute, roles=ui)
+        reg("voice.latency", EmptyPayload, self.voice_latency, roles=LOCAL_UI_ROLES)
         reg("chat.send", ChatSend, self.chat_send, roles=ui)
         reg("ai.providers", EmptyPayload, self.ai_providers, roles=ui)
         reg("pet.interact", PetInteract, self.pet_interact, roles=("pet", "shell"))
@@ -392,6 +397,18 @@ class CoreHandlers:
             log.warning("voice.mute_not_delivered", code=exc.code, muted=p.muted)
         return {"ok": True, "muted": p.muted}
 
+    async def voice_latency(self, _ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
+        """How long recent voice turns took, from the end of the utterance to the first sound.
+
+        P50/P95 over the last turns, kept by the voice worker (nothing leaves the machine).
+        """
+        core = self._core
+        assert core.hub is not None
+        client_id = core.workers.client_id("voice")
+        if client_id is None:
+            return {"ok": False, "reason": "voice worker unavailable"}
+        return await core.hub.request(client_id, "voice.latency", {}, timeout=2.0)
+
     async def chat_send(self, ctx: RequestContext, p: ChatSend) -> dict[str, Any]:
         assert self._core.orchestrator is not None
 
@@ -475,7 +492,14 @@ class CoreHandlers:
         core.spawn_task(core.health.run_once())
         return {"ok": True}
 
-    async def worker_heartbeat(self, _ctx: RequestContext, _p: WorkerHeartbeat) -> dict[str, Any]:
+    async def worker_heartbeat(self, ctx: RequestContext, p: WorkerHeartbeat) -> dict[str, Any]:
+        core = self._core
+        worker = next((w for w in core.workers.all() if w.client_id == ctx.client_id), None)
+        if worker is not None and core.workers.note_capture(worker, p.capture, p.capture_reason):
+            # The microphone started or stopped working: the voice health tile says so now, not at
+            # the next scheduled probe.
+            assert core.health is not None
+            core.spawn_task(core.health.run_once())
         return {"ok": True}
 
     # ---- plugins ---------------------------------------------------------------------------------
