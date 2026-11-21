@@ -190,8 +190,10 @@ Status words: **done** (checked), **partly** (some of the evidence exists, the r
       reviewer, only `v*` tags allowed and administrator bypass off; it holds the secret
       `NOX_RELEASE_SIGNING_KEY` (the CI key only). Both public keys are listed in
       `TRUSTED_KEYS` (`src/nox/release/trusted_keys.py`) and `TRUSTED_RELEASE_KEYS` (`scripts/install-linux.sh`,
-      `scripts/install-macos.sh`). What is missing is a first signed release. Until then the
-      installations that exist trust no key and install by checksum. Keep the encrypted backups
+      `scripts/install-macos.sh`). What is missing is a first signed release. Until then a fresh
+      install of a release tag fails closed on Linux (no signed manifest) and the macOS installer
+      installs nothing from the network; installations that already run an older version still
+      update by checksum, and `NOX_SOURCE` installs are unaffected. Keep the encrypted backups
       of both private keys in two places (see
       [`RELEASES.md`](RELEASES.md#setting-up-the-release-key-owner)).
       _Evidence needed: a release with `release-manifest.json` and its signature, and

@@ -489,12 +489,20 @@ jobs:
           refused "$d/rel-v0.7.0" v0.7.0
           rm "$d/rel-v0.6.0/release-manifest.json.sig"
           refused "$d/rel-v0.6.0" v0.6.0
-          # Without a trusted key: "not configured" (exit 3), never "verified".
+          # With the repository's own trusted keys, a manifest signed by a throwaway key is refused
+          # (exit 1, never "verified" and never "not configured", exit 3).
           status=0
           sudo env NOX_ACTION=verify-release NOX_RELEASE_DIR="$d/rel-v0.7.0" NOX_REF=v0.7.0 bash scripts/install-linux.sh || status=$?
-          test "$status" = 3
-          status=0; nox release keys || status=$?
-          test "$status" = 3
+          test "$status" = 1
+          # The list `nox release keys` shows is the one the installer carries.
+          nox release keys --json > "$d/shown-keys.json"
+          python3 - "$d/shown-keys.json" <<'PY'
+          import json, re, sys
+          shown = [(k["key_id"], k["not_after"]) for k in json.load(open(sys.argv[1], encoding="utf-8"))]
+          script = open("scripts/install-linux.sh", encoding="utf-8").read()
+          carried = re.findall(r'"([0-9a-f]{16})[|]([0-9]{4}-[0-9]{2}-[0-9]{2})[|]', script)
+          assert shown and shown == carried, (shown, carried)
+          PY
 
       - name: The health check follows the port the core took
         run: |
