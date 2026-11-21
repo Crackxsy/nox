@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict
 from websockets.asyncio.client import ClientConnection, connect
 
 from nox.lan.tls import TlsMaterial
-from nox.node.device.agent import NodeAgent
+from nox.node.device.agent.node_agent import NodeAgent
 from nox.node.device.gate import NodeGate
 from nox.node.device.home import NodeHome, NodeIdentity
 from nox.node.device.keystore import NodeKeyStore

@@ -34,9 +34,9 @@ def _english_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
 def _instant_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scripted confirmers answer at once; the 1.5 s rule against reflex answers is tested on
     its own (`test_device_confirmation.py`)."""
-    from nox.node.device import agent as agent_module
+    from nox.node.device.agent import calls as agent_calls
 
-    monkeypatch.setattr(agent_module, "MIN_DECISION_S", 0.0)
+    monkeypatch.setattr(agent_calls, "MIN_DECISION_S", 0.0)
 
 
 @pytest.fixture

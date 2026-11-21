@@ -7,7 +7,7 @@ import contextlib
 import signal
 
 from nox.core.logging import get_logger
-from nox.node.device.agent import NodeAgent
+from nox.node.device.agent.node_agent import NodeAgent
 from nox.node.device.cli.runtime import NodeRuntime, manifest_source, media_notice_once
 from nox.node.device.cli.updates import keep_updated, node_updater
 from nox.node.device.cli_text import (

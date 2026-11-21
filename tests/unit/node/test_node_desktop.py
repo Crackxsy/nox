@@ -284,7 +284,7 @@ async def test_only_a_core_that_accepts_this_node_counts_as_connected(
     core that refuses this node's protocol never confirms a version on trial."""
     from datetime import UTC, datetime
 
-    from nox.node.device.agent import NodeAgent
+    from nox.node.device.agent.node_agent import NodeAgent
     from nox.node.device.gate import NodeGate
     from nox.node.device.home import NodeIdentity
     from nox.node.device.keystore import NodeKeyStore

@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from nox.lan.tls import TlsMaterial
-from nox.node.device.agent import NodeAgent
+from nox.node.device.agent.node_agent import NodeAgent
 from nox.node.device.gate import NodeGate
 from nox.node.device.hands.args import WriteArgs
 from nox.node.device.hands.catalogue import hand_tools

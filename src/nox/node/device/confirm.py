@@ -3,7 +3,7 @@
 "Nox möchte auf diesem Gerät …: Erlauben? Ablehnen." with a 60 s countdown and **deny** as the
 default - no answer, a closed dialog or any error is a refusal. The core never shows this prompt
 elsewhere; the outcome goes back as `nox/confirm_result` and is audited on both sides. An "allow"
-faster than `nox.node.device.agent.MIN_DECISION_S` counts as a reflex and is a "no" on every
+faster than `nox.node.device.agent.calls.MIN_DECISION_S` counts as a reflex and is a "no" on every
 platform.
 
 * **Windows**: a system popup with "No" as the default button.

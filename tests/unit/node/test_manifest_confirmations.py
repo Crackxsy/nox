@@ -115,7 +115,7 @@ def test_without_its_key_no_confirmation_counts(tmp_path: Path) -> None:
 
 
 async def test_deny_takes_effect_in_the_running_node(tmp_path: Path) -> None:
-    from nox.node.device.agent import NodeAgent
+    from nox.node.device.agent.node_agent import NodeAgent
     from nox.node.device.cli import allow as cli_allow
     from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.keystore import NodeKeyStore

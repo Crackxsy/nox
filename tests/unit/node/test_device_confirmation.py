@@ -13,8 +13,8 @@ import pytest
 from pydantic import BaseModel
 
 from nox.lan.tls import TlsMaterial
-from nox.node.device import agent as agent_module
-from nox.node.device.agent import confirmation_text
+from nox.node.device.agent import calls as agent_calls
+from nox.node.device.agent.dialog_text import confirmation_text
 from nox.node.device.home import NodeHome
 from nox.node.device.tools import NodeTool
 from nox.node.hub.listener import NodeListener
@@ -194,7 +194,7 @@ async def test_a_yes_faster_than_reading_is_a_no(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(agent_module, "MIN_DECISION_S", 1.5)
+    monkeypatch.setattr(agent_calls, "MIN_DECISION_S", 1.5)
     node = await start_node(listener, pairing, tls, tmp_path, confirmer=Confirmer("allow"))
     try:
         session = await session_of(listener, node.node_id)
@@ -304,7 +304,7 @@ async def test_every_running_side_effect_stops_before_a_question(
 def test_the_dialog_opens_with_one_plain_sentence(
     tool: str, args: dict[str, Any], de: str, en: str
 ) -> None:
-    from nox.node.device.agent import confirmation_text
+    from nox.node.device.agent.dialog_text import confirmation_text
 
     german = confirmation_text(tool, args, lang="de")
     english = confirmation_text(tool, args, lang="en")
@@ -314,7 +314,7 @@ def test_the_dialog_opens_with_one_plain_sentence(
 
 
 def test_the_session_dialog_says_what_a_session_means() -> None:
-    from nox.node.device.agent import confirmation_text
+    from nox.node.device.agent.dialog_text import confirmation_text
 
     text = confirmation_text("computer.session_start", {"purpose": "Fenster ordnen"}, lang="de")
     assert text is not None and text.startswith(

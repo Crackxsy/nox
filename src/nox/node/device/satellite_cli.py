@@ -4,7 +4,7 @@ All of them act on this device only, as the logged-in user: the microphone's mut
 this device unmutes), push-to-talk from a terminal, the OBS password in this device's keyring,
 lifting the OBS panic latch, and the overlay URL for an OBS browser source here. Unmuting and
 lifting the latch widen what Nox may do: both refuse while Nox controls mouse and keyboard here
-(`nox.node.device.cli.session_refusal`). The words follow `nox.node.device.cli_text`.
+(`nox.node.device.cli.runtime.session_refusal`). The words follow `nox.node.device.cli_text`.
 """
 
 from __future__ import annotations

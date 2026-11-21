@@ -103,7 +103,7 @@ async def test_a_call_too_long_to_show_is_refused_before_anyone_is_asked() -> No
 async def test_replacing_or_extending_a_file_is_high_and_shown_with_size_and_preview(
     tmp_path: Path,
 ) -> None:
-    from nox.node.device.agent import confirmation_text
+    from nox.node.device.agent.dialog_text import confirmation_text
     from nox.node.wire.receipts import ReceiptSigner, ReceiptVerifier
 
     signer = ReceiptSigner(tmp_path / "r")
@@ -128,7 +128,7 @@ async def test_replacing_or_extending_a_file_is_high_and_shown_with_size_and_pre
 
 
 def test_the_device_dialog_and_the_core_target_render_alike() -> None:
-    from nox.node.device.agent import confirmation_text
+    from nox.node.device.agent.dialog_text import confirmation_text
     from nox.node.hub.install.routes import write_target
     from nox.node.wire.protocol import render
 
@@ -175,7 +175,7 @@ def test_a_long_write_shows_head_tail_hash_and_what_is_not_shown() -> None:
 
 
 def test_the_write_is_rendered_alike_on_the_core_and_on_the_device() -> None:
-    from nox.node.device.agent import confirmation_text
+    from nox.node.device.agent.dialog_text import confirmation_text
     from nox.node.device.hands.args import PREVIEW_CHARS, write_summary
     from nox.node.hub.install.routes import write_target
     from nox.node.wire.protocol import render

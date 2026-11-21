@@ -13,7 +13,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from nox.core.logging import get_logger
-from nox.node.device.agent import NodeAgent
+from nox.node.device.agent.node_agent import NodeAgent
 from nox.node.device.cli.runtime import NodeRuntime, session_refusal
 from nox.node.device.cli_text import (
     command,

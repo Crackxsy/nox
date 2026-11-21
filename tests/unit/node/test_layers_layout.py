@@ -20,7 +20,7 @@ LAYERS = ("wire", "device", "hub")
 #: past the size rule (docs/CODE_STANDARDS.md) became a package of modules, one per responsibility.
 SUBPACKAGES = {
     "hub": ("install",),
-    "device": ("cli", "hands", "safe_fs", "update", "voice", "world"),
+    "device": ("agent", "cli", "hands", "safe_fs", "update", "voice", "world"),
 }
 
 

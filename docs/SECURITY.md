@@ -808,7 +808,7 @@ voice satellites included (`nox.home.boundary`).
   (`computer.session_start/pointer/keys`, `desktop.type_text`) and every change to windows and
   programs (`desktop.window_*`, `desktop.process_stop`) - before the stop state, the capability
   or the receipt are even looked at - while any of these holds, each read fresh on every call
-  (`nox.node.device.world.GameLock`, `nox.desktop.anticheat`): a watched game runs (the core's default
+  (`nox.node.device.world.game_lock.GameLock`, `nox.desktop.anticheat`): a watched game runs (the core's default
   list, the device's own `node.yaml` `games` - `nox node games add` adds at once, removing is
   asked in a terminal and recorded like a widening, an edit of the file can only add - and the
   core's list, pushed as `nox/games`, an addition only); an anti-cheat process (also by family
@@ -957,7 +957,7 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   secret stores (`secret_locations`: OS keyrings and credential vaults, DPAPI, `~/.ssh`,
   `~/.gnupg`, cloud CLIs, `.netrc`, `.pgpass`, `.git-credentials`, browser profiles), never a hard
   link to a file in them, never a FIFO, socket or device.
-- **Writes are an allowlist of text formats in two tiers** (`safe_fs.write_refusal`), checked
+- **Writes are an allowlist of text formats in two tiers** (`safe_fs.formats.write_refusal`), checked
   on the text and again on the final path relative to the allowed folder - `file.write` writes
   UTF-8 text, so nothing else is offered. PASSIVE (`.txt .md .csv .tsv .log .ics .vcf .srt`): a
   new file is medium. STRUCTURED (`.json .yaml .yml`): every write is high (device dialog,

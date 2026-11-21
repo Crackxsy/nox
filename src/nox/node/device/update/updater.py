@@ -89,7 +89,8 @@ def _default_smoke(app: Path, python: str) -> str:
     """Import the new code with this Python, isolated, in a process of its own; its version."""
     code = (
         "import os, sys; sys.path.insert(0, os.environ['NOX_NODE_APP']); "
-        "import nox, nox.cli, nox.node.device.agent, nox.node.device.update; print(nox.__version__)"
+        "import nox, nox.cli, nox.node.device.agent.node_agent, nox.node.device.update.updater;"
+        " print(nox.__version__)"
     )
     result = subprocess.run(  # noqa: S603 - this interpreter, fixed code; the folder is data
         [python, "-I", "-B", "-c", code],

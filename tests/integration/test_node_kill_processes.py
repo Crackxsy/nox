@@ -70,8 +70,8 @@ CHILD = r"""
 import asyncio, os, sqlite3, sys, threading
 from pathlib import Path
 
-from nox.node.device import agent as agent_module
-from nox.node.device.agent import NodeAgent
+from nox.node.device.agent import calls as agent_calls
+from nox.node.device.agent.node_agent import NodeAgent
 from nox.node.device.gate import NodeGate
 from nox.node.device.hands.catalogue import hand_tools
 from nox.node.device.hands.node_hands import NodeHands, default_sandbox
@@ -81,7 +81,7 @@ from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.node.device.tools import NodeRefusal, default_tools
 from nox.security.audit import SqliteAuditLog
 
-agent_module.MIN_DECISION_S = 0.0
+agent_calls.MIN_DECISION_S = 0.0
 
 
 class Allow:

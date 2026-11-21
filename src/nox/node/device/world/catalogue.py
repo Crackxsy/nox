@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from nox.core.logging import get_logger
-from nox.node.device.agent import BLOB_KEY
+from nox.node.device.agent.calls import BLOB_KEY
 from nox.node.device.tools import NodeRefusal, NodeTool
 from nox.node.device.world.media import PlatformMedia
 from nox.node.device.world.node_world import Grabber, World, _LazyProbe
