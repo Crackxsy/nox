@@ -207,12 +207,14 @@ async def test_a_yes_faster_than_reading_is_a_no(
 
 def test_trust_core_for_high_is_set_with_nox_node_allow(tmp_path: Path) -> None:
     """Reachable through the confirmed path, not only by editing the file."""
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import pairing as cli_pairing
+    from nox.node.device.cli import runtime as cli_runtime
 
     home = NodeHome(tmp_path / "h")
     home.ensure()
-    node_cli.confirm_defaults(home, None)
-    node_cli.allow(
+    cli_pairing.confirm_defaults(home, None)
+    cli_allow.allow(
         home,
         "trust_core_for_high",
         True,
@@ -220,9 +222,9 @@ def test_trust_core_for_high_is_set_with_nox_node_allow(tmp_path: Path) -> None:
         interactive=lambda: True,
         confirm=lambda _p: True,
     )
-    assert node_cli.build(home).gate.manifest.trust_core_for_high is True
-    node_cli.allow(home, "trust_core_for_high", False, say=lambda _t: None)
-    assert node_cli.build(home).gate.manifest.trust_core_for_high is False
+    assert cli_runtime.build(home).gate.manifest.trust_core_for_high is True
+    cli_allow.allow(home, "trust_core_for_high", False, say=lambda _t: None)
+    assert cli_runtime.build(home).gate.manifest.trust_core_for_high is False
 
 
 def test_the_dialog_says_when_foreign_content_was_involved() -> None:

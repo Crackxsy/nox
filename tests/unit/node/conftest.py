@@ -111,15 +111,17 @@ def _same_groups_on_every_test_os(monkeypatch: pytest.MonkeyPatch) -> None:
 
     if sys.platform != "darwin":
         return
-    from nox.node.device import cli, cli_text
+    from nox.node.device import cli_text
+    from nox.node.device.cli import allow, controls
 
     real = cli_text.unsupported_reason
     monkeypatch.setattr(
-        cli, "unsupported_reason", lambda group, platform="linux": real(group, platform)
+        allow, "unsupported_reason", lambda group, platform="linux": real(group, platform)
     )
-    monkeypatch.setattr(
-        cli, "supported_here", lambda group, platform="linux": real(group, platform) is None
-    )
+    for module in (allow, controls):  # each looks `supported_here` up in its own namespace
+        monkeypatch.setattr(
+            module, "supported_here", lambda group, platform="linux": real(group, platform) is None
+        )
 
 
 @pytest.fixture(autouse=True)

@@ -41,7 +41,7 @@ class SatelliteCliError(RuntimeError):
 
 
 def _refuse_during_session(home: NodeHome) -> None:
-    from nox.node.device.cli import session_refusal  # noqa: PLC0415 - the heavy module, only here
+    from nox.node.device.cli.runtime import session_refusal  # noqa: PLC0415 - the heavy module, only here
 
     refusal = session_refusal(home)
     if refusal is not None:

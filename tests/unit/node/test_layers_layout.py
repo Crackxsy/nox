@@ -18,7 +18,10 @@ LAYERS = ("wire", "device", "hub")
 #: The sub-packages of a layer. The core's extension loader names `nox.node.hub.install`
 #: (`MODULE_OF`), and the wiring is cut into modules inside it. On the device, a module that grew
 #: past the size rule (docs/CODE_STANDARDS.md) became a package of modules, one per responsibility.
-SUBPACKAGES = {"hub": ("install",), "device": ("hands", "safe_fs", "update", "voice", "world")}
+SUBPACKAGES = {
+    "hub": ("install",),
+    "device": ("cli", "hands", "safe_fs", "update", "voice", "world"),
+}
 
 
 def _sources() -> list[Path]:

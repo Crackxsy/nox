@@ -244,7 +244,8 @@ async def test_read_and_list_answer_as_data(fs_world: dict[str, Path]) -> None:
 def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
     tmp_path: Path,
 ) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.wire.manifest import load_manifest
 
     home = NodeHome(tmp_path / "h")
@@ -252,21 +253,22 @@ def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
     docs.mkdir()
     said: list[str] = []
     yes = {"interactive": lambda: True, "confirm": lambda _p: True}
-    with pytest.raises(node_cli.NodeCliError):  # not from a non-interactive caller (the core)
-        node_cli.allow(home, "files", True, say=said.append, folder=str(docs))
-    node_cli.allow(home, "files", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
+    with pytest.raises(cli_runtime.NodeCliError):  # not from a non-interactive caller (the core)
+        cli_allow.allow(home, "files", True, say=said.append, folder=str(docs))
+    cli_allow.allow(home, "files", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
     assert load_manifest(home.manifest_file).folders == [os.path.realpath(docs)]
     for bad in (str(home.path), str(home.path / "sub"), "relative", r"\\fileserver\share"):
-        with pytest.raises(node_cli.NodeCliError):
-            node_cli.allow(home, "files", True, say=said.append, folder=bad, **yes)  # type: ignore[arg-type]
-    with pytest.raises(node_cli.NodeCliError):
-        node_cli.allow(home, "shell", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
-    node_cli.allow(home, "files", False, say=said.append, folder=str(docs))
+        with pytest.raises(cli_runtime.NodeCliError):
+            cli_allow.allow(home, "files", True, say=said.append, folder=bad, **yes)  # type: ignore[arg-type]
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_allow.allow(home, "shell", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
+    cli_allow.allow(home, "files", False, say=said.append, folder=str(docs))
     assert load_manifest(home.manifest_file).folders == []
 
 
 def test_broad_folders_are_never_allowed(fs_world: dict[str, Path], tmp_path: Path) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.safe_fs.folders import broad_folder
 
     system = [os.environ["SystemRoot"], os.environ["ProgramFiles"]] if WINDOWS else ["/etc", "/usr"]
@@ -275,8 +277,8 @@ def test_broad_folders_are_never_allowed(fs_world: dict[str, Path], tmp_path: Pa
         assert Folders.build([place], [fs_world["node"]]).roots == ()
     assert not broad_folder(str(fs_world["root"]))
     yes = {"interactive": lambda: True, "confirm": lambda _p: True}
-    with pytest.raises(node_cli.NodeCliError):
-        node_cli.allow(  # type: ignore[arg-type]
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_allow.allow(  # type: ignore[arg-type]
             NodeHome(tmp_path / "h"),
             "files",
             True,
@@ -362,14 +364,14 @@ async def test_a_node_folder_under_a_system_bind_fails_closed(
 def test_the_owner_only_acl_is_put_back_on_every_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import runtime as cli_runtime
 
     calls: list[Path] = []
-    monkeypatch.setattr(node_cli, "restrict_dir_to_owner", lambda p: calls.append(p) or True)
+    monkeypatch.setattr(cli_runtime, "restrict_dir_to_owner", lambda p: calls.append(p) or True)
     home = NodeHome(tmp_path / "h")
     home.ensure()
     for _ in range(2):
-        node_cli.build(home, sandbox=lambda: None).audit._conn.close()  # type: ignore[attr-defined]
+        cli_runtime.build(home, sandbox=lambda: None).audit._conn.close()  # type: ignore[attr-defined]
     assert calls == [home.path, home.path]
 
 

@@ -361,7 +361,8 @@ def node_pair(
     ),
 ) -> None:
     """Pair this device with the Nox at home. Checks Nox's fingerprint before sending anything."""
-    from nox.node.device.cli import NodeCliError, pair, secret_store  # noqa: PLC0415
+    from nox.node.device.cli.pairing import pair  # noqa: PLC0415
+    from nox.node.device.cli.runtime import NodeCliError, secret_store  # noqa: PLC0415
 
     try:
         typer.echo(pair(link, home=_node_home(), name=name, secrets=secret_store(), again=again))
@@ -377,7 +378,8 @@ def node_run(
     ),
 ) -> None:
     """Connect to Nox and serve it until stopped (Ctrl+C). Reconnects on its own."""
-    from nox.node.device.cli import RESTART, TRIAL_FAILED, build, run, secret_store  # noqa: PLC0415
+    from nox.node.device.cli.runtime import build, secret_store  # noqa: PLC0415
+    from nox.node.device.cli.serve import RESTART, TRIAL_FAILED, run  # noqa: PLC0415
     from nox.node.device.update.updater import RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE  # noqa: PLC0415
 
     outcome = run(build(_node_home(), secrets=secret_store(), say=typer.echo), tray=tray)
@@ -397,7 +399,7 @@ def node_update(
 ) -> None:
     """Update this node from the signed release (never from the core). Exit status: 0 done or
     up to date, 1 refused, 3 release signing is not configured yet."""
-    from nox.node.device.cli import update  # noqa: PLC0415
+    from nox.node.device.cli.updates import update  # noqa: PLC0415
     from nox.node.device.cli_text import ask_yes  # noqa: PLC0415
 
     def ask(question: str) -> bool:
@@ -421,7 +423,7 @@ def node_tray() -> None:
 @node_app.command("status")
 def node_status() -> None:
     """Whether this device is paired and connected, and what Nox may do here."""
-    from nox.node.device.cli import status  # noqa: PLC0415
+    from nox.node.device.cli.controls import status  # noqa: PLC0415
 
     for line in status(_node_home()):
         typer.echo(line)
@@ -430,7 +432,7 @@ def node_status() -> None:
 @node_app.command("log")
 def node_log(limit: int = typer.Option(50, min=1, max=10_000)) -> None:
     """What Nox did or was refused on this device (the local, hash-chained audit trail)."""
-    from nox.node.device.cli import log_lines  # noqa: PLC0415
+    from nox.node.device.cli.controls import log_lines  # noqa: PLC0415
 
     for line in log_lines(_node_home(), limit=limit):
         typer.echo(line)
@@ -440,7 +442,7 @@ def node_log(limit: int = typer.Option(50, min=1, max=10_000)) -> None:
 def node_stop() -> None:
     """Stop Nox on this device at once - and everywhere (the core gets a stop too). Only this
     device can undo it: nox node resume."""
-    from nox.node.device.cli import stop  # noqa: PLC0415
+    from nox.node.device.cli.controls import stop  # noqa: PLC0415
 
     typer.echo(stop(_node_home()))
 
@@ -448,7 +450,8 @@ def node_stop() -> None:
 @node_app.command("resume")
 def node_resume() -> None:
     """Undo a stop made on this device. A stop of the core is resumed on the core."""
-    from nox.node.device.cli import NodeCliError, resume  # noqa: PLC0415
+    from nox.node.device.cli.controls import resume  # noqa: PLC0415
+    from nox.node.device.cli.runtime import NodeCliError  # noqa: PLC0415
 
     try:
         typer.echo(resume(_node_home()))
@@ -463,7 +466,8 @@ def node_allow(
     folder: str = typer.Option("", help="With 'files': a folder Nox may open on this device."),
 ) -> None:
     """Let Nox use a capability group on this device. Only possible here, never from the core."""
-    from nox.node.device.cli import NodeCliError, allow, secret_store  # noqa: PLC0415
+    from nox.node.device.cli.allow import allow  # noqa: PLC0415
+    from nox.node.device.cli.runtime import NodeCliError, secret_store  # noqa: PLC0415
     from nox.node.device.cli_text import ask_yes  # noqa: PLC0415
 
     try:
@@ -487,7 +491,8 @@ def node_deny(
     folder: str = typer.Option("", help="With 'files': take only this folder away."),
 ) -> None:
     """Take a capability group (or one folder of 'files') away from Nox on this device."""
-    from nox.node.device.cli import NodeCliError, allow, secret_store  # noqa: PLC0415
+    from nox.node.device.cli.allow import allow  # noqa: PLC0415
+    from nox.node.device.cli.runtime import NodeCliError, secret_store  # noqa: PLC0415
 
     try:
         allow(_node_home(), group, False, say=typer.echo, secrets=secret_store(), folder=folder)
@@ -503,7 +508,8 @@ def node_games(
 ) -> None:
     """Games of this device: while one runs or is in front, Nox never uses mouse and keyboard
     here. Adding works at once; removing asks first."""
-    from nox.node.device.cli import NodeCliError, games, secret_store  # noqa: PLC0415
+    from nox.node.device.cli.allow import games  # noqa: PLC0415
+    from nox.node.device.cli.runtime import NodeCliError, secret_store  # noqa: PLC0415
     from nox.node.device.cli_text import ask_yes, command  # noqa: PLC0415
 
     if action not in ("add", "remove"):
@@ -625,7 +631,7 @@ def node_obs_password(
     clear: bool = typer.Option(False, "--clear", help="Remove the stored password."),
 ) -> None:
     """Store the obs-websocket password in this device's keyring (asked, never shown)."""
-    from nox.node.device.cli import secret_store  # noqa: PLC0415
+    from nox.node.device.cli.runtime import secret_store  # noqa: PLC0415
     from nox.node.device.satellite_cli import SatelliteCliError, obs_password  # noqa: PLC0415
 
     secret = None if clear else typer.prompt("obs-websocket password", hide_input=True)

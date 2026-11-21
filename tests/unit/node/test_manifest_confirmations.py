@@ -14,38 +14,39 @@ from tests.unit.node.support import node_home
 
 
 def _yes(home: Any, group: str) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
 
-    node_cli.allow(
+    cli_allow.allow(
         home, group, True, say=lambda _t: None, interactive=lambda: True, confirm=lambda _p: True
     )
 
 
 def test_allowing_needs_an_interactive_terminal_and_a_yes(tmp_path: Path) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.wire.manifest import load_manifest
 
     home = node_home(tmp_path)
     quiet = dict(say=lambda _t: None)
-    with pytest.raises(node_cli.NodeCliError, match="interactive"):
-        node_cli.allow(
+    with pytest.raises(cli_runtime.NodeCliError, match="interactive"):
+        cli_allow.allow(
             home, "shell", True, interactive=lambda: False, confirm=lambda _p: True, **quiet
         )
-    with pytest.raises(node_cli.NodeCliError, match="Not allowed"):
-        node_cli.allow(
+    with pytest.raises(cli_runtime.NodeCliError, match="Not allowed"):
+        cli_allow.allow(
             home, "shell", True, interactive=lambda: True, confirm=lambda _p: False, **quiet
         )
     assert not home.manifest_file.exists() or not load_manifest(home.manifest_file).groups["shell"]
     # Taking something away needs no person: narrowing is always safe.
     _yes(home, "notify")
-    node_cli.allow(home, "notify", False, interactive=lambda: False, **quiet)
+    cli_allow.allow(home, "notify", False, interactive=lambda: False, **quiet)
     assert load_manifest(home.manifest_file).groups["notify"] is False
 
 
 def _effective(home: Any) -> Any:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import runtime as cli_runtime
 
-    return node_cli.build(home, notifier=None).gate.manifest
+    return cli_runtime.build(home, notifier=None).gate.manifest
 
 
 def test_an_edit_of_node_yaml_widens_nothing(tmp_path: Path) -> None:
@@ -64,7 +65,7 @@ def test_an_edit_of_node_yaml_widens_nothing(tmp_path: Path) -> None:
 def test_a_forged_confirmation_is_not_trusted(tmp_path: Path) -> None:
     import json as _json
 
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.confirmed import CONFIRM_ACTION
     from nox.node.wire.manifest import GROUPS, NodeManifest, save_manifest
 
@@ -72,7 +73,7 @@ def test_a_forged_confirmation_is_not_trusted(tmp_path: Path) -> None:
     _yes(home, "notify")
     everything = NodeManifest(groups={g: True for g in GROUPS})
     save_manifest(home.manifest_file, everything)
-    audit = node_cli.open_audit(home)
+    audit = cli_runtime.open_audit(home)
     for mac in ("", "0" * 64):  # no MAC, a made-up MAC
         audit.append(
             actor="local",
@@ -88,7 +89,7 @@ def test_a_forged_confirmation_is_not_trusted(tmp_path: Path) -> None:
 
 
 def test_a_broken_audit_chain_trusts_no_confirmation(tmp_path: Path) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import runtime as cli_runtime
 
     home = node_home(tmp_path)
     _yes(home, "notify")
@@ -102,7 +103,7 @@ def test_a_broken_audit_chain_trusts_no_confirmation(tmp_path: Path) -> None:
     conn.execute("UPDATE audit_log SET result = 'tampered' WHERE seq = 1")
     conn.commit()
     conn.close()
-    assert node_cli.open_audit(home).verify_chain() is False
+    assert cli_runtime.open_audit(home).verify_chain() is False
     assert _effective(home).enabled() == {"system"}
 
 
@@ -114,25 +115,26 @@ def test_without_its_key_no_confirmation_counts(tmp_path: Path) -> None:
 
 
 async def test_deny_takes_effect_in_the_running_node(tmp_path: Path) -> None:
-    from nox.node.device import cli as node_cli
     from nox.node.device.agent import NodeAgent
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.keystore import NodeKeyStore
 
     home = node_home(tmp_path)
     _yes(home, "notify")
-    runtime = node_cli.build(home, notifier=None)
+    runtime = cli_runtime.build(home, notifier=None)
     agent = NodeAgent(
         home,
         NodeKeyStore(home.key_file, None),
         runtime.gate,
         runtime.audit,
-        manifest_source=node_cli.manifest_source(runtime),
+        manifest_source=cli_runtime.manifest_source(runtime),
     )
     agent.reload_manifest()
     assert "notify.show" in [t.name for t in runtime.gate.offered()]
     import os
 
-    node_cli.allow(home, "notify", False, say=lambda _t: None)
+    cli_allow.allow(home, "notify", False, say=lambda _t: None)
     stat = home.manifest_file.stat()
     os.utime(home.manifest_file, (stat.st_atime, stat.st_mtime + 5))
     assert agent.reload_manifest() is True
@@ -157,16 +159,17 @@ def test_the_node_folder_is_owner_only_on_windows(tmp_path: Path) -> None:
 
 def test_an_old_wider_confirmation_appended_again_is_rejected(tmp_path: Path) -> None:
     """Review follow-up: a once valid confirmation appended again (old place, old counter)."""
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.confirmed import CONFIRM_ACTION
     from nox.node.wire.manifest import load_manifest, save_manifest
 
     home = node_home(tmp_path)
     _yes(home, "shell")  # a wide confirmation ...
-    audit = node_cli.open_audit(home)
+    audit = cli_runtime.open_audit(home)
     old = [e for e in audit.entries(limit=500) if e.action == CONFIRM_ACTION][-1]
     old_details = audit.details(old.seq)
-    node_cli.allow(home, "shell", False, say=lambda _t: None)  # ... later narrowed
+    cli_allow.allow(home, "shell", False, say=lambda _t: None)  # ... later narrowed
     assert _effective(home).groups["shell"] is False
     # Someone appends the old wide confirmation again and widens the file.
     audit.append(
@@ -185,7 +188,7 @@ def test_an_old_wider_confirmation_appended_again_is_rejected(tmp_path: Path) ->
 
 
 def test_pairing_never_adopts_a_widened_file(tmp_path: Path) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import pairing as cli_pairing
     from nox.node.wire.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 
     home = node_home(tmp_path, paired=False)
@@ -193,7 +196,7 @@ def test_pairing_never_adopts_a_widened_file(tmp_path: Path) -> None:
         home.manifest_file,
         NodeManifest(groups={g: True for g in GROUPS}, trust_core_for_high=True),
     )
-    start = node_cli.confirm_defaults(home, None)
+    start = cli_pairing.confirm_defaults(home, None)
     assert start.enabled() == {"system", "notify", "media"} and not start.trust_core_for_high
     assert load_manifest(home.manifest_file).enabled() == {"system", "notify", "media"}
     assert _effective(home).enabled() == {"system", "notify", "media"}
@@ -204,7 +207,7 @@ def test_a_confirmation_with_the_right_counter_but_a_made_up_mac_is_rejected(
 ) -> None:
     import json as _json
 
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.confirmed import CONFIRM_ACTION, manifest_key
     from nox.node.wire.manifest import GROUPS, NodeManifest, save_manifest
 
@@ -213,7 +216,7 @@ def test_a_confirmation_with_the_right_counter_but_a_made_up_mac_is_rejected(
     assert loaded is not None
     everything = NodeManifest(groups={g: True for g in GROUPS})
     save_manifest(home.manifest_file, everything)
-    node_cli.open_audit(home).append(
+    cli_runtime.open_audit(home).append(
         actor="local",
         tool="node",
         action=CONFIRM_ACTION,
@@ -234,16 +237,17 @@ def test_an_older_copy_of_the_audit_trail_restored_is_rejected(tmp_path: Path) -
     but its counter is behind the one kept with the key."""
     import shutil
 
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.wire.manifest import load_manifest, save_manifest
 
     home = node_home(tmp_path)
     _yes(home, "shell")
     shutil.copy(home.audit_file, tmp_path / "audit-old.db")
-    node_cli.allow(home, "shell", False, say=lambda _t: None)
+    cli_allow.allow(home, "shell", False, say=lambda _t: None)
     shutil.copy(tmp_path / "audit-old.db", home.audit_file)
     manifest = load_manifest(home.manifest_file)
     manifest.groups["shell"] = True
     save_manifest(home.manifest_file, manifest)
-    assert node_cli.open_audit(home).verify_chain()  # a consistent chain ...
+    assert cli_runtime.open_audit(home).verify_chain()  # a consistent chain ...
     assert _effective(home).enabled() == {"system"}  # ... but not the current confirmation

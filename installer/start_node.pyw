@@ -64,7 +64,7 @@ MAX_CRASHES_PER_HOUR = 10
 TASK_NAME = "Nox Node"
 HOME_ENV = "NOX_NODE_HOME"
 APP_ENV = "NOX_NODE_APP"
-#: Written by the node when it ends in order (`nox.node.device.cli.run`); removed before every start.
+#: Written by the node when it ends in order (`nox.node.device.cli.serve.run`); removed before every start.
 CLEAN_EXIT = "clean-exit"
 _VERSION = re.compile(r'^__version__\s*=\s*"(\d+)\.(\d+)\.(\d+)[^"]*"', re.MULTILINE)
 #: The only names a release folder may have (the same rule as `nox.node.device.update`).

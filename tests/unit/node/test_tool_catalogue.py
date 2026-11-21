@@ -82,24 +82,27 @@ async def test_desktop_and_computer_are_windows_only() -> None:
 def test_enabling_computer_needs_windows_and_a_second_yes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.home import NodeHome
 
     home = NodeHome(tmp_path / "node")
-    monkeypatch.setattr(cli, "computer_supported", lambda: False)
-    with pytest.raises(cli.NodeCliError, match="not available on this device"):
-        cli.allow(
+    monkeypatch.setattr(cli_allow, "computer_supported", lambda: False)
+    with pytest.raises(cli_runtime.NodeCliError, match="not available on this device"):
+        cli_allow.allow(
             home, "computer", True, say=print, interactive=lambda: True, confirm=lambda _p: True
         )
-    monkeypatch.setattr(cli, "computer_supported", lambda: True)
+    monkeypatch.setattr(cli_allow, "computer_supported", lambda: True)
     asked: list[str] = []
 
     def first_only(prompt: str) -> bool:
         asked.append(prompt)
         return len(asked) == 1
 
-    with pytest.raises(cli.NodeCliError, match="Not allowed"):
-        cli.allow(home, "computer", True, say=print, interactive=lambda: True, confirm=first_only)
+    with pytest.raises(cli_runtime.NodeCliError, match="Not allowed"):
+        cli_allow.allow(
+            home, "computer", True, say=print, interactive=lambda: True, confirm=first_only
+        )
     assert len(asked) == 2 and "mouse" in asked[1]
 
 

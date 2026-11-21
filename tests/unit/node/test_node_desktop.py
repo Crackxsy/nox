@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from nox.node.device import appid, tools
-from nox.node.device.cli import NodeRuntime, keep_updated
+from nox.node.device.cli.runtime import NodeRuntime
+from nox.node.device.cli.updates import keep_updated
 from nox.node.device.home import NodeHome
 from nox.node.device.tray import STOP_KEYS, allowed_here, stop_here, view
 from nox.node.device.update.state import UpdateCheck

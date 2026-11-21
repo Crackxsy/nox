@@ -29,7 +29,10 @@ def _session(home: Any, *, until: float | None = None, raw: str | None = None) -
 def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
     tmp_path: Path, raw: str | None
 ) -> None:
-    from nox.node.device import cli, satellite_cli
+    from nox.node.device import satellite_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import controls as cli_controls
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.voice.settings import MUTE_FILE
 
     home = plain_node_home(tmp_path)
@@ -40,13 +43,15 @@ def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
         asked.append(prompt)
         return True
 
-    with pytest.raises(cli.NodeCliError, match="mouse and keyboard"):
+    with pytest.raises(cli_runtime.NodeCliError, match="mouse and keyboard"):
         # `notify` works on every OS: the session refusal is what is tested, not the platform.
-        cli.allow(home, "notify", True, say=print, interactive=lambda: True, confirm=confirm)
-    with pytest.raises(cli.NodeCliError):
-        cli.games(home, "Game.exe", False, say=print, interactive=lambda: True, confirm=confirm)
-    with pytest.raises(cli.NodeCliError):
-        cli.resume(home)
+        cli_allow.allow(home, "notify", True, say=print, interactive=lambda: True, confirm=confirm)
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_allow.games(
+            home, "Game.exe", False, say=print, interactive=lambda: True, confirm=confirm
+        )
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_controls.resume(home)
     (home.path / MUTE_FILE).write_text("muted", encoding="utf-8")
     with pytest.raises(satellite_cli.SatelliteCliError):
         satellite_cli.voice_mute(home, False)
@@ -56,24 +61,28 @@ def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
     assert asked == []  # refused before anything is asked
     # Narrowing always works.
     assert "Microphone muted" in satellite_cli.voice_mute(home, True)
-    cli.allow(home, "media", False, say=print)
+    cli_allow.allow(home, "media", False, say=print)
 
 
 def test_shell_is_not_available_on_a_mac(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`allow shell` on macOS says so plainly, whatever else is going on."""
-    from nox.node.device import cli, cli_text
+    from nox.node.device import cli_text
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
 
     real = cli_text.unsupported_reason
-    monkeypatch.setattr(cli, "unsupported_reason", lambda group: real(group, "darwin"))
+    monkeypatch.setattr(cli_allow, "unsupported_reason", lambda group: real(group, "darwin"))
     home = plain_node_home(tmp_path)
-    with pytest.raises(cli.NodeCliError, match="not available on this device"):
-        cli.allow(home, "shell", True, say=print, interactive=lambda: True, confirm=lambda _p: True)
+    with pytest.raises(cli_runtime.NodeCliError, match="not available on this device"):
+        cli_allow.allow(
+            home, "shell", True, say=print, interactive=lambda: True, confirm=lambda _p: True
+        )
 
 
 def test_update_refuses_to_install_during_a_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import cli
+    from nox.node.device.cli import updates as cli_updates
 
     home = plain_node_home(tmp_path)
     _session(home)
@@ -82,19 +91,22 @@ def test_update_refuses_to_install_during_a_session(
     updater = SimpleNamespace(
         check=lambda retry_bad: check, stale_days=lambda: None, apply=applied.append
     )
-    monkeypatch.setattr(cli, "node_updater", lambda _home: updater)
+    monkeypatch.setattr(cli_updates, "node_updater", lambda _home: updater)
     said: list[str] = []
-    assert cli.update(home, check_only=False, yes=True, say=said.append, ask=lambda _q: True) == 1
+    assert (
+        cli_updates.update(home, check_only=False, yes=True, say=said.append, ask=lambda _q: True)
+        == 1
+    )
     assert applied == [] and "mouse and keyboard" in said[-1]
 
 
 def test_a_marker_whose_time_is_over_refuses_nothing(tmp_path: Path) -> None:
-    from nox.node.device import cli
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.world.notices import clear_session_marker, session_marker_state
 
     home = plain_node_home(tmp_path)
     _session(home, until=time.time() - 1)
-    assert session_marker_state(home.path) is None and cli.session_refusal(home) is None
+    assert session_marker_state(home.path) is None and cli_runtime.session_refusal(home) is None
     _session(home)
     assert session_marker_state(home.path) == "running"
     clear_session_marker(home.path)
