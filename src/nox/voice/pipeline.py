@@ -41,12 +41,11 @@ from nox.core.events import E, HealthStatus, TranscriptReady, TtsStarted, VoiceK
 from nox.util.aio import aclose
 from nox.voice._logging import get_logger
 from nox.voice.audio import AudioUnavailableError
-from nox.voice.base import AudioInput, AudioOutput, Channel, SttEngine, TtsEngine, TtsRequest
+from nox.voice.base import AudioInput, AudioOutput, SttEngine, TtsEngine, TtsRequest
 from nox.voice.capture_health import (
     CaptureMonitor,
     CaptureNotice,
     CaptureSupervisor,
-    notice_text,
 )
 from nox.voice.latency import LatencySummary, LatencyTracker, TurnTicket, noting_first_chunk
 from nox.voice.levels import pace_levels
@@ -139,10 +138,9 @@ class DefaultVoicePipeline:
         self._inflight = 0
         self._say_lock = asyncio.Lock()
         self._notice_tasks: set[asyncio.Task[None]] = set()
-        self._notices_spoken = 0
         self._latency = LatencyTracker(clock=clock)
         self._device_lock = asyncio.Lock()
-        self._capture = CaptureMonitor()
+        self._capture = CaptureMonitor(clock=clock)
         self._supervisor = CaptureSupervisor(
             monitor=self._capture,
             listen=self._listen,
@@ -298,9 +296,13 @@ class DefaultVoicePipeline:
     async def stop(self) -> None:
         self._stopped = True
         self._started = False
-        await self._audio_in.set_enabled(False)
+        # Under the device lock, so a reopen that is opening the device right now finishes first
+        # and is closed here, instead of leaving a stream open behind a stopped pipeline.
+        async with self._device_lock:
+            await self._audio_in.set_enabled(False)
         await self.interrupt(reason="stop")
-        await self._audio_in.stop()
+        async with self._device_lock:
+            await self._audio_in.stop()
         await self._supervisor.stop()
         tasks = [
             t
@@ -343,27 +345,24 @@ class DefaultVoicePipeline:
                 await self._on_segment(event)
 
     def _announce_capture(self, notice: CaptureNotice) -> None:
-        """Say once that the microphone is gone, and once that it is back (never on each retry)."""
+        """Tell the core once that the microphone is gone, unstable or back (never per retry).
+
+        The worker does not speak it: an unprompted sentence is the core's to allow (quiet hours,
+        privacy mode and zones, game mode - `SpeechPolicy`), which this process does not know.
+        """
         if self._stopped or self._kill_latched:
             return
-        language, text = notice_text(notice, self.config.language)
-        self._notices_spoken += 1
-        request = TtsRequest(
-            utterance_id=f"voice-notice:{self._notices_spoken}",
-            text=text,
-            language=language,
-            channel=Channel.PRIVATE,
-        )
-        task = asyncio.create_task(self._say_notice(request), name="voice-capture-notice")
+        payload = {"notice": str(notice), "reason": self._capture.reason}
+        task = asyncio.create_task(self._send_notice(payload), name="voice-capture-notice")
         self._notice_tasks.add(task)
         task.add_done_callback(self._notice_tasks.discard)
 
-    async def _say_notice(self, request: TtsRequest) -> None:
+    async def _send_notice(self, payload: dict[str, Any]) -> None:
         try:
-            await self._say(request, tracked=False)
+            await self._emit(E.VOICE_CAPTURE_NOTICE, payload)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - the health state still says it; speech is a bonus
+        except Exception as exc:  # noqa: BLE001 - the health state still says it
             log.warning("voice.capture_notice_failed", error=f"{type(exc).__name__}: {exc}")
 
     async def _detect_loop(self) -> None:
@@ -526,18 +525,15 @@ class DefaultVoicePipeline:
     # ---- speaking side ---------------------------------------------------------------------------
 
     async def say(self, request: TtsRequest) -> None:
-        await self._say(request, tracked=True)
-
-    async def _say(self, request: TtsRequest, *, tracked: bool) -> None:
         """Speak one sentence, unless an interruption overtakes it before its turn comes.
 
         The generation is read on entry, before waiting for the speech lock: an interruption that
         happens while this sentence waits ends its generation and drops it, however many sentences
-        are queued behind the one that was playing. `tracked` sentences answer the user and are
-        timed; the pipeline's own notices are not.
+        are queued behind the one that was playing. The first sentence after a voice turn's
+        transcript is timed (`nox.voice.latency`).
         """
         generation = self._generation
-        ticket = self._latency.say_requested() if tracked else None
+        ticket = self._latency.say_requested()
         self._inflight += 1
         try:
             async with self._say_lock:

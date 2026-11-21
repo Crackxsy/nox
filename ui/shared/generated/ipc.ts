@@ -301,6 +301,11 @@ export interface VoiceKillPhrase {
   language?: string;
 }
 
+export interface VoiceCaptureNotice {
+  notice: "deaf" | "recovered" | "unstable";
+  reason?: string;
+}
+
 export interface TtsStarted {
   text: string;
   channel: string;

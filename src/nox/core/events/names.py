@@ -26,6 +26,10 @@ class E:
         "voice.kill_phrase"  # local kill phrase heard; core maps it to security.kill
     )
 
+    #: The voice worker's microphone stopped working, keeps dropping out, or is back. The core
+    #: decides whether Nox may say so aloud (`SpeechPolicy`); health shows it either way.
+    VOICE_CAPTURE_NOTICE = "voice.capture_notice"
+
     TTS_STARTED = "tts.started"
     TTS_CHUNK = "tts.chunk"
     #: Loudness of what is being played right now, ~30 per second while Nox speaks: one number,
