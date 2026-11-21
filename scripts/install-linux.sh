@@ -141,6 +141,8 @@ CURL=(curl --proto '=https' --tlsv1.2 -fsSL)
 #: release signing is not configured: tagged releases are checked by checksum only, and the
 #: installer says so. Once it holds a key, a release without a valid signed manifest is refused.
 TRUSTED_RELEASE_KEYS=(
+  "306d7c114db7e216|2028-11-30|MCowBQYDK2VwAyEAU+qRJ6vGP2JUXp8PFHXGKDjtD1yDmPAZj1Y7n7xth+o="
+  "4735ec2541181aed|2031-11-30|MCowBQYDK2VwAyEA9+aGl10Xs1YC3vxbFemdrxZCBeBUI5IBd83B8iy+2AA="
 )
 SOURCE="${NOX_SOURCE:-$REPO_URL}"
 # Ownership checks stay on, except for the one checkout NOX_SOURCE names (CI's is not root's).

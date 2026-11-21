@@ -174,8 +174,8 @@ openssl pkcs8 -topk8 -v2 aes-256-cbc -in nox-release-recovery.key -out nox-relea
    private key):
 
    ```bash
-   nox release describe-key nox-release-ci.pub --not-after 2028-10-31
-   nox release describe-key nox-release-recovery.pub --not-after 2031-10-31
+   nox release describe-key nox-release-ci.pub --not-after 2028-11-30
+   nox release describe-key nox-release-recovery.pub --not-after 2031-11-30
    ```
 
    Each prints one line for `TRUSTED_KEYS` in `src/nox/release/trusted_keys.py` and one for
@@ -216,6 +216,13 @@ openssl pkcs8 -topk8 -v2 aes-256-cbc -in nox-release-recovery.key -out nox-relea
 
 Installations that run a version from **before** the key was added trust no key yet: they install
 the first signed release by checksum, as before, and from then on verify every update.
+
+**Until the first signed release exists** (the keys are trusted in the code since 2026-11-21, no
+release has been signed yet), a fresh install of a release tag fails closed: `install-linux.sh`
+without `NOX_SOURCE` stops with "no signed manifest" and changes nothing, and `install-macos.sh`
+without `NOX_SOURCE` installs nothing from the network at all. Installing from a checkout you
+verified yourself (`NOX_SOURCE=<folder>`) and development refs (branch or commit) still work on
+Linux. Sign and publish the first release soon after this change reaches `main`.
 
 ## Rotation
 
