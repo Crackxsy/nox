@@ -72,24 +72,45 @@ def delta(text: str) -> None:
     )
 
 
+LIMIT_SENTENCE = "You've hit your limit · resets 11pm (Europe/Berlin)"
+
+
+def synthetic_limit_message() -> dict[str, object]:
+    """What the real CLI writes when a plan limit refuses a request: a message of its own, from the
+    model `<synthetic>`, flagged as an API error - not something a model said."""
+    return {
+        "type": "assistant",
+        "message": {
+            "model": "<synthetic>",
+            "role": "assistant",
+            "content": [{"type": "text", "text": LIMIT_SENTENCE}],
+        },
+        "error": "rate_limit",
+        "isApiErrorMessage": True,
+    }
+
+
 def refuse_by_limit() -> None:
-    """The plan limit refuses the turn: the status event, then an error result."""
-    out(
-        {
-            "type": "rate_limit_event",
-            "rate_limit_info": {
-                "status": "rejected",
-                "rateLimitType": "five_hour",
-                "resetsAt": float(os.environ.get("FAKE_RESET", "0")),
-            },
-        }
-    )
+    """The plan limit refuses the turn: the status event (unless `FAKE_NO_EVENT`), the CLI's own
+    sentence, then an error result."""
+    if not os.environ.get("FAKE_NO_EVENT"):
+        out(
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {
+                    "status": "rejected",
+                    "rateLimitType": "five_hour",
+                    "resetsAt": float(os.environ.get("FAKE_RESET", "0")),
+                },
+            }
+        )
+    out(synthetic_limit_message())
     out(
         {
             "type": "result",
             "subtype": "success",
             "is_error": True,
-            "result": "5-hour limit reached - resets 3pm",
+            "result": LIMIT_SENTENCE,
             "usage": {},
         }
     )

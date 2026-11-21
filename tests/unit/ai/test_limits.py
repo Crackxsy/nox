@@ -7,7 +7,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from nox.ai.limits import DEFAULT_LIMIT_RETRY_S, describe_limit, limit_for, looks_like_limit
+from nox.ai.limits import (
+    DEFAULT_LIMIT_RETRY_S,
+    describe_limit,
+    limit_for,
+    looks_like_limit,
+    parse_reset_text,
+)
 from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem
 
 NOW = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
@@ -88,6 +94,10 @@ def test_a_malformed_status_is_not_a_refusal(info: dict[str, object]) -> None:
         "Weekly usage limit reached",
         "API Error: rate limit exceeded",
         "quota exceeded for this organisation",
+        "You're out of extra usage",
+        "You've reached your org's monthly spend limit",
+        "rate_limit_error: this request would exceed your organization's rate limit",
+        "Opus weekly limit reached",
     ],
 )
 def test_the_wording_of_a_plan_limit_is_recognised(message: str) -> None:
@@ -101,6 +111,10 @@ def test_the_wording_of_a_plan_limit_is_recognised(message: str) -> None:
         "no result line (exit code 1)",
         "overloaded",
         "the Claude Code session ended mid-turn",
+        "Context limit reached",
+        "connection limit reached",
+        "Prompt is too long: the context window limit was exceeded",
+        "output token limit exceeded",
         "",
     ],
 )
@@ -136,3 +150,41 @@ def test_the_status_line_says_which_limit_and_until_when() -> None:
     assert describe_limit(guess) == (
         "usage limit reached (unknown); retrying after 2026-03-10 12:15 UTC"
     )
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        # 12:00 UTC is 13:00 in Berlin (winter time): 11pm is tonight, 22:00 UTC.
+        ("You've hit your limit · resets 11pm (Europe/Berlin)", (2026, 3, 10, 22, 0)),
+        # 1pm in Berlin has just passed (13:00 = now): tomorrow.
+        ("limit reached, resets 1pm (Europe/Berlin)", (2026, 3, 11, 12, 0)),
+        ("resets 4:30pm (UTC)", (2026, 3, 10, 16, 30)),
+        ("resets at 12am (UTC)", (2026, 3, 11, 0, 0)),
+        ("resets Mar 12, 3pm (UTC)", (2026, 3, 12, 15, 0)),
+        ("resets Feb 2 at 9am (UTC)", (2027, 2, 2, 9, 0)),
+    ],
+)
+def test_the_reset_time_in_the_sentence_is_read_in_its_own_zone(
+    message: str, expected: tuple[int, int, int, int, int]
+) -> None:
+    resets_at = parse_reset_text(message, NOW)
+
+    assert resets_at is not None
+    assert datetime.fromtimestamp(resets_at, tz=UTC) == datetime(*expected, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "message", ["5-hour limit reached", "resets soon", "resets 25pm (UTC)", "resets Foo 40, 3pm"]
+)
+def test_a_sentence_without_a_usable_time_gives_none(message: str) -> None:
+    assert parse_reset_text(message, NOW) is None
+
+
+def test_an_unknown_zone_is_read_in_the_machine_zone_and_a_sentence_sets_the_limit_end() -> None:
+    assert parse_reset_text("resets 3pm (Nowhere/Land)", NOW) is not None
+    limit = limit_for(
+        "claude_code", kind="", resets_at=None, now=NOW, message="resets 4:30pm (UTC)"
+    )
+
+    assert limit.until == datetime(2026, 3, 10, 16, 30, tzinfo=UTC) and not limit.estimated

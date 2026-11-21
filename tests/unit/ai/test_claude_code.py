@@ -214,8 +214,12 @@ def refuse(with_event):
         emit({"type": "rate_limit_event", "rate_limit_info": {
               "status": "rejected", "rateLimitType": "five_hour",
               "resetsAt": float(os.environ.get("FAKE_CLI_RESET", "0"))}})
+    sentence = "You've hit your limit · resets 11pm (Europe/Berlin)"
+    emit({"type": "assistant", "message": {"model": "<synthetic>", "role": "assistant",
+          "content": [{"type": "text", "text": sentence}]},
+          "error": "rate_limit", "isApiErrorMessage": True})
     emit({"type": "result", "subtype": "success", "is_error": True,
-          "result": "5-hour limit reached - resets 3pm", "usage": {}}); sys.exit(1)
+          "result": sentence, "usage": {}}); sys.exit(1)
 if mode == "limit":
     refuse(True)
 if mode == "limit_text":
@@ -449,7 +453,7 @@ async def test_a_plan_limit_keeps_claude_out_until_the_reset_and_costs_no_proces
     assert info.status is not HealthStatus.UNAVAILABLE and info.limited_until is None
 
 
-async def test_a_limit_told_only_in_words_is_still_a_limit_with_a_default_delay(
+async def test_a_limit_told_only_in_words_takes_its_reset_time_from_the_sentence(
     fake_cli: Path,
 ) -> None:
     p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "limit_text"}, now=Clock())
@@ -457,8 +461,23 @@ async def test_a_limit_told_only_in_words_is_still_a_limit_with_a_default_delay(
     with pytest.raises(ProviderLimitedError) as caught:
         await p.complete(make_request("Hallo"))
 
-    assert caught.value.limit.estimated is True
-    assert caught.value.limit.until == NOW + timedelta(minutes=15)
+    # "resets 11pm (Europe/Berlin)" asked at 12:00 UTC (13:00 in Berlin): tonight, 22:00 UTC.
+    assert caught.value.limit.estimated is False
+    assert caught.value.limit.until == datetime(2026, 3, 10, 22, 0, tzinfo=UTC)
+    assert "You've hit your limit" in str(caught.value)
+
+
+async def test_the_clis_own_limit_sentence_is_never_delivered_as_an_answer(
+    fake_cli: Path,
+) -> None:
+    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "limit_text"}, now=Clock())
+    received: list[str] = []
+
+    with pytest.raises(ProviderLimitedError):
+        async for chunk in p.stream(make_request("Hallo")):
+            received.append(chunk.delta)
+
+    assert received == []
 
 
 async def test_a_limit_in_the_middle_of_an_answer_ends_in_an_error_not_in_silence(

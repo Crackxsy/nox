@@ -55,7 +55,7 @@ from nox.ai.errors import (
 from nox.ai.limits import ProviderLimit, limit_for, looks_like_limit
 from nox.ai.providers.claude_cost import TurnCost
 from nox.ai.providers.claude_session import ClaudeSession, SessionSpec
-from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem
+from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem, merge_refusals
 from nox.tools.names import from_wire
 
 log = get_logger(__name__)
@@ -516,6 +516,7 @@ class PersistentClaude:
         parser = ClaudeStreamParser()
         parts: list[str] = []
         refusal: StreamItem | None = None
+        api_error: StreamItem | None = None
         first_token_ms: int | None = None
         finished = False
         #: Text after a tool call is a new block; without a space it would run into the last one.
@@ -534,7 +535,10 @@ class PersistentClaude:
                 if item is None:
                     continue
                 if item.refused:
-                    refusal = item
+                    refusal = merge_refusals(refusal, item)
+                    continue
+                if item.kind == "api_error":
+                    api_error = item
                     continue
                 if item.kind == "status" and item.text == "message_start":
                     cost.step_started(
@@ -582,6 +586,9 @@ class PersistentClaude:
                     # The answer reached its end here (also after a halt): nothing is left to drain.
                     self._dirty = False
                     limit = self._limit_of(item, refusal)
+                    if api_error is not None and limit is None and not parts:
+                        # The CLI's own sentence about a failed request: the error, not an answer.
+                        raise self._error_for(api_error.error or api_error.text)
                     if limit is not None and parts:
                         # The answer was under way: end it with a sentence instead of silence.
                         notice = LIMIT_CUTOFF_NOTICE.get(
@@ -590,8 +597,9 @@ class PersistentClaude:
                         parts.append(notice)
                         yield AiChunk(request_id=request.request_id, delta=notice)
                     elif limit is not None:
+                        told = refusal.error if refusal and refusal.synthetic else ""
                         raise ProviderLimitedError(
-                            PROVIDER_ID, item.error or "usage limit reached", limit
+                            PROVIDER_ID, told or item.error or "usage limit reached", limit
                         )
                     self._finish(session, request, item, parts, started, first_token_ms)
                     break
@@ -615,9 +623,12 @@ class PersistentClaude:
 
     def _limit_of(self, result: StreamItem, refusal: StreamItem | None) -> ProviderLimit | None:
         """The plan limit that ended this turn, told to the provider; `None` for any other end."""
-        if not result.is_error:
+        told = refusal is not None and refusal.synthetic
+        if not result.is_error and not told:
             return None
-        message = result.error or result.terminal_reason
+        message = (
+            (refusal.error if told and refusal else "") or result.error or result.terminal_reason
+        )
         if refusal is None and not looks_like_limit(message):
             return None
         limit = limit_for(
@@ -625,10 +636,20 @@ class PersistentClaude:
             kind=refusal.limit_kind if refusal else "",
             resets_at=refusal.limit_resets_at if refusal else None,
             now=self._now(),
+            message=message,
         )
         if self._on_limit is not None:
             self._on_limit(limit)
         return limit
+
+    @staticmethod
+    def _error_for(message: str) -> ProviderError:
+        """The exception for a failure the CLI described itself: a login problem is
+        `unavailable`, anything else a plain provider error."""
+        lowered = message.lower()
+        if "login" in lowered or "logged in" in lowered or "authentication" in lowered:
+            return ProviderUnavailableError(PROVIDER_ID, message)
+        return ProviderError(PROVIDER_ID, message)
 
     def _over_budget(self, cost: TurnCost) -> bool:
         return self._cfg.max_budget_usd > 0 and cost.usd > self._cfg.max_budget_usd

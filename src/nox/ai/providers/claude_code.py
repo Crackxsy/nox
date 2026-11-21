@@ -43,7 +43,7 @@ from nox.ai.errors import (
 )
 from nox.ai.limits import ProviderLimit, describe_limit, limit_for, looks_like_limit
 from nox.ai.providers.claude_persistent import PersistentClaude
-from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem
+from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem, merge_refusals
 from nox.core.events import HealthStatus
 
 PROVIDER_ID = "claude_code"
@@ -415,6 +415,7 @@ class ClaudeCodeProvider:
         parts: list[str] = []
         result: StreamItem | None = None
         refusal: StreamItem | None = None
+        api_error: StreamItem | None = None
         first_token_ms: int | None = None
 
         proc = await self._spawn(args)
@@ -440,7 +441,9 @@ class ClaudeCodeProvider:
                 if item is None:
                     continue
                 if item.refused:
-                    refusal = item
+                    refusal = merge_refusals(refusal, item)
+                elif item.kind == "api_error":
+                    api_error = item
                 elif item.kind == "delta" and item.text:
                     if first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - started) * 1000)
@@ -449,7 +452,7 @@ class ClaudeCodeProvider:
                 elif item.kind == "result":
                     result = item
                     break
-            await self._finish(proc, stderr_task, result, refusal)
+            await self._finish(proc, stderr_task, result, refusal, api_error)
         finally:
             await _kill(proc)
             if not stderr_task.done():
@@ -486,9 +489,12 @@ class ClaudeCodeProvider:
         stderr_task: asyncio.Future[bytes],
         result: StreamItem | None,
         refusal: StreamItem | None = None,
+        api_error: StreamItem | None = None,
     ) -> None:
         """Wait for exit, then translate error results into exceptions. A request that a plan
-        limit refused (`refusal`, or the wording of the error) becomes `ProviderLimitedError`."""
+        limit refused (`refusal`, or the wording of the error) becomes `ProviderLimitedError`.
+        The CLI's own sentence about a failure (`refusal`/`api_error` with `synthetic`) is the
+        error, never an answer."""
         try:
             await asyncio.wait_for(proc.wait(), timeout=10.0)
         except TimeoutError:
@@ -501,14 +507,21 @@ class ClaudeCodeProvider:
         if result is None:
             detail = stderr.strip().splitlines()[-1:] or [f"exit code {proc.returncode}"]
             raise ProviderError(PROVIDER_ID, f"no result line ({detail[0][:200]})")
-        if result.is_error:
-            message = result.error or result.terminal_reason or "unknown error"
+        told = refusal if refusal is not None and refusal.synthetic else api_error
+        if result.is_error or told is not None:
+            message = (
+                (told.error or told.text if told else "")
+                or result.error
+                or result.terminal_reason
+                or "unknown error"
+            )
             if refusal is not None or looks_like_limit(message):
                 limit = limit_for(
                     PROVIDER_ID,
                     kind=refusal.limit_kind if refusal else "",
                     resets_at=refusal.limit_resets_at if refusal else None,
                     now=self._now(),
+                    message=message,
                 )
                 self._note_limit(limit)
                 raise ProviderLimitedError(PROVIDER_ID, message, limit)
