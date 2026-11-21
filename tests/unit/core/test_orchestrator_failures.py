@@ -39,6 +39,7 @@ class FailingRouter(FakeRouter):
 def failing(error: Exception, before: tuple[str, ...] = (), **kw: object):  # type: ignore[no-untyped-def]
     orch, bus, router, speaker, turns = make(**kw)
     orch.router = FailingRouter(bus, error, before)
+    orch.failure_may_speak = lambda: True  # the wiring in `NoxCore` is tested with a real core
     return orch, bus, speaker, turns
 
 
@@ -216,4 +217,16 @@ async def test_the_reply_follows_the_language_of_the_turn(language: str, word: s
     turn = await orch.handle_text("?", language=language, speak=False)
 
     assert word in turn.response
+    await orch.stop()
+
+
+async def test_an_orchestrator_without_the_wiring_stays_quiet() -> None:
+    orch, bus, router, speaker, _ = make()
+    orch.router = FailingRouter(bus, NoProviderAvailableError("x", cause=NoProviderCause.FAILED))
+    await orch.start()
+
+    turn = await orch.handle_text("Erklär mir kurz Python")
+
+    assert "Das Modell antwortet gerade nicht" in turn.response  # still shown
+    assert speaker.said == []
     await orch.stop()

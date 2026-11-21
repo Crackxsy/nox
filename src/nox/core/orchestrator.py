@@ -293,8 +293,9 @@ class Orchestrator:
     fast_path: FastPath = field(default_factory=FastPath)
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
     #: Set by `NoxCore`: whether Nox may say aloud, as the answer to the user, that a turn failed
-    #: (`SpeechPolicy.may_report_failure`). `None` = always.
-    failure_may_speak: Callable[[], bool] | None = None
+    #: (`SpeechPolicy.may_report_failure`). Until it is set Nox stays quiet: a missing wiring must
+    #: not become speech during mute or a game.
+    failure_may_speak: Callable[[], bool] = lambda: False
     #: Monotonic seconds, for the idle timeout of conversations; a field so tests can move time.
     clock: Callable[[], float] = time.monotonic
 
@@ -732,8 +733,9 @@ class Orchestrator:
         on_chunk: Callable[[str], Awaitable[None] | None] | None,
     ) -> None:
         """No model answered: say why and what to do, as the reply (so a typed chat shows it) and,
-        for a turn that was to be spoken, through the proactive layer, which decides by the usual
-        rules - mode, privacy, quiet hours - whether it may be heard."""
+        for a turn that was to be spoken, aloud - directly, not through the proactive layer: it is
+        the answer to what the user said, held back only by `failure_may_speak` (mute, a game).
+        The proactive layer then only shows it as a notification (`ai.turn_failed`)."""
         cause, limit = NoProviderCause.FAILED, None
         if isinstance(error, NoProviderAvailableError):
             cause, limit = error.cause, error.limit
@@ -765,7 +767,7 @@ class Orchestrator:
         too is logged; there is nothing left to say it with."""
         if self.speaker is None:
             return
-        if self.failure_may_speak is not None and not self.failure_may_speak():
+        if not self.failure_may_speak():
             return
         try:
             await self._speak(text, language, request_id)

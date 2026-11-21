@@ -112,6 +112,8 @@ def test_the_wording_of_a_plan_limit_is_recognised(message: str) -> None:
         "overloaded",
         "the Claude Code session ended mid-turn",
         "Context limit reached",
+        "You've hit your context window limit",
+        "You've hit your context limit",
         "connection limit reached",
         "Prompt is too long: the context window limit was exceeded",
         "output token limit exceeded",
