@@ -36,7 +36,7 @@ Status words: **done** (checked), **partly** (some of the evidence exists, the r
 | 18 | No known critical security vulnerability | open |
 | 19 | No secrets or personal data in the repository or its history | done |
 | 20 | Publication runbook executed | partly (owner) |
-| 21 | Release signing key and the `release-signing` environment | open (owner) |
+| 21 | Release signing key and the `release-signing` environment | partly (first signed release missing) |
 | 22 | Windows Authenticode signing of the installer | open (owner) |
 | 23 | Windows installer built and attached by the release workflow | open |
 | 24 | Software bill of materials (SBOM) for a release | open |
@@ -183,16 +183,19 @@ Status words: **done** (checked), **partly** (some of the evidence exists, the r
       security settings) cannot be seen from the repository. **Owner action:** confirm each step of
       the runbook, or write down which ones were skipped and why.
       _Evidence needed: the owner's confirmation, `gh repo list` without the archive._
-- [ ] **21. Release signing key and the `release-signing` environment** - **open.** **Owner
-      action.** The signing is built and tested (`.github/workflows/release-assets.yml` and
-      `os-image.yml` sign a release manifest; `install-linux.sh` and `nox update` verify it), but no
-      key exists: the trust lists are empty (`TRUSTED_KEYS` in `src/nox/release/trusted_keys.py`,
-      `TRUSTED_RELEASE_KEYS` in `scripts/install-linux.sh`), the GitHub environment
-      `release-signing` has not been created (the repository has no environments), and the secret
-      `NOX_RELEASE_SIGNING_KEY` is not set. Until then every release run fails with "Release not
-      signed", installations verify nothing and the Nox-OS image gets no release asset. Create the
-      key, the environment (required reviewer, `v*` tags only) and the trust entries as described in
-      [`RELEASES.md`](RELEASES.md#setting-up-the-release-key-owner).
+- [ ] **21. Release signing key and the `release-signing` environment** - **partly done.** On
+      2026-11-21 the owner had the keys created: a CI signing key (key id `306d7c114db7e216`, valid
+      until 2028-11-30) and an offline recovery key (key id `4735ec2541181aed`, valid until
+      2031-11-30). The GitHub environment `release-signing` exists with the owner as required
+      reviewer, only `v*` tags allowed and administrator bypass off; it holds the secret
+      `NOX_RELEASE_SIGNING_KEY` (the CI key only). Both public keys are listed in
+      `TRUSTED_KEYS` (`src/nox/release/trusted_keys.py`) and `TRUSTED_RELEASE_KEYS` (`scripts/install-linux.sh`,
+      `scripts/install-macos.sh`). What is missing is a first signed release. Until then a fresh
+      install of a release tag fails closed on Linux (no signed manifest) and the macOS installer
+      installs nothing from the network; installations that already run an older version still
+      update by checksum, and `NOX_SOURCE` installs are unaffected. Keep the encrypted backups
+      of both private keys in two places (see
+      [`RELEASES.md`](RELEASES.md#setting-up-the-release-key-owner)).
       _Evidence needed: a release with `release-manifest.json` and its signature, and
       `nox release verify` exiting 0 on it._
 - [ ] **22. Windows Authenticode signing of the installer** - **open.** **Owner action.**

@@ -197,3 +197,29 @@ async def test_unsuccessful_send_does_not_count_toward_cooldown(
     await _message(bus, text="hi nox again", addressed=True)
     # denied sends never registered a cooldown, so a second attempt goes through too
     assert len(executor.calls) == 2
+
+
+# -- commands ------------------------------------------------------------------------------------
+
+
+async def test_a_command_is_not_answered_even_with_a_high_relevance_score(
+    bus: FakeBus, relevance_config: RelevanceConfig, clock: MutableClock
+) -> None:
+    """The responder does not trust the score for a `!` line: "!lurk why?" must stay silent even
+    if some other producer scored it like a question."""
+    router = FakeCompleteRouter()
+    executor = FakeExecutor()
+    make_responder(bus, router, executor, relevance_config, FakeKillSwitch(), clock)
+    await _message(bus, text="!lurk why?", addressed=False, relevance=1.0)
+    assert router.requests == []
+    assert executor.calls == []
+
+
+async def test_a_command_marked_as_addressed_is_answered(
+    bus: FakeBus, relevance_config: RelevanceConfig, clock: MutableClock
+) -> None:
+    router = FakeCompleteRouter()
+    executor = FakeExecutor()
+    make_responder(bus, router, executor, relevance_config, FakeKillSwitch(), clock)
+    await _message(bus, text="!nox hallo", addressed=True, relevance=1.0)
+    assert len(executor.calls) == 1

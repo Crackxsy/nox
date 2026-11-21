@@ -2,10 +2,11 @@
 # irc.chat.twitch.tv:6697 (asyncio streams, no extra dependency - `tls: False` exists only so
 # tests can point the client at a plaintext fake server).
 #
-# Tool surface is deliberately narrow: one rate-limited, moderation-gated chat send and one
-# read-only connection status check. Moderation actions (`twitch.moderation.timeout/ban`) and the
-# Funken ledger itself do not exist here - this plugin never books Funken (`stream.funken_awarded`
-# is a request the core's FunkenService decides on, not a local ledger write).
+# Tool surface is deliberately narrow: one rate-limited, filtered and moderation-gated chat send and
+# one read-only connection status check. Moderation actions (`twitch.moderation.timeout/ban`) and
+# the Funken ledger itself do not exist here - this plugin never books Funken
+# (`stream.funken_awarded` is a request the core's FunkenService decides on, not a local ledger
+# write).
 id: twitch
 name: Twitch Bot
 version: 0.1.0
@@ -13,8 +14,9 @@ api_version: 1
 entry: nox_plugin_twitch:create
 profiles: [stream, rocket_league]   # chat must keep working while a game is in the foreground
 permissions:
-  - tool: twitch.chat.send            # risk: low - rate-limited (20 msg/30s, >=1.5s gap) and
-    risk: low                         # passed through ModerationGate.check before every send
+  - tool: twitch.chat.send            # risk: low - rate-limited (20 msg/30s, >=1.5s gap); every line
+    risk: low                         # passes the output filter (no links, no chat commands, no
+                                      # mass mentions) and ModerationGate.check before it is sent
   - tool: twitch.chat.status.read     # risk: read - connection/join status, never fakes "connected"
     risk: read
 events:

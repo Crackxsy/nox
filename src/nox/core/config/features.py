@@ -131,7 +131,8 @@ class StreamTwitchConfig(StrictSection):
     min_backoff_s: float = Field(default=1.0, gt=0.0)
     max_backoff_s: float = Field(default=30.0, gt=0.0)
     #: What `!streamplan` answers, as one chat line (e.g. "Mo, Mi, Fr ab 19 Uhr"). Empty = the bot
-    #: says that no schedule has been set; it never invents one.
+    #: says that no schedule has been set; it never invents one. Links are not sent: the chat
+    #: output filter refuses a line that contains one.
     schedule_text: str = Field(default="", max_length=300)
     #: Chat accounts Nox ignores completely: no reply, no commands, no Funken. Other bots belong
     #: here, so that two bots never answer each other's `!` lines. Twitch logins, any case.
