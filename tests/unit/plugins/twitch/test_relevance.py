@@ -84,6 +84,8 @@ ADDRESSING_RULES = [
     ("!nox was ist dein lieblingsspiel", True),
     ("!NOX hallo", True),
     ("  !nox  hallo", True),
+    ("!nox, hallo", True),
+    ("!nox?", True),
     # another bot's command, and Nox's own commands (answered by the plugin, once)
     ("!lurk", False),
     ("!discord", False),

@@ -39,6 +39,9 @@ _GREETINGS = ("hi", "hello", "hey", "hallo", "servus", "moin")
 #: `!word` at the start of a line; `! word` (a space after the bang) is no command anywhere.
 _COMMAND_WORD_RE = re.compile(r"!(\S+)")
 
+#: Punctuation a viewer may glue to the name: "!nox, hallo", "!nox?".
+_COMMAND_TRAILING = ",.:;!?"
+
 _MENTION_SCORE = 0.6
 _QUESTION_SCORE = 0.2
 _COMMAND_SCORE = 0.5
@@ -118,4 +121,4 @@ def _mentions_any(lowered: str, names: Sequence[str]) -> bool:
 def _is_request_to_bot(lowered: str, names: Sequence[str]) -> bool:
     """`!nox <question>`: the one command form that asks Nox itself."""
     match = _COMMAND_WORD_RE.match(lowered)
-    return match is not None and match.group(1) in names
+    return match is not None and match.group(1).rstrip(_COMMAND_TRAILING) in names
