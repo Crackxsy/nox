@@ -45,6 +45,14 @@ describe('fps policy', () => {
   });
 });
 
+describe('frame ceiling in the animation parameters', () => {
+  it('draws at the configured ceiling', () => {
+    expect(deriveAnim({ ...base, fpsCeiling: 20 }).fps).toBe(20);
+    expect(deriveAnim({ ...base, fpsCeiling: 144 }).fps).toBe(144);
+    expect(deriveAnim(base).fps).toBe(60);
+  });
+});
+
 describe('deriveAnim', () => {
   it('produces a distinguishable visual per functional state', () => {
     const seen = new Set<string>();

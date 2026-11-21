@@ -27,4 +27,17 @@ from nox.release.keys import TrustedKey
 
 __all__ = ["TRUSTED_KEYS"]
 
-TRUSTED_KEYS: tuple[TrustedKey, ...] = ()
+TRUSTED_KEYS: tuple[TrustedKey, ...] = (
+    # CI signing key: the secret half lives only in the GitHub environment `release-signing`.
+    TrustedKey(
+        key_id="306d7c114db7e216",
+        public_key="MCowBQYDK2VwAyEAU+qRJ6vGP2JUXp8PFHXGKDjtD1yDmPAZj1Y7n7xth+o=",
+        not_after="2028-11-30",
+    ),
+    # Recovery key: offline only, never in CI; signs the rotation release if the CI key leaks.
+    TrustedKey(
+        key_id="4735ec2541181aed",
+        public_key="MCowBQYDK2VwAyEA9+aGl10Xs1YC3vxbFemdrxZCBeBUI5IBd83B8iy+2AA=",
+        not_after="2031-11-30",
+    ),
+)

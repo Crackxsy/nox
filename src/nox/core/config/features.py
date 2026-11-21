@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 
+from nox.core.config.games import DEFAULT_GAME_PROCESSES
 from nox.core.config.types import (
     ExpandedPath,
     OptionalExpandedPath,
@@ -254,7 +255,7 @@ class RlDetectionConfig(StrictSection):
     """Game detection: polling the process list only, never a memory read or an injection."""
 
     poll_interval_s: float = Field(default=2.0, gt=0.0)
-    process_names: list[str] = Field(default_factory=lambda: ["RocketLeague.exe"])
+    process_names: list[str] = Field(default_factory=lambda: list(DEFAULT_GAME_PROCESSES))
 
 
 class RlReplayConfig(StrictSection):

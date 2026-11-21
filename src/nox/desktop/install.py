@@ -26,21 +26,16 @@ from nox.core.config import NoxConfig
 from nox.core.events import E, Event
 from nox.core.extension import ExtensionRuntime
 from nox.core.logging import get_logger
-from nox.desktop.anticheat import ANTI_CHEAT_PROCESSES, is_anti_cheat
+from nox.desktop.anticheat import ANTI_CHEAT_PROCESSES
 from nox.desktop.computer_tools import register_computer_tools
 from nox.desktop.computer_use import (
     ComputerUse,
     DryRunSender,
     Win32Sender,
-    foreground_pid,
     stop_hotkey_vks,
 )
-from nox.desktop.process_probe import (
-    is_nox_process,
-    nox_pids,
-    process_name_of,
-    running_names_on_machine,
-)
+from nox.desktop.game_guard import GameGuard
+from nox.desktop.process_probe import is_nox_process, nox_pids
 from nox.desktop.tools import register_desktop_tools
 from nox.desktop.win32 import RealWindowProbe
 from nox.security._events import publish_nowait
@@ -86,15 +81,11 @@ DRY_RUN_ENV = "NOX_COMPUTER_USE_DRY_RUN"
 def _install_computer_use(core: CoreLike) -> ComputerUse:
     """The second input-synthesis module (`nox.desktop.computer_use`); off until enabled."""
     settings = core.config.desktop.computer_use
-    watched = {name.lower() for name in core.config.sensors.game.process_names}
     engine = core.security.engine
-
-    def game_running() -> bool:
-        return bool(_game_pids(core)) or any(is_anti_cheat(n) for n in running_names_on_machine())
-
-    def game_in_foreground() -> bool:
-        name = process_name_of(foreground_pid())
-        return name in watched or is_anti_cheat(name)
+    # The same fail-closed lock a node uses: processes, anti-cheat services and drivers, the
+    # program in front and full-screen state. The list is read on every question, so a game added
+    # to it while Nox runs counts at once.
+    guard = GameGuard(watched=lambda: core.config.sensors.game.process_names)
 
     def audit(action: str, target: str, result: str) -> None:
         core.security.audit.append(
@@ -116,8 +107,8 @@ def _install_computer_use(core: CoreLike) -> ComputerUse:
 
     computer = ComputerUse(
         enabled=lambda: bool(core.config.desktop.computer_use.enabled),
-        game_running=game_running,
-        game_in_foreground=game_in_foreground,
+        game_running=guard.running,
+        game_in_foreground=guard.in_front,
         nox_pids=nox_pids,
         sender=lambda: (
             DryRunSender()
@@ -128,6 +119,7 @@ def _install_computer_use(core: CoreLike) -> ComputerUse:
         notice=notice,
         nox_process=is_nox_process,
         confirmation_pending=lambda: bool(engine.pending()),
+        lock_cause=guard.cause,
     )
     registry = getattr(core, "registry", None)
     if registry is not None:
