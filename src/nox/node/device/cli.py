@@ -53,7 +53,8 @@ from nox.node.device.safe_fs.secret_places import secret_locations
 from nox.node.device.safe_fs.workspace import marked_above
 from nox.node.device.satellite_node import NodeSatellites, build_satellites
 from nox.node.device.tools import PlatformNotifier, default_tools
-from nox.node.device.update import NodeUpdater, UpdateCheck
+from nox.node.device.update.state import UpdateCheck
+from nox.node.device.update.updater import NodeUpdater
 from nox.node.device.world import (
     SESSION_MARKER,
     GameLock,

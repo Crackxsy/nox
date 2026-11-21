@@ -187,7 +187,7 @@ def spawn_tray() -> subprocess.Popen[bytes] | None:
         "import os, sys; sys.path.insert(0, os.environ['NOX_NODE_APP']); "
         "from nox.node.device.tray import main; main()"
     )
-    from nox.node.device.update import python_env  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
+    from nox.node.device.update.updater import python_env  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
 
     # -I: isolated - no current folder on sys.path, no PYTHON* variables, no user site; and the
     # working folder is the app folder itself, never wherever the node was started from.

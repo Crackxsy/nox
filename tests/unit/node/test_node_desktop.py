@@ -13,7 +13,7 @@ from nox.node.device import appid, tools
 from nox.node.device.cli import NodeRuntime, keep_updated
 from nox.node.device.home import NodeHome
 from nox.node.device.tray import STOP_KEYS, allowed_here, stop_here, view
-from nox.node.device.update import UpdateCheck
+from nox.node.device.update.state import UpdateCheck
 from nox.shell.hotkeys import HotkeyTracker
 from nox.shell.logic import HotkeyAction
 
@@ -219,7 +219,7 @@ def test_the_tray_starts_isolated_in_the_app_folder(monkeypatch: pytest.MonkeyPa
 def test_the_trial_start_runs_isolated_in_the_new_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import update
+    from nox.node.device.update import updater
 
     seen: dict[str, object] = {}
 
@@ -231,9 +231,9 @@ def test_the_trial_start_runs_isolated_in_the_new_copy(
         seen.update(argv=argv, **kwargs)
         return Done()
 
-    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
     monkeypatch.setenv("PYTHONHOME", "elsewhere")
-    assert update._default_smoke(tmp_path, "python-here") == "0.5.1"  # noqa: SLF001
+    assert updater._default_smoke(tmp_path, "python-here") == "0.5.1"  # noqa: SLF001
     # Isolated, and no bytecode written into the folder the launcher checks file by file.
     assert seen["argv"][:3] == ["python-here", "-I", "-B"]  # type: ignore[index]
     assert seen["cwd"] == str(tmp_path)

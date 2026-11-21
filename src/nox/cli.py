@@ -378,7 +378,7 @@ def node_run(
 ) -> None:
     """Connect to Nox and serve it until stopped (Ctrl+C). Reconnects on its own."""
     from nox.node.device.cli import RESTART, TRIAL_FAILED, build, run, secret_store  # noqa: PLC0415
-    from nox.node.device.update import RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE  # noqa: PLC0415
+    from nox.node.device.update.updater import RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE  # noqa: PLC0415
 
     outcome = run(build(_node_home(), secrets=secret_store(), say=typer.echo), tray=tray)
     if outcome == RESTART:
