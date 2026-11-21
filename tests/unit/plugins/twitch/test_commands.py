@@ -7,12 +7,11 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-import structlog
 from nox_plugin_twitch import create
 
 from nox.core.events import HealthStatus
 
-from .conftest import FakeClient, make_api
+from .conftest import FakeClient, RecordingLogger, make_api
 from .fake_irc_server import FakeIrcServer
 from .test_irc_client import _wait_until
 
@@ -124,18 +123,20 @@ def _privmsgs(server: FakeIrcServer) -> list[str]:
 async def test_chat_send_is_blocked_by_the_output_filter(
     irc_server: FakeIrcServer, fake_client: FakeClient, text: str, reason: str
 ) -> None:
-    api, plugin = await _plugin(irc_server, fake_client)
+    logger = RecordingLogger()
+    api, plugin = await _plugin(irc_server, fake_client, logger=logger)
     try:
-        with structlog.testing.capture_logs() as logs:
-            with pytest.raises(Exception, match=f"output filter: {reason}"):
-                await api.tools.call("twitch.chat.send", {"text": text})
-        await asyncio.sleep(0.1)
+        with pytest.raises(Exception, match=f"output filter: {reason}"):
+            await api.tools.call("twitch.chat.send", {"text": text})
         assert _privmsgs(irc_server) == []
-        blocked = [entry for entry in logs if entry["event"] == "twitch.outbound_blocked"]
+        blocked = [r for r in logger.records if r["event"] == "twitch.outbound_blocked"]
         assert len(blocked) == 1
+        assert blocked[0]["level"] == "warning"
         assert blocked[0]["reason"] == reason
         assert blocked[0]["chars"] == len(text)
-        assert text not in repr(logs), "the log names the reason and the length, never the text"
+        assert text not in repr(logger.records), (
+            "the log names the reason and the length, never the text"
+        )
     finally:
         await plugin.stop()
 
