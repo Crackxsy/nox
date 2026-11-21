@@ -364,10 +364,14 @@ class ComputerUse:
         nox_process: Callable[[int], bool] | None = None,
         confirmation_pending: Callable[[], bool] = lambda: False,
         terminal_nox: Callable[[int], bool] | None = None,
+        lock_cause: Callable[[], str] = lambda: "",
     ) -> None:
         self._enabled = enabled
         self._game_running = game_running
         self._game_in_foreground = game_in_foreground
+        #: Why the game guard holds (plain words, empty when it does not or cannot say); only
+        #: added to a refusal so the user learns the reason - never part of the decision.
+        self._lock_cause = lock_cause
         self._nox_pids = nox_pids
         self._make_sender = sender
         self._sender: Sender | None = None
@@ -393,7 +397,9 @@ class ComputerUse:
     def start_session(self, *, minutes: int, max_actions: int) -> Session:
         game_running = self._game_running()
         if game_running:
-            raise GameRunningError("a game is running; Nox does not use the computer while it does")
+            raise GameRunningError(
+                "a game is running; Nox does not use the computer while it does" + self._because()
+            )
         if not self._enabled():
             raise ComputerUseError(
                 "computer use is switched off; it can be turned on in the settings (with the PIN)"
@@ -421,9 +427,13 @@ class ComputerUse:
         game_running = self._game_running()
         if game_running:
             self.end_session("a game started")
-            raise GameRunningError("a game is running; Nox does not send input anywhere")
+            raise GameRunningError(
+                "a game is running; Nox does not send input anywhere" + self._because()
+            )
         if self._game_in_foreground():
-            raise GameRunningError("a game is in the foreground; nothing was sent")
+            raise GameRunningError(
+                "a game is in the foreground; nothing was sent" + self._because()
+            )
         if not self._enabled():
             self.end_session("switched off")
             raise ComputerUseError("computer use is switched off")
@@ -439,6 +449,11 @@ class ComputerUse:
             raise ComputerUseError("stopped by the user's hotkey")
         return self._sender
 
+    def _because(self) -> str:
+        """` (<cause>)` for a refusal message, or nothing when the guard names no cause."""
+        cause = self._lock_cause().strip()
+        return f" ({cause})" if cause else ""
+
     def blocks_confirmation(self) -> bool:
         """True while a session is open and for `CONFIRMATION_QUIET_S` after Nox's last event:
         the core then refuses an "allow" answer and privileged dashboard requests, so no click
@@ -450,7 +465,12 @@ class ComputerUse:
 
     def typing_refusal(self, pid: int, title: str) -> str | None:
         """`desktop.type_text`'s half of the lock (`nox.desktop.tools.InputGuard`): typing is
-        refused into Nox's windows by the same check as a click, and while a confirmation waits."""
+        refused into Nox's windows by the same check as a click, while a confirmation waits, and -
+        like a click - never while a game runs or is in front."""
+        if self._game_running() or self._game_in_foreground():
+            return (
+                "a game is running or in front; Nox does not send input anywhere" + self._because()
+            )
         if self._confirmation_pending():
             return (
                 "a Nox confirmation is waiting for your answer; nothing is typed until it is given"
