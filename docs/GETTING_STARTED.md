@@ -69,7 +69,8 @@ consent (separately, and never silently), and which AI backend to use - probing 
 choose. Every step is skippable and every answer can be changed by running it again.
 
 It writes only to `%APPDATA%\Nox\user.yaml`. Secrets never go in there; they go to the Windows
-Credential Manager, via `nox secrets set <name>`.
+Credential Manager (an owner-only `secrets.json` on a Linux server without a keyring), via
+`nox secrets set <name>`.
 
 ## 4. Start it
 
@@ -100,7 +101,8 @@ The installer offers one (ticked by default). From a source checkout, make one b
 To start it with Windows, put that same shortcut in
 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` (press Win+R and type `shell:startup`).
 
-An installed copy from an installer built before 0.5.0's start fix does not start at all - see
+An installed copy from an installer built from any version up to and including 0.5.0 does not
+start at all - see
 "Repairing an installation that does not start" in `installer/README.md`.
 
 ## What to try first

@@ -19,7 +19,7 @@ Binding sources for any contribution: the code contracts in this repo —
 ## Hard rules (security)
 - Kill switch, privacy zones, permission checks and hard prohibitions are enforced in code below the AI layer, never in prompts.
 - Rocket League: observation only. Never import or call input-synthesis, memory-reading or injection APIs for game windows — CI fails the build if one appears (the `guard-security-model` job).
-- Secrets only via `keyring` (Windows Credential Manager) through `nox.security.secrets`. Never in code, config, Git, logs, prompts, docs or test fixtures (tests use an in-memory backend).
+- Secrets only via `nox.security.secrets`: the `keyring` package (Windows Credential Manager) or, on a Linux server without a keyring, an owner-only file. Never in code, config, Git, logs, prompts, docs or test fixtures (tests use an in-memory backend).
 - No telemetry, no outbound calls except user-configured providers/integrations, and only through the egress guard.
 - No fake implementations: a feature either works and is tested, or is explicitly reported as missing/degraded. No stubs that silently return success.
 - Raw audio is never persisted. Transcripts and memory respect privacy mode/zones.

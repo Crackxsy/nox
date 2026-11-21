@@ -39,7 +39,8 @@ machine (open point: [#30](https://github.com/Crackxsy/nox/issues/30)). What it 
 
 There are **no update channels** (no stable/beta/dev choice) and no updater inside a Windows
 desktop install: to update, run a newer installer over the old one, or pull and rebuild a source
-checkout. An installer built before 0.5.0's start fix produces a copy that does not start - see
+checkout. An installer built from any version up to and including 0.5.0 produces a copy that does
+not start - see
 "Repairing an installation that does not start" in [`installer/README.md`](../installer/README.md).
 
 Because the installer is unsigned, Windows may warn when you start it - see the SmartScreen and
@@ -73,7 +74,8 @@ flow covers the name, privacy and voice, and the rest is under Settings. The ste
 Every step has a safe default and can be skipped; skipped steps simply keep whatever
 `config/defaults.yaml` already specifies. The wizard only ever writes to your personal
 `%APPDATA%\Nox\user.yaml` — it never touches the shipped defaults, and it never writes a secret
-into that file (secrets go to the Windows Credential Manager only). Run `nox onboard` again any
+into that file (secrets go to the Windows Credential Manager, or on a Linux server without a keyring to an
+owner-only file). Run `nox onboard` again any
 time to change these answers.
 
 ## 3. Starting and stopping Nox

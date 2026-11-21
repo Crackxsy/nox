@@ -46,7 +46,8 @@ project lore to make sense, the rule is wrong.
 
 - Kill switch, permissions, privacy modes and the egress guard are enforced in code, never by a
   prompt. Every outbound request goes through the guard; every consequential action is audited.
-- Secrets live in the Windows Credential Manager only. No personal names, e-mail addresses,
+- Secrets live in the OS secret store only (the Windows Credential Manager; an owner-only file on a
+  Linux server without a keyring). No personal names, e-mail addresses,
   machine paths or private project names anywhere in the repository.
 
 ## 7. UI and UX

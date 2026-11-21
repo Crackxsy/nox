@@ -146,8 +146,9 @@ pet's own menu, or the spoken phrase "Nox, Notaus".
 
 ## Setting up the integrations
 
-Every integration is optional and off until you configure it. Secrets always go into the **Windows
-Credential Manager** — never into a file in this repository, never into a log, never into a prompt.
+Every integration is optional and off until you configure it. Secrets go into the **Windows
+Credential Manager** (on a Linux server without a keyring, into an owner-only `secrets.json` in
+Nox's data folder) — never into a file in this repository, never into a log, never into a prompt.
 `nox onboard` walks through the same steps interactively; the commands below are the manual route.
 
 ### Twitch (chat bot)
@@ -243,7 +244,7 @@ nothing is written back, and no Google or school account is ever handed to Nox.
 3. Paste each address in the dashboard under **Einstellungen → Integrationen → Kalender**, or
    store it with `.venv\Scripts\python.exe -m nox.cli secrets set nox/calendar/google_ics_url`
    (and `nox/calendar/school_ics_url`). The address *is* the credential - anyone who has it can
-   read the whole calendar - so it lives in the Windows Credential Manager like a token and is
+   read the whole calendar - so it lives in the secret store (the Windows Credential Manager) like a token and is
    never written to a file, a log or a prompt. A failed fetch is reported as its HTTP status, not
    its URL.
 
@@ -384,7 +385,8 @@ Details: [`docs/PRIVACY.md`](docs/PRIVACY.md).
   prohibitions are enforced in code, so no prompt and no plugin manifest can talk its way past them.
 - **Games are observation-only.** No input synthesis, no process-memory access; a CI job fails the
   build if such an API ever appears in `src/` or `plugins/rl/`.
-- **Secrets only in the Windows Credential Manager** — never in code, config, logs or prompts. CI
+- **Secrets only in the OS secret store** (the Windows Credential Manager; on a Linux server
+  without a keyring an owner-only file) — never in code, config, logs or prompts. CI
   scans the working tree *and* the git history on every run - for a pull request every commit it
   adds, for a branch its whole history.
 - **All egress goes through a guard** with a per-profile, per-plugin allowlist; plugins run as
@@ -519,8 +521,11 @@ audit and a full-history secrets scan.
 
 ## Languages
 
-- **The app** speaks German or English: `identity.ui_language` (`de` by default, set at onboarding)
-  chooses the language of the dashboard and the pet window.
+- **The app** speaks German or English. `identity.ui_language` (`de` by default, set at onboarding)
+  chooses the language of the tray menu and dialogs, the terminal output, the onboarding wizard and
+  the language Nox answers in by default. The dashboard and the pet window choose theirs
+  separately, in the browser: a `?lang=de|en` in the address, else the browser's preferred
+  language, else German - so an English browser shows them in English whatever `ui_language` says.
 - **The documentation is English.** Three guides also exist in German: Nodes
   ([`docs/NODES.de.md`](docs/NODES.de.md)), Network access
   ([`docs/NETWORK_ACCESS.de.md`](docs/NETWORK_ACCESS.de.md)) and Raspberry Pi
