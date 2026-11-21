@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from nox.ai.base import AiRole
 from nox.ai.config import RouterConfig
-from nox.ai.errors import BudgetExceededError, NoProviderAvailableError
+from nox.ai.errors import (
+    BudgetExceededError,
+    NoProviderAvailableError,
+    NoProviderCause,
+    ProviderLimitedError,
+)
+from nox.ai.limits import ProviderLimit
 from nox.ai.router import DefaultRouter
 from nox.core.events import E, HealthStatus
 from tests.unit.fakes import MonotonicClock as Clock
@@ -24,6 +31,7 @@ def build(
     cloud_allowed: bool = True,
     clock: Clock | None = None,
     today: date | None = None,
+    wall_clock: Callable[[], datetime] | None = None,
 ) -> DefaultRouter:
     cfg = config or RouterConfig(fallback_chain=[p.pid for p in providers])
     return DefaultRouter(
@@ -33,6 +41,7 @@ def build(
         cloud_allowed=lambda: cloud_allowed,
         clock=clock or Clock(),
         today=lambda: today or date(2026, 9, 9),
+        **({"wall_clock": wall_clock} if wall_clock else {}),
     )
 
 
@@ -308,3 +317,235 @@ async def test_usage_resets_on_new_day(bus: FakeBus) -> None:
     assert router.usage_today()["all"] == {"chat": 100}
     day["value"] = date(2026, 9, 10)
     assert router.usage_today()["all"] == {}
+
+
+# ---- a provider whose plan limit is used up ------------------------------------------------------
+
+WALL = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+
+
+class WallClock:
+    def __init__(self) -> None:
+        self.now = WALL
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+def limited_error(hours: float = 3.0, *, estimated: bool = False) -> ProviderLimitedError:
+    limit = ProviderLimit(
+        provider="claude_code",
+        kind="five_hour",
+        until=WALL + timedelta(hours=hours),
+        estimated=estimated,
+    )
+    return ProviderLimitedError("claude_code", "5-hour limit reached", limit)
+
+
+async def test_a_plan_limit_keeps_the_provider_out_far_longer_than_the_health_cache(
+    bus: FakeBus,
+) -> None:
+    cloud = FakeProvider("claude_code", local=False, error=limited_error())
+    local = FakeProvider("ollama", text="local answer")
+    clock, wall = Clock(), WallClock()
+    router = build(bus, cloud, local, clock=clock, wall_clock=wall)
+
+    first = await router.complete(make_request())
+    health_before = cloud.health_calls
+    clock.advance(3600)  # an hour on the monotonic clock: far past the 60 s health cache
+    wall.now = WALL + timedelta(hours=1)
+    second = await router.complete(make_request(request_id="req-2"))
+
+    assert first.provider == second.provider == "ollama"
+    assert cloud.complete_calls == 1  # the second request never asked the limited provider
+    assert cloud.health_calls == health_before  # nor its health: that costs a process or a request
+    assert "usage limit reached (five_hour)" in router.explain("req-2")
+
+
+async def test_the_limit_is_announced_once_with_what_answers_meanwhile(bus: FakeBus) -> None:
+    cloud = FakeProvider("claude_code", local=False, error=limited_error())
+    local = FakeProvider("ollama")
+    router = build(bus, cloud, local, wall_clock=WallClock())
+
+    await router.complete(make_request())
+    await router.complete(make_request(request_id="req-2"))
+
+    announced = bus.of(E.AI_PROVIDER_LIMITED)
+    assert len(announced) == 1
+    assert announced[0].payload == {
+        "provider": "claude_code",
+        "kind": "five_hour",
+        "until": (WALL + timedelta(hours=3)).isoformat(),
+        "estimated": False,
+        "fallback": "local",
+    }
+
+
+@pytest.mark.parametrize(
+    ("rest", "fallback"),
+    [(["ollama", "rules"], "local"), (["rules"], "rules")],
+)
+async def test_the_announcement_names_the_fallback_that_is_left(
+    bus: FakeBus, rest: list[str], fallback: str
+) -> None:
+    cloud = FakeProvider("claude_code", local=False, error=limited_error())
+    router = build(
+        bus, cloud, *(FakeProvider(pid, text=pid) for pid in rest), wall_clock=WallClock()
+    )
+
+    await router.complete(make_request())
+
+    assert bus.of(E.AI_PROVIDER_LIMITED)[0].payload["fallback"] == fallback
+
+
+async def test_a_limited_provider_with_nothing_behind_it_announces_that_nothing_answers(
+    bus: FakeBus,
+) -> None:
+    router = build(
+        bus, FakeProvider("claude_code", local=False, error=limited_error()), wall_clock=WallClock()
+    )
+
+    with pytest.raises(NoProviderAvailableError):
+        await router.complete(make_request())
+
+    assert bus.of(E.AI_PROVIDER_LIMITED)[0].payload["fallback"] == "none"
+
+
+async def test_providers_report_the_limit_with_its_end(bus: FakeBus) -> None:
+    cloud = FakeProvider("claude_code", local=False, error=limited_error())
+    router = build(bus, cloud, FakeProvider("ollama"), wall_clock=WallClock())
+    await router.complete(make_request())
+
+    infos = {info.id: info for info in await router.providers()}
+
+    assert infos["claude_code"].status is HealthStatus.UNAVAILABLE
+    assert infos["claude_code"].limited_until == WALL + timedelta(hours=3)
+    assert "five_hour" in infos["claude_code"].reason
+    assert infos["ollama"].limited_until is None
+    assert set(router.limits()) == {"claude_code"}
+
+
+async def test_after_the_reset_the_provider_is_asked_again_and_answers(bus: FakeBus) -> None:
+    cloud = FakeProvider("claude_code", local=False, error=limited_error(hours=2))
+    local = FakeProvider("ollama", text="local answer")
+    wall = WallClock()
+    router = build(bus, cloud, local, wall_clock=wall)
+    await router.complete(make_request())
+    health_before = cloud.health_calls
+
+    wall.now = WALL + timedelta(hours=2, seconds=1)
+    cloud.error = None
+    cloud.text = "claude is back"
+    response = await router.complete(make_request(request_id="req-2"))
+
+    assert response.provider == "claude_code" and response.degraded is False
+    assert router.limits() == {}
+    assert cloud.health_calls == health_before + 1  # asked again, once: the old state was dropped
+
+
+async def test_the_same_limit_met_twice_is_not_announced_twice(bus: FakeBus) -> None:
+    """Two requests in flight when the limit hits: both fail, one announcement."""
+    cloud = FakeProvider("claude_code", local=False, error=limited_error())
+    router = build(bus, cloud, FakeProvider("ollama"), wall_clock=WallClock())
+
+    await asyncio.gather(
+        router.complete(make_request(request_id="a")),
+        router.complete(make_request(request_id="b")),
+    )
+
+    assert len(bus.of(E.AI_PROVIDER_LIMITED)) == 1
+
+
+async def test_without_any_fallback_the_error_says_it_was_the_limit(bus: FakeBus) -> None:
+    cloud = FakeProvider("claude_code", local=False, error=limited_error(estimated=True))
+    router = build(bus, cloud, wall_clock=WallClock())
+
+    with pytest.raises(NoProviderAvailableError) as first:
+        await router.complete(make_request())
+    with pytest.raises(NoProviderAvailableError) as second:  # now skipped before it is asked
+        await router.complete(make_request(request_id="req-2"))
+
+    for caught in (first, second):
+        assert caught.value.cause is NoProviderCause.LIMIT
+        assert caught.value.limit is not None and caught.value.limit.kind == "five_hour"
+    assert first.value.limit is not None and first.value.limit.estimated is True
+
+
+async def test_a_limit_in_the_middle_of_a_stream_ends_in_an_error_with_the_cause(
+    bus: FakeBus,
+) -> None:
+    cloud = FakeProvider(
+        "claude_code",
+        local=False,
+        chunks=["Hallo", " Welt"],
+        fail_after_chunks=1,
+        error=limited_error(),
+    )
+    router = build(bus, cloud, FakeProvider("ollama"), wall_clock=WallClock())
+    received: list[str] = []
+
+    with pytest.raises(NoProviderAvailableError) as caught:
+        async for chunk in router.stream(make_request()):
+            received.append(chunk.delta)
+
+    assert received == ["Hallo"]  # no fallback once words were delivered
+    assert caught.value.cause is NoProviderCause.LIMIT
+    assert len(bus.of(E.AI_PROVIDER_LIMITED)) == 1
+    assert bus.of(E.AI_PROVIDER_LIMITED)[0].payload["fallback"] == "local"
+
+
+class LimitAwareProvider(FakeProvider):
+    """Answers, but has met its plan limit on the way out (an answer cut short by it)."""
+
+    def __init__(self, pid: str, limit: ProviderLimit) -> None:
+        super().__init__(pid, local=False, text="partial answer")
+        self.limit = limit
+
+    def active_limit(self) -> ProviderLimit | None:
+        return self.limit
+
+
+async def test_a_provider_that_answered_but_met_its_limit_is_kept_out_afterwards(
+    bus: FakeBus,
+) -> None:
+    cloud = LimitAwareProvider("claude_code", limited_error().limit)
+    local = FakeProvider("ollama", text="local answer")
+    router = build(bus, cloud, local, wall_clock=WallClock())
+
+    first = await router.complete(make_request())
+    second = await router.complete(make_request(request_id="req-2"))
+
+    assert first.provider == "claude_code" and second.provider == "ollama"
+    assert len(bus.of(E.AI_PROVIDER_LIMITED)) == 1
+
+
+async def test_other_failures_still_only_cost_a_minute_and_are_never_called_a_limit(
+    bus: FakeBus,
+) -> None:
+    cloud = FakeProvider("claude_code", local=False, error=RuntimeError("boom"))
+    router = build(bus, cloud, FakeProvider("ollama"), wall_clock=WallClock())
+
+    await router.complete(make_request())
+
+    assert bus.of(E.AI_PROVIDER_LIMITED) == []
+    assert router.limits() == {}
+
+
+async def test_the_causes_of_having_no_provider_are_told_apart(bus: FakeBus) -> None:
+    privacy = build(bus, FakeProvider("claude_code", local=False), cloud_allowed=False)
+    with pytest.raises(NoProviderAvailableError) as private:
+        await privacy.complete(make_request(privacy_mode="private"))
+    broken = build(bus, FakeProvider("ollama", error=RuntimeError("down")))
+    with pytest.raises(NoProviderAvailableError) as failed:
+        await broken.complete(make_request())
+    down = build(bus, FakeProvider("ollama", status=HealthStatus.UNAVAILABLE))
+    with pytest.raises(NoProviderAvailableError) as unavailable:
+        await down.complete(make_request())
+    slow = build(bus, FakeProvider("ollama", delay_s=1.0))
+    with pytest.raises(NoProviderAvailableError) as timed_out:
+        await slow.complete(make_request(timeout_s=0.05))
+
+    assert private.value.cause is NoProviderCause.PRIVACY
+    assert failed.value.cause is NoProviderCause.FAILED
+    assert unavailable.value.cause is NoProviderCause.UNAVAILABLE
+    assert timed_out.value.cause is NoProviderCause.TIMEOUT
