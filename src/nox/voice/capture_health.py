@@ -12,7 +12,8 @@ what the pipeline does instead:
 * `CaptureSupervisor` runs the frame loop under supervision. It notices an ended or failed loop and
   a *stalled* one (capture is meant to be active, yet no frame arrived for a while), tears the
   input down, waits with a growing delay (capped) and opens it again. A changed set of input
-  devices cuts the wait short, so plugging the headset back in is noticed within seconds.
+  devices cuts the wait short - where the host reports the change at all: PortAudio lists only the
+  devices present when it was initialised, and that is never redone while audio plays.
 
 Neither touches the privacy decision: whether capture is allowed at all stays with the pipeline's
 gate, and a restart re-applies that gate rather than opening the device on its own. Time and
@@ -41,6 +42,9 @@ STALL_AFTER_S = 3.0
 WATCH_TICK_S = 0.5
 #: While waiting to retry, how often the list of input devices is compared with the last one.
 DEVICE_POLL_S = 2.0
+#: A failure within this long of a recovery is the same unstable microphone, not a new episode:
+#: the retry delay keeps growing instead of starting over at one second.
+FLAP_WINDOW_S = 60.0
 
 
 class CaptureState(StrEnum):
@@ -54,6 +58,8 @@ class CaptureNotice(StrEnum):
 
     DEAF = "deaf"
     RECOVERED = "recovered"
+    #: The microphone keeps coming back and dropping out again.
+    UNSTABLE = "unstable"
 
 
 #: What Nox says about it, by language: a short sentence, not an error message.
@@ -65,6 +71,10 @@ _NOTICE_TEXTS: dict[CaptureNotice, dict[str, str]] = {
     CaptureNotice.RECOVERED: {
         "de": "Ich höre dich wieder.",
         "en": "I can hear you again.",
+    },
+    CaptureNotice.UNSTABLE: {
+        "de": "Mein Mikrofon wackelt, ich höre dich vielleicht nicht durchgehend.",
+        "en": "My microphone keeps dropping out, so I may miss some of what you say.",
     },
 }
 
@@ -84,15 +94,26 @@ class CaptureMonitor:
         *,
         deaf_after: int = DEAF_AFTER_FAILURES,
         backoff_s: Sequence[float] = RETRY_BACKOFF_S,
+        clock: Callable[[], float] = time.monotonic,
+        flap_window_s: float = FLAP_WINDOW_S,
     ) -> None:
         if deaf_after < 1 or not backoff_s:
             raise ValueError("deaf_after must be at least 1 and backoff_s must not be empty")
         self._deaf_after = deaf_after
         self._backoff_s = tuple(backoff_s)
+        self._clock = clock
+        self._flap_window_s = flap_window_s
         self.state = CaptureState.LISTENING
         self.reason = ""
         self.failures = 0
         self._announced_deaf = False
+        self._announced_unstable = False
+        #: When audio last came back after a failure, and how many failures that episode had.
+        self._recovered_at: float | None = None
+        self._failures_before_recovery = 0
+        self._relapse = False
+        #: Failures since audio last flowed; a relapse that never recovers turns deaf as usual.
+        self._episode_failures = 0
 
     @property
     def failing(self) -> bool:
@@ -104,12 +125,27 @@ class CaptureMonitor:
         return self._backoff_s[index]
 
     def failure(self, reason: str) -> CaptureNotice | None:
-        """Record one failed attempt; returns `DEAF` the one time the user should hear about it."""
+        """Record one failed attempt; returns the notice the user should hear, once per episode:
+        `DEAF` after enough failures in a row, `UNSTABLE` when the microphone keeps relapsing."""
+        if self.failures == 0 and self._recovered_at is not None:
+            if self._clock() - self._recovered_at < self._flap_window_s:
+                self.failures = self._failures_before_recovery  # same unstable device
+                self._relapse = True
+            else:
+                self._relapse = self._announced_unstable = False
+            self._recovered_at = None
         self.failures += 1
+        self._episode_failures += 1
         self.reason = reason
         if self.failures < self._deaf_after:
             self.state = CaptureState.RECOVERING
             return None
+        if self._relapse and self._episode_failures < self._deaf_after:
+            self.state = CaptureState.RECOVERING
+            if self._announced_unstable:
+                return None
+            self._announced_unstable = True
+            return CaptureNotice.UNSTABLE
         self.state = CaptureState.DEAF
         if self._announced_deaf:
             return None
@@ -124,14 +160,24 @@ class CaptureMonitor:
         if self.state is CaptureState.LISTENING:
             return None
         notice = CaptureNotice.RECOVERED if self._announced_deaf else None
-        self.reset()
-        return notice
-
-    def reset(self) -> None:
+        failures = self.failures
+        self._episode_failures = 0
         self.state = CaptureState.LISTENING
         self.reason = ""
         self.failures = 0
         self._announced_deaf = False
+        self._recovered_at = self._clock()
+        self._failures_before_recovery = failures
+        return notice
+
+    def reset(self) -> None:
+        """Forget everything: capture is being started, or is closed on purpose."""
+        self.state = CaptureState.LISTENING
+        self.reason = ""
+        self.failures = self._episode_failures = 0
+        self._announced_deaf = self._announced_unstable = self._relapse = False
+        self._recovered_at = None
+        self._failures_before_recovery = 0
 
     def health(self) -> tuple[HealthStatus, str]:
         """`unavailable` with the reason while capture is down, `available` otherwise."""
@@ -266,6 +312,10 @@ class CaptureSupervisor:
             known = await self._wait_to_retry(self._monitor.next_delay_s(), known)
             if self._stopped():
                 return
+            if not self._is_active():
+                await self._settle_closed()
+                return
+            failures = self._monitor.failures
             try:
                 await self._reopen()
             except asyncio.CancelledError:
@@ -274,12 +324,28 @@ class CaptureSupervisor:
                 self._failed(f"cannot reopen the microphone: {type(exc).__name__}: {exc}")
                 continue
             log.info("voice.capture_reopened", failures=self._monitor.failures)
+            if self._monitor.failures == failures:
+                self._trouble.clear()  # a failure from before the reopen is not news
             return
+
+    async def _settle_closed(self) -> None:
+        """The gate closed while the microphone was down (muted, push-to-talk released, privacy
+        off): nobody is asking it to work, so there is nothing to retry and nothing to report.
+        The input is put in its closed state; the next time capture is wanted, it either works
+        or fails again, and that is reported afresh."""
+        self._monitor.reset()
+        log.info("voice.capture_closed_while_down")
+        try:
+            await self._reopen()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a closed input that will not reset is not news
+            log.debug("voice.capture_close_failed", error=f"{type(exc).__name__}: {exc}")
 
     async def _wait_to_retry(self, delay_s: float, known: tuple[str, ...]) -> tuple[str, ...]:
         """Sleep up to `delay_s`, but give up waiting as soon as the input devices change."""
         waited = since_poll = 0.0
-        while waited < delay_s and not self._stopped():
+        while waited < delay_s and not self._stopped() and self._is_active():
             step = min(self._tick_s, delay_s - waited)
             await self._sleep(step)
             waited += step

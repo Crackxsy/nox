@@ -349,12 +349,18 @@ hands-free use. Change it in the dashboard under Einstellungen.
 **When the microphone goes away.** A headset that is unplugged, a driver reset or a sleep/wake cycle
 used to leave Nox deaf without a sign. The capture loop now runs under a supervisor: if the input
 fails or stops delivering audio while capture is meant to be on, it is closed and opened again after
-1, 2, 5, 10 and then every 30 seconds, and a newly appearing input device ends the wait at once. The
-voice health line shows `limited` with the reason ("microphone: ..."), and after three failures in a
-row Nox says once, on the private channel, "Ich höre dich gerade nicht." ("I can't hear you right
-now."), and once more when audio flows again. A microphone that is closed on purpose (push-to-talk
-waiting, muted, privacy off) is silence, not a failure, and a restart never opens a device the
-privacy gate keeps closed.
+1, 2, 5, 10 and then every 30 seconds (a microphone that keeps dropping out waits longer each time).
+The voice health line shows `limited` with the reason ("microphone: ..."). After three failures in a
+row the core says once, on the private channel, "Ich höre dich gerade nicht." ("I can't hear you
+right now."), and once more when audio flows again - but only where unprompted speech is allowed
+(not muted, no privacy zone, not in a quiet privacy mode, outside quiet hours); otherwise the health
+line is all you get. A microphone that keeps dropping out is announced once as "wackelt". A
+microphone that is closed on purpose (push-to-talk waiting, muted, privacy off) is silence, not a
+failure, and a restart never opens a device the privacy gate keeps closed. The list of input
+devices is compared every 2 seconds while the microphone is down, but PortAudio only knows the
+devices that were present when audio was initialised: a headset plugged in later is reliably found
+at the next restart of the voice service (re-initialising PortAudio would cut off speech that is
+playing).
 
 **How fast a spoken answer is.** The voice worker times every voice turn from the end of your
 utterance to the first audio chunk handed to the output device: the end-of-speech decision, the

@@ -153,6 +153,8 @@ async def test_a_sentence_requested_right_after_an_interruption_belongs_to_the_n
 
     assert out.played_ids() == ["old-1", "new-1"]
     assert events.ids(E.TTS_FINISHED) == ["new-1"]
+    # The new sentence did not rewrite why the old turn was cut off.
+    assert [p["reason"] for p in events.of(E.TTS_INTERRUPTED)] == ["barge_in", "barge_in"]
 
 
 async def test_an_interruption_between_two_sentences_still_drops_the_waiting_one() -> None:
@@ -220,3 +222,16 @@ async def test_a_second_interruption_stops_what_the_first_one_let_through() -> N
 
     assert out.played_ids() == ["a1", "b1"]  # b1 belonged to the new generation, and plays
     assert events.ids(E.TTS_INTERRUPTED) == ["a1", "a2", "b1"]  # until the second one cuts it
+
+
+async def test_an_interruption_after_everything_finished_has_nothing_to_stop() -> None:
+    """Finished sentences leave nothing in flight, so a late interruption is not forwarded."""
+    pipeline, out, _, events = make()
+    out.release.set()
+    await pipeline.say(sentence("s1"))
+    await pipeline.say(sentence("s2"))
+
+    await pipeline.interrupt(reason="barge_in")
+
+    assert out.stops == []
+    assert events.of(E.TTS_INTERRUPTED) == []

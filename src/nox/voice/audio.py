@@ -80,8 +80,9 @@ def input_device_names() -> list[str]:
 
     Blocking: it walks the host APIs, so the capture supervisor calls it from a thread. It is
     compared with an earlier answer to notice a headset that was plugged in while the microphone
-    was down; the list is PortAudio's own and is not refreshed until the library is initialised
-    again, which is never done while audio is playing.
+    was down. The list is PortAudio's own and is not refreshed until the library is initialised
+    again, which is never done here because it would cut off playing speech; so a device plugged in
+    later may only show up after the voice service restarts.
     """
     return sorted(f"{d['hostapi']}:{d['name']}" for d in list_devices() if d["inputs"] != "0")
 

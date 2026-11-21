@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from nox.core.events import HealthStatus
+from nox.core.events import E, HealthStatus
 from nox.voice.capture_health import (
     DEAF_AFTER_FAILURES,
     RETRY_BACKOFF_S,
@@ -100,8 +100,9 @@ class Rig:
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
-    def spoken(self) -> list[str]:
-        return [r.text for r in self.tts.requests]
+    def notices(self) -> list[str]:
+        """The capture notices the worker sent to the core, in order."""
+        return [p["notice"] for n, p in self.events if n == E.VOICE_CAPTURE_NOTICE]
 
 
 @pytest.fixture
@@ -184,7 +185,7 @@ async def test_a_capture_loop_that_ends_is_started_again_and_listens(rig: Rig) -
     await rig.feed(5)  # audio flows again
 
     assert rig.pipeline.capture_health() == (HealthStatus.AVAILABLE, "capturing")
-    assert rig.spoken() == []  # a single hiccup is nothing to talk about
+    assert rig.notices() == []  # a single hiccup is nothing to talk about
     await rig.pipeline.stop()
 
 
@@ -223,22 +224,21 @@ async def test_a_microphone_that_stays_gone_is_announced_once_and_not_on_every_r
     await rig.run_for(sum(RETRY_BACKOFF_S) + 5 * 30.0)  # many more attempts than the threshold
 
     assert len(rig.audio_in.start_times) > DEAF_AFTER_FAILURES + 3
-    assert rig.spoken() == ["Ich höre dich gerade nicht."]
+    assert rig.notices() == ["deaf"]
     status, reason = rig.pipeline.capture_health()
     assert status is HealthStatus.UNAVAILABLE
     assert "no input device" in reason
     await rig.pipeline.stop()
 
 
-async def test_the_notice_is_spoken_on_the_private_channel_in_the_configured_language() -> None:
-    rig = Rig(language="en")
+async def test_the_worker_does_not_speak_the_notice_itself(rig: Rig) -> None:
+    """An unprompted sentence is the core's to allow (quiet hours, privacy zones, ...)."""
     rig.audio_in.open_error = OSError("no input device")
     await rig.pipeline.start()
-    await rig.until(lambda: bool(rig.tts.requests))
+    await rig.until(lambda: bool(rig.notices()))
 
-    request = rig.tts.requests[0]
-    assert (request.text, request.language) == ("I can't hear you right now.", "en")
-    assert str(request.channel) == "private"
+    assert rig.tts.requests == []
+    assert rig.pipeline._say_lock.locked() is False  # noqa: SLF001 - nothing was queued to play
     await rig.pipeline.stop()
 
 
@@ -252,7 +252,7 @@ async def test_recovery_after_a_long_outage_is_announced_once(rig: Rig) -> None:
     await rig.feed(120)  # audio keeps flowing, for a minute of fake time and more
 
     assert rig.pipeline.capture_health()[0] is HealthStatus.AVAILABLE
-    assert rig.spoken() == ["Ich höre dich gerade nicht.", "Ich höre dich wieder."]
+    assert rig.notices() == ["deaf", "recovered"]
     await rig.pipeline.stop()
 
 
@@ -290,7 +290,7 @@ async def test_a_closed_gate_is_silence_not_a_stall() -> None:
 
     assert rig.audio_in.starts == 1
     assert rig.audio_in.opens == 0
-    assert rig.spoken() == []
+    assert rig.notices() == []
     assert rig.pipeline.capture_health() == (HealthStatus.AVAILABLE, "capturing")
     await rig.pipeline.stop()
 
@@ -340,17 +340,17 @@ async def test_nothing_is_said_once_the_kill_phrase_is_latched_or_the_pipeline_s
     pipeline._kill_latched = True  # noqa: SLF001 - what a heard kill phrase leaves behind
     pipeline._announce_capture(CaptureNotice.DEAF)  # noqa: SLF001
     await settle()
-    assert rig.spoken() == []
+    assert rig.notices() == []
 
     pipeline._kill_latched = False  # noqa: SLF001
     pipeline._announce_capture(CaptureNotice.DEAF)  # noqa: SLF001
-    await rig.until(lambda: bool(rig.spoken()))
-    assert rig.spoken() == ["Ich höre dich gerade nicht."]  # so the silence above was the guard
+    await rig.until(lambda: bool(rig.notices()))
+    assert rig.notices() == ["deaf"]  # so the silence above was the guard
 
     await pipeline.stop()
     pipeline._announce_capture(CaptureNotice.RECOVERED)  # noqa: SLF001
     await settle()
-    assert rig.spoken() == ["Ich höre dich gerade nicht."]
+    assert rig.notices() == ["deaf"]
 
 
 # ---- plugging a device in ---------------------------------------------------------------------
@@ -394,3 +394,137 @@ async def test_a_device_list_that_cannot_be_read_is_not_an_error() -> None:
     await rig.until(lambda: len(rig.audio_in.start_times) >= 4)
     assert rig.pipeline.capture_health()[0] is HealthStatus.UNAVAILABLE
     await rig.pipeline.stop()
+
+
+# ---- a closed gate ends the failure ------------------------------------------------------------
+
+
+async def test_a_failure_does_not_outlive_the_push_to_talk_that_provoked_it() -> None:
+    """Push-to-talk with a broken microphone: once the key is up nobody asks it to work."""
+    rig = Rig(listening_mode="ptt_only")
+    await rig.pipeline.start()
+    rig.audio_in.open_error = OSError("no input device")
+    await rig.pipeline.push_to_talk(True)
+    assert rig.pipeline.capture_health()[0] is HealthStatus.UNAVAILABLE
+
+    await rig.pipeline.push_to_talk(False)
+    await rig.until(lambda: rig.pipeline.capture_health()[0] is HealthStatus.AVAILABLE)
+    starts = rig.audio_in.starts
+    await rig.run_for(120)
+
+    assert rig.pipeline.capture_health() == (HealthStatus.AVAILABLE, "capturing")
+    assert rig.audio_in.starts == starts  # and nothing keeps retrying
+    assert rig.notices() == []
+    await rig.pipeline.stop()
+
+
+async def test_muting_a_broken_microphone_clears_the_failure_and_unmuting_reports_it_afresh() -> (
+    None
+):
+    rig = Rig()
+    rig.audio_in.open_error = OSError("no input device")
+    await rig.pipeline.start()
+    assert rig.pipeline.capture_health()[0] is HealthStatus.UNAVAILABLE
+
+    await rig.pipeline.set_muted(True)
+    await rig.until(lambda: rig.pipeline.capture_health()[0] is HealthStatus.AVAILABLE)
+    starts = rig.audio_in.starts
+    await rig.run_for(120)
+    assert rig.audio_in.starts == starts
+
+    await rig.pipeline.set_muted(False)  # the device is still broken
+    assert rig.pipeline.capture_health()[0] is HealthStatus.UNAVAILABLE
+    assert "no input device" in rig.pipeline.capture_health()[1]
+    await rig.pipeline.stop()
+
+
+async def test_a_deaf_episode_that_ends_by_muting_is_not_announced_as_recovered() -> None:
+    rig = Rig()
+    rig.audio_in.open_error = OSError("no input device")
+    await rig.pipeline.start()
+    await rig.until(lambda: rig.notices() == ["deaf"])
+
+    await rig.pipeline.set_muted(True)
+    await rig.run_for(60)
+
+    assert rig.notices() == ["deaf"]
+    await rig.pipeline.stop()
+
+
+# ---- a microphone that keeps dropping out ------------------------------------------------------
+
+
+class Ticker:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_relapses_shortly_after_a_recovery_continue_the_count_and_are_announced_once() -> None:
+    clock = Ticker()
+    monitor = CaptureMonitor(clock=clock)
+    notices = []
+    for relapse in range(5):
+        notices.append(monitor.failure("dropped out"))
+        assert monitor.next_delay_s() == RETRY_BACKOFF_S[min(relapse, 4)]  # keeps growing
+        clock.now += 5.0
+        assert monitor.frame() is None  # back for a few seconds each time
+        clock.now += 5.0
+
+    assert notices == [None, None, CaptureNotice.UNSTABLE, None, None]
+
+
+def test_a_microphone_that_was_stable_for_a_minute_starts_over() -> None:
+    clock = Ticker()
+    monitor = CaptureMonitor(clock=clock)
+    for _ in range(3):
+        monitor.failure("dropped out")
+        monitor.frame()
+    clock.now += 61.0
+
+    assert monitor.failure("dropped out") is None
+    assert monitor.failures == 1 and monitor.next_delay_s() == 1.0
+
+
+def test_a_relapse_that_never_recovers_turns_deaf_after_all() -> None:
+    clock = Ticker()
+    monitor = CaptureMonitor(clock=clock)
+    for _ in range(3):
+        monitor.failure("dropped out")
+        monitor.frame()
+    notices = [monitor.failure("gone") for _ in range(4)]
+
+    assert CaptureNotice.DEAF in notices
+    assert monitor.state is CaptureState.DEAF
+
+
+async def test_a_flapping_microphone_backs_off_and_says_so_once(rig: Rig) -> None:
+    await rig.pipeline.start()
+    for cycle in range(5):
+        rig.audio_in.queue.put_nowait(None)  # drops out ...
+        await rig.until(lambda cycle=cycle: rig.audio_in.starts == cycle + 2)
+        await rig.feed(3)  # ... and is back
+
+    times = rig.audio_in.start_times
+    gaps = [b - a for a, b in zip(times, times[1:], strict=False)]
+    assert gaps[2] > gaps[1] > gaps[0]  # each relapse waits longer than the one before
+    assert rig.notices() == ["unstable"]
+    await rig.pipeline.stop()
+
+
+# ---- stopping ---------------------------------------------------------------------------------
+
+
+async def test_stop_waits_for_a_device_that_is_being_opened_and_closes_it(rig: Rig) -> None:
+    await rig.pipeline.start()
+    await rig.pipeline._device_lock.acquire()  # noqa: SLF001 - a reopen is opening the device
+    stopping = asyncio.create_task(rig.pipeline.stop())
+    await settle()
+    assert not stopping.done()  # not closed from under the reopen
+
+    rig.pipeline._device_lock.release()  # noqa: SLF001
+    await stopping
+
+    assert rig.audio_in.enabled is False and rig.audio_in.stopped

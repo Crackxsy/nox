@@ -11,12 +11,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ### Added
 - **Voice: the microphone is supervised and says when it is gone.** A capture loop that ends,
   fails or goes quiet while capture should be on is restarted with a growing delay (1, 2, 5, 10,
-  then every 30 s; a new input device ends the wait), the voice health line shows `limited` with the
-  reason, and after three failures in a row Nox says "Ich höre dich gerade nicht." once and "Ich
-  höre dich wieder." once when audio is back - never on every retry. A closed gate (muted,
-  push-to-talk waiting, privacy off) is not a failure, and a restart never opens a device the gate
-  keeps closed. A device that cannot be opened no longer breaks the push-to-talk request or the
-  worker's start.
+  then every 30 s, longer still for a microphone that keeps dropping out), the voice health line
+  shows `limited` with the reason, and after three failures in a row the core says "Ich höre dich
+  gerade nicht." once and "Ich höre dich wieder." once when audio is back - never on every retry,
+  and only where unprompted speech is allowed (new event `voice.capture_notice`, decided by
+  `SpeechPolicy`). A closed gate (muted, push-to-talk waiting, privacy off) is not a failure, and a
+  restart never opens a device the gate keeps closed. A device that cannot be opened no longer
+  breaks the push-to-talk request or the worker's start. Limit: PortAudio lists only the devices
+  present when audio was initialised, so a headset plugged in later is reliably found at the next
+  restart of the voice service.
 - **Voice: turn latency is measured.** Every voice turn is timed from the end of the utterance to
   the first audio chunk (transcription, wait for the first sentence, synthesis); one `voice.turn_latency`
   log line per turn and a new request `voice.latency` with P50/P95 over the last 50 turns. Local
@@ -421,10 +424,11 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   stopped the sentence that was playing; sentences the core had already handed over waited for it
   and started right afterwards, so Nox kept talking for seconds. An interruption now ends the
   current generation: the playing sentence and every sentence waiting for its turn are dropped (each
-  still ends with exactly one `tts.interrupted`), while the next turn's sentences play normally. An
-  interruption that lands between two sentences, or while `tts.started` is still on its way, is no
-  longer lost either, and the reason of an interruption is no longer overwritten by the next
-  sentence.
+  still ends with exactly one `tts.interrupted`), while the next turn's sentences play normally. The
+  core also stops the turn that is still producing sentences as soon as the worker reports a
+  barge-in, so later sentences of the interrupted answer are not spoken either. An interruption that
+  lands between two sentences, or while `tts.started` is still on its way, is no longer lost, and
+  the reason of an interruption is no longer overwritten by the next sentence.
 - **Nodes, external review of part 4:** the node's gate never resolves or opens anything the
   core sent (a UNC path in a notice could make Windows reach out over SMB) and checks the receipt
   before any argument; path aliases (`..`, `~`, 8.3, UNC, device paths) are refused on the text,
