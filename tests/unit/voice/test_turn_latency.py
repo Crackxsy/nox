@@ -13,9 +13,9 @@ from typing import Any
 
 import numpy as np
 import pytest
-import structlog.testing
 
 from nox.core.events import E
+from nox.voice import pipeline as pipeline_module
 from nox.voice.base import Transcript, TtsRequest
 from nox.voice.latency import LatencyTracker, percentile
 from nox.voice.pipeline import DefaultVoicePipeline, PipelineConfig
@@ -30,6 +30,18 @@ from tests.unit.voice.conftest import (
     settle,
     tone,
 )
+
+
+class RecordingLog:
+    """Stands in for the pipeline's logger and keeps every call as (event, fields)."""
+
+    def __init__(self) -> None:
+        self.entries: list[tuple[str, dict[str, Any]]] = []
+
+    def _record(self, event: str, **fields: Any) -> None:
+        self.entries.append((event, fields))
+
+    info = debug = warning = error = _record
 
 
 class Clock:
@@ -312,15 +324,20 @@ async def test_speech_that_was_not_addressed_to_nox_does_not_open_a_turn() -> No
     await rig.pipeline.stop()
 
 
-async def test_each_measured_turn_is_logged_with_numbers_only() -> None:
+async def test_each_measured_turn_is_logged_with_numbers_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The pipeline's logger is replaced, not captured: whatever logging configuration an
+    # earlier test left behind decides what a captured logger sees, but not what this one gets.
+    recorder = RecordingLog()
+    monkeypatch.setattr(pipeline_module, "log", recorder)
     rig = Rig()
     await rig.pipeline.start()
     await rig.speak_the_utterance()
 
-    with structlog.testing.capture_logs() as captured:
-        await rig.pipeline.say(TtsRequest(utterance_id="u1", text="Es ist zehn Uhr."))
+    await rig.pipeline.say(TtsRequest(utterance_id="u1", text="Es ist zehn Uhr."))
 
-    entries = [e for e in captured if e["event"] == "voice.turn_latency"]
+    entries = [fields for event, fields in recorder.entries if event == "voice.turn_latency"]
     assert len(entries) == 1
     assert entries[0]["total_ms"] == 233.0  # 140 transcribe + 3 publish + 90 synthesis
     assert "Uhr" not in str(entries[0])  # milliseconds only, never the words

@@ -47,6 +47,11 @@ DEVICE_POLL_S = 2.0
 FLAP_WINDOW_S = 60.0
 
 
+async def _in_thread(function: Callable[[], Sequence[str]]) -> Sequence[str]:
+    """Run blocking device enumeration off the event loop (a seam: the tests run it inline)."""
+    return await asyncio.to_thread(function)
+
+
 class CaptureState(StrEnum):
     LISTENING = "listening"
     RECOVERING = "recovering"
@@ -363,7 +368,7 @@ class CaptureSupervisor:
         if self._input_devices is None:
             return fallback
         try:
-            return tuple(await asyncio.to_thread(self._input_devices))
+            return tuple(await _in_thread(self._input_devices))
         except Exception as exc:  # noqa: BLE001 - device enumeration is only a hint to retry sooner
             log.debug("voice.capture_device_scan_failed", error=f"{type(exc).__name__}: {exc}")
             return fallback

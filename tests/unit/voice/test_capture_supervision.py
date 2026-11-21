@@ -8,12 +8,13 @@ nothing. The privacy side is pinned too - a restart must never open a device the
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import pytest
 
 from nox.core.events import E, HealthStatus
+from nox.voice import capture_health
 from nox.voice.capture_health import (
     DEAF_AFTER_FAILURES,
     RETRY_BACKOFF_S,
@@ -103,6 +104,17 @@ class Rig:
     def notices(self) -> list[str]:
         """The capture notices the worker sent to the core, in order."""
         return [p["notice"] for n, p in self.events if n == E.VOICE_CAPTURE_NOTICE]
+
+
+@pytest.fixture(autouse=True)
+def device_scan_inline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enumerate devices on the loop: a real thread would make the fake-time tests race a
+    thread pool (slow on small machines) instead of running on the fake clock alone."""
+
+    async def inline(function: Callable[[], Sequence[str]]) -> Sequence[str]:
+        return function()
+
+    monkeypatch.setattr(capture_health, "_in_thread", inline)
 
 
 @pytest.fixture
