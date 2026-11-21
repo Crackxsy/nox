@@ -188,12 +188,17 @@ ai:
 
 pet:
   renderer: web                  # web renderer hosted by core, shown in the Qt shell and OBS
-  default_monitor: left
+  default_monitor: left           # where the pet opens when it has no saved spot: left, right,
+                                   # primary, or 1, 2, ... counted from the left. A monitor that
+                                   # is not plugged in falls back to the primary one.
   always_on_top: true
   click_through_when_idle: false
-  fps_target: 60
-  fps_in_game: 20
-  greeting_enabled: true          # speak the startup greeting (the speech policy still decides)
+  fps_target: 60                  # pet frame rate in normal use (the sleep tiers go lower)
+  fps_in_game: 20                 # pet frame rate while a game runs or the screen is taken over
+  hide_in_fullscreen: true        # hide the pet over any full-screen program (game, film,
+                                   # presentation); it returns when that ends. false: stay, at
+                                   # fps_in_game.
+  greeting_enabled: true         # speak the startup greeting (the speech policy still decides)
   quiet_in_private_modes: true    # no unsolicited speech (greeting, hints) while privacy mode is
                                    # private or offline; replies to you are never blocked
   variant: neutral                # which creature the pet window draws. `neutral`, `imp`, `fox`,

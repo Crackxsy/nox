@@ -116,7 +116,12 @@ cannot be turned off or hidden by configuration — if something is being captur
 ## 5. Core features
 
 - **Desktop pet**: a small always-on-top window with a stable personality, mood, and voice
-  (local TTS/STT by default; barge-in supported).
+  (local TTS/STT by default; barge-in supported). It stays out of the way of games: while a game
+  runs it draws at `pet.fps_in_game` (default 20) instead of `pet.fps_target` (default 60), and
+  over any full-screen program (a game, a film, a presentation) it hides itself
+  (`pet.hide_in_fullscreen`, on by default) and comes back when that ends - one you hid yourself stays hidden. It opens on
+  `pet.default_monitor` (`left`, `right`, `primary`, or `1`, `2`, ... counted from the left) and is
+  moved back onto a screen if its monitor goes away.
 - **Giving the pet a treat**: shift-click the creature, or press Shift+Enter while it has focus. It
   eats, and it cheers up a little more than it does from an ordinary click. It curls up when it
   sleeps and lies down when it is bored, on its own.

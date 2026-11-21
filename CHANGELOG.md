@@ -490,6 +490,30 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   device list and revoking now only see Telegram devices.
 - Neither web server trusted `X-Forwarded-For` on purpose, but uvicorn's default did for loopback
   peers; it is off now, so rate limits and logs always see the real client address.
+- **The pet keeps out of the way of games.** `pet.fps_in_game` and `pet.default_monitor` were in
+  the configuration but nothing read them. The shell now watches for a game (the watched-game list,
+  anti-cheat software, or a program that owns the whole screen) and tells the pet page to draw at
+  `pet.fps_in_game` instead of `pet.fps_target`; `pet.fps_target` raises the top rate too. The new
+  `pet.hide_in_fullscreen` (on by default) hides the pet over any full-screen program (a game, a film, a
+  presentation) and brings it back, without taking the keyboard focus, when that ends - a pet you hid by hand
+  stays hidden. The window opens on `pet.default_monitor` (`left`, `right`, `primary`, or a number
+  from the left; a monitor that is not plugged in falls back to the primary one) and is moved back
+  onto a screen when its monitor goes away, the resolution shrinks or it is dragged out of sight.
+- **Computer use and typing now recognise a game as a node does.** The core only knew a game by
+  its process name, so a game without anti-cheat and without a list entry (a sandbox game, for
+  example) was not caught. The core now asks the same four questions a node asks - watched game
+  or anti-cheat software running, anti-cheat service or kernel driver running, a game in front
+  or an unreadable foreground, a full-screen or presentation app owning the screen - and locks
+  whenever one cannot be answered. A refusal names the cause, and `desktop.type_text` is refused
+  by the same lock. This only ever locks more than before.
+- **Rocket League callouts were silent.** They played prepared clips, none of which ships with Nox,
+  and the error only showed up inside the voice worker. Every callout now carries its words in
+  German and English; when its clip is not installed the voice speaks the words in the active
+  voice. The docs no longer say Nox observes the game's audio - it never did; the callouts are
+  Nox's own voice on the private channel.
+- The default watched-game list (`RocketLeague.exe`) was written out in four places; the sensor,
+  the Rocket League detection and the plugin now share one definition, and a test holds the two
+  data files to it.
 
 
 ## [0.5.0] - 2026-10-14

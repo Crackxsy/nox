@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel
 
+from nox.core.config.games import DEFAULT_GAME_PROCESSES
 from nox.core.events import HealthStatus
 from nox.plugins.api import PluginApi
 from nox.rl import replay_parser
@@ -40,7 +41,9 @@ class RlPlugin:
         self.api = api
         cfg = api.config
         detection_cfg = dict(cfg.get("detection", {}))
-        self.detector = GameDetector(detection_cfg.get("process_names", ["RocketLeague.exe"]))
+        self.detector = GameDetector(
+            detection_cfg.get("process_names", list(DEFAULT_GAME_PROCESSES))
+        )
         self._poll_interval_s = float(detection_cfg.get("poll_interval_s", 2.0))
 
         folder = cfg.get("replay_folder") or ""
