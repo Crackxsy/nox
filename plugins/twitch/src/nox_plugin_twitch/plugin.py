@@ -144,12 +144,20 @@ class TwitchPlugin:
         self._info_answered_at: dict[str, float] = {}
         self._message_award_at: dict[str, float] = {}
         self._ignored = {name.lower() for name in self.settings.ignored_chatters}
+        self._login = ""
 
     async def _get_token(self) -> str | None:
         return await self.api.secrets.get(TWITCH_OAUTH_SECRET)
 
     async def _get_nick(self) -> str | None:
         return await self.api.secrets.get(TWITCH_USERNAME_SECRET)
+
+    async def _bot_login(self) -> str:
+        """The bot account's login, lower case; read once (the secret store is an IPC call and
+        the answer does not change while the worker runs). Empty until credentials exist."""
+        if not self._login:
+            self._login = (await self._get_nick() or "").strip().lower()
+        return self._login
 
     # -- lifecycle ---------------------------------------------------------------------------
 
@@ -190,7 +198,13 @@ class TwitchPlugin:
         chat_event_id = self._chat_event_id
         viewer_id = tags.user_id or login
 
-        relevance, addressed = self.relevance.classify(viewer_id, text)
+        bot_login = await self._bot_login()
+        relevance, addressed = self.relevance.classify(
+            viewer_id,
+            text,
+            replied_to_bot=bool(bot_login) and tags.reply_parent_login == bot_login,
+            bot_login=bot_login,
+        )
         await self.api.events.emit(
             "twitch.chat_message",
             {

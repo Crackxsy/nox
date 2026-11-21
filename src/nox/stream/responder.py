@@ -1,14 +1,17 @@
 """StreamResponder: turns a qualifying Twitch chat message into a spoken-in-chat answer.
 
 Triggers on `twitch.chat_message` when `addressed_to_nox` or `relevance >= stream.relevance.
-threshold`, subject to a per-channel cooldown and a max-replies-per-minute cap (both
-`stream.relevance.*`), and is silenced entirely once `security.kill_switch` is engaged (safe mode:
-no AI requests, no plugin actions - Runtime Lifecycle "Safe mode"). The answer comes from one non-
-streaming `Router.complete` turn built with `build_system_prompt(DECIDED_PERSONALITY_BLOCK, facts)`
-plus the chat message wrapped by `untrusted(text, f"twitch:{user}")` (Tool Model prompt rules: chat
-content is data, never instructions). The answer is trimmed to one line and sent
-*only* through `ToolExecutor.call("twitch.chat.send",...)` - never any other path - so it goes
-through the normal permission/audit pipeline like every other tool action.
+threshold` - except for a line that starts with `!`: a command is answered by whoever owns it (the
+Twitch plugin for Nox's own, another bot for theirs), so it only reaches the model when the
+classifier marked it as a request to Nox itself (`!nox ...`). Subject to a per-channel cooldown
+and a max-replies-per-minute cap (both `stream.relevance.*`), and is silenced entirely once
+`security.kill_switch` is engaged (safe mode: no AI requests, no plugin actions - Runtime
+Lifecycle "Safe mode"). The answer comes from one non-streaming `Router.complete` turn built with
+`build_system_prompt(DECIDED_PERSONALITY_BLOCK, facts)` plus the chat message wrapped by
+`untrusted(text, f"twitch:{user}")` (Tool Model prompt rules: chat content is data, never
+instructions). The answer is trimmed to one line and sent *only* through
+`ToolExecutor.call("twitch.chat.send",...)` - never any other path - so it goes through the normal
+permission/audit pipeline like every other tool action.
 """
 
 from __future__ import annotations
@@ -70,8 +73,12 @@ class StreamResponder:
 
     # ---- gating -------------------------------------------------------------------------------
 
-    def _qualifies(self, payload: dict[str, Any]) -> bool:
-        if bool(payload.get("addressed_to_nox", False)):
+    def _qualifies(self, payload: dict[str, Any], text: str) -> bool:
+        addressed = bool(payload.get("addressed_to_nox", False))
+        if text.startswith("!"):
+            # Never lean on the relevance score here: "!lurk why?" scores like a question.
+            return addressed
+        if addressed:
             return True
         relevance = payload.get("relevance", 0.0)
         return float(relevance or 0.0) >= self._config.threshold
@@ -95,10 +102,8 @@ class StreamResponder:
         if self._killswitch.is_engaged():
             return
         payload = ev.payload
-        if not self._qualifies(payload):
-            return
         text = str(payload.get("text", "")).strip()
-        if not text:
+        if not text or not self._qualifies(payload, text):
             return
         channel = str(payload.get("channel", "public"))
         now = self._clock()

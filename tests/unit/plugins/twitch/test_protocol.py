@@ -71,3 +71,8 @@ def test_parses_command_text_starting_with_bang() -> None:
     command, *args = text[1:].split()
     assert command == "rps"
     assert args == ["stein"]
+
+
+def test_parse_chat_tags_reads_the_author_of_the_replied_to_message() -> None:
+    assert parse_chat_tags({"reply-parent-user-login": "NoxBot"}).reply_parent_login == "noxbot"
+    assert parse_chat_tags({}).reply_parent_login == ""
