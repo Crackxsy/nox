@@ -163,9 +163,10 @@ permission.self_elevate
 
 ## Rocket League observation-only boundary
 
-Immutable, code-level, not a setting: screen/HUD capture, game audio, replay files, and
-non-invasive input *observation* (hotkey-listener statistics, never sending input) are the only
-things Nox's Rocket League feature does.
+Immutable, code-level, not a setting: Nox's Rocket League feature only observes. Today that is
+screen/HUD capture, reading replay files and noticing that the game process runs; there is no
+game-audio capture and no input observation. Anything added later stays observation-only - nothing
+is ever sent to the game.
 
 No file anywhere in the repository may import a process-memory API (`ReadProcessMemory`,
 `WriteProcessMemory`) or a third-party input-automation library (`pydirectinput`, `pyautogui`).
