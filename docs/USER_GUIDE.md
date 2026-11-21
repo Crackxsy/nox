@@ -1,33 +1,55 @@
 # Nox user guide
 
-Nox is a local-first personal companion for Windows: a desktop pet with a voice, a Twitch/OBS
-stream companion, a Rocket League coach (observation only), and (later) a project/coding
-assistant. This guide covers install, first start, day-to-day use, and troubleshooting.
+Nox is a local-first personal companion. On a Windows PC it is a desktop pet with a voice, a
+Twitch/OBS stream companion, a Rocket League coach (observation only) and a personal computer
+agent. The core can also run as an always-on home server on Linux (a Raspberry Pi), and other
+computers can join as nodes - the README's [Requirements](../README.md#requirements) say what runs
+where. This guide covers install, first start, day-to-day use and troubleshooting of the Windows
+desktop companion.
 
-> Nox is pre-v1.0. Some features described in the Product Requirements Document are not built yet
-> (project manager/coding assistant, research/creative assistant). This guide only documents what
-> exists in the current release — see `CHANGELOG.md` for what shipped when.
+> Nox is pre-v1.0. Some features planned for it are not built yet (project manager and coding
+> assistant, research/creative assistant). This guide only documents what exists in the current
+> release — see `CHANGELOG.md` for what shipped when.
+
+> **Language:** the documentation is English; the app itself speaks German or English, as you
+> choose. Only some guides also exist in German - see [Languages](../README.md#languages).
 
 ## 1. Install
 
 **Today the route is from source**, and it is four steps:
 [`docs/GETTING_STARTED.md`](GETTING_STARTED.md).
 
-An Inno Setup script that builds a Windows installer with an embedded Python runtime is in the
-repository (`installer/`), but it has not been signed, and it has not been proven on a machine
-that is not the one it was written on. So there is nothing to download yet. What it will do
-when there is:
+There is **no download yet**: no release has an installer attached. The repository contains an Inno
+Setup script that builds a Windows installer with an embedded Python runtime (`installer/`). You
+can build it yourself, and CI builds it and runs a silent install, an install over itself and an
+uninstall on a clean runner. It is **not signed**, and nobody has yet tried it by hand on a clean
+machine (open point: [#30](https://github.com/Crackxsy/nox/issues/30)). What it does:
 
-- install the program under `%ProgramFiles%\Nox` (or a folder you choose),
-- never install to, or delete, your data or vault folders,
-- let you choose stable/beta/dev update channels,
-- show the project license before you continue (see `LICENSE`),
-- offer a desktop shortcut and an optional autostart entry,
-- not enable telemetry - there is none to enable.
+- installs the program **for your user only**, under `%LOCALAPPDATA%\Programs\Nox`, and needs no
+  administrator rights for that,
+- offers one optional step that does ask for administrator rights - firewall rules that keep Nox's
+  command sandbox away from services on this computer and your home network - and finishes without
+  them if you decline (details: [`installer/README.md`](../installer/README.md)),
+- never installs to, or deletes, your data or vault folders,
+- shows the license notice before you continue (see `LICENSE`),
+- offers a desktop shortcut and an optional autostart entry (off by default),
+- asks whether this PC is "the Nox of this home" or only a node of another one
+  ([`docs/NODES.md`](NODES.md)),
+- does not enable telemetry - there is none to enable.
+
+There are **no update channels** (no stable/beta/dev choice) and no updater inside a Windows
+desktop install: to update, run a newer installer over the old one, or pull and rebuild a source
+checkout. An installer built before 0.5.0's start fix produces a copy that does not start - see
+"Repairing an installation that does not start" in [`installer/README.md`](../installer/README.md).
+
+Because the installer is unsigned, Windows may warn when you start it - see the SmartScreen and
+antivirus note in §6 (Troubleshooting).
 
 ## 2. First start: the onboarding wizard
 
-The first time Nox runs, `nox onboard` (or the installer's first-run step) walks you through:
+The first time Nox runs from a source checkout, `nox onboard` walks you through the steps below.
+The installer asks none of these questions itself; in an installed copy, the dashboard's first-run
+flow covers the name, privacy and voice, and the rest is under Settings. The steps:
 
 1. **Nox name** — what your instance calls itself. Defaults to "Nox", editable.
 2. **UI language** — German or English.
@@ -150,7 +172,9 @@ cannot be turned off or hidden by configuration — if something is being captur
     audio track*: OBS gets a "Nox Voice" source on "CABLE Output" (on the tracks you tick), and Nox
     speaks into "CABLE Input" and your headphones. The devices are also in *Settings → Voice*.
   - When the Twitch login expires, Nox shows the code to enter at twitch.tv/activate.
-- **Rocket League coach**: observation-only — screen/HUD capture, game audio, replay files. Nox
+- **Rocket League coach**: observation-only. It notices that the game runs, reads the HUD from
+  screenshots (the optional on-screen analysis is off by default and crude), parses your replay
+  files and gives short callouts; coaching quality is early. There is no game-audio capture. Nox
   never sends input to the game and never reads or injects into its process memory; this is a
   hard, code-level boundary (see `SECURITY.md` §Rocket League boundary), not a setting.
 - **Presets**: one phrase that reaches several systems at once - lights and scenes through
@@ -207,6 +231,31 @@ cannot be turned off or hidden by configuration — if something is being captur
 - **AI backend shows "unavailable"**: `nox doctor` tells you why (not logged in, model not pulled,
   server not running, etc.) — Nox degrades to the next provider in its fallback chain rather than
   failing silently; it never pretends a backend works when it does not.
+- **Nox only answers in short canned sentences**: it has neither a model nor a Claude login to ask.
+  Nox reasons through the Claude Code CLI (it needs the `claude` program on this PC and a Claude
+  account you signed in with) or a local model served by [Ollama](https://ollama.com); with neither,
+  the last link of the chain is a fixed rule set that can greet you, tell the time and date, say
+  who it is and report its own status - and says that it is a fallback. It cannot hold a
+  conversation or use tools then. Install one of the two (see
+  [`docs/GETTING_STARTED.md`](GETTING_STARTED.md) and [`docs/LOCAL_MODELS.md`](LOCAL_MODELS.md))
+  and run `nox doctor`.
+- **Nox does not hear you**: besides Nox's own consent (onboarding, privacy mode, privacy zones),
+  Windows has its own switch. Open *Settings → Privacy & security → Microphone* and turn on
+  **Let desktop apps access your microphone** (and the main *Microphone access* switch): Nox's
+  voice worker is a desktop program, not a Store app, so only that desktop-apps switch counts for
+  it. `python -m nox.worker --service voice --selftest` checks devices and a three-second
+  recording; the capture indicator shows whether the microphone is really on.
+- **If Windows or your antivirus objects**: the installer is not code-signed, so SmartScreen may
+  say "Windows protected your PC" - *More info → Run anyway* is the way through if you built the
+  installer yourself; do not run an `Nox-Setup` file from anywhere you do not trust, since there
+  is no official download yet. Antivirus products - Microsoft Defender among them - can quarantine
+  or block a freshly unpacked `python.exe` / `pythonw.exe` (the embedded runtime of an installed
+  copy, or `.venv\Scripts\python.exe` of a checkout), because it is an unfamiliar program started
+  by another program. Symptoms: Nox never starts, or stops right after the start,
+  with no window. Check *Windows Security → Virus & threat protection → Protection history* and
+  restore the file or add an exclusion for the Nox folder if you trust your copy;
+  `%LOCALAPPDATA%\Nox\startup-error.log` has the reason when the launcher itself failed. Nox does
+  not change your security software and cannot do this for you.
 - **First start is busy for a minute or two**: the memory extension indexes your whole vault once
   (one embedding request per note chunk, in the background). Chat and voice already work while it
   runs; later starts only re-index changed notes.
