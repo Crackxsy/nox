@@ -5,17 +5,25 @@ run - it checks the machine rather than guessing.
 
 ## 1. Install
 
-**There is no signed installer yet.** The Inno Setup script exists and builds one
-(`installer/build.py`), but nobody has signed or proven it, so the honest route today is from
-source. This section will change when that changes.
+**There is no installer to download yet.** The Inno Setup script exists and builds one
+(`installer/build.py`; per user, into `%LOCALAPPDATA%\Programs\Nox`), and CI installs and
+uninstalls it on a clean runner, but it is unsigned and nobody has tried it by hand on a clean
+machine, so the honest route today is from source. This section will change when that changes.
+The Linux server (Raspberry Pi) and the nodes have their own guides:
+[`docs/RASPBERRY_PI.md`](RASPBERRY_PI.md) and [`docs/NODES.md`](NODES.md).
 
-You need:
+This page is for the **Windows desktop companion**. You need:
 
-- **Windows 11.** Nox is Windows-only by design.
+- **Windows 11.** The desktop companion (pet window, hotkeys, window and program control) is
+  Windows-only. The core alone can also run on Linux as a server, and other computers can join as
+  nodes - the README's [Requirements](../README.md#requirements) list what runs where.
 - **Python 3.13 from python.org** - *not* the Microsoft Store build, which sandboxes paths.
 - **Node.js 20+**, to build the two web UIs the core serves.
-- Optional: **Ollama** for local models, **Claude Code CLI** for cloud-grade reasoning.
-  With Ollama, pull the model Nox expects: `ollama pull qwen3:4b-instruct`. Which model you
+- **A way for Nox to think**, or it can only give canned answers: the **Claude Code CLI** (needs a
+  Claude account you sign in with) for cloud-grade reasoning, **Ollama** for a local model, or both.
+  Without either, Nox falls back to a fixed rule set that greets you, tells the time and date,
+  says who it is and reports its status - it says so, and it cannot hold a conversation or use
+  tools. With Ollama, pull the model Nox expects: `ollama pull qwen3:4b-instruct`. Which model you
   use decides whether Nox can *act* or only talk - see [`docs/LOCAL_MODELS.md`](LOCAL_MODELS.md).
 
 ```powershell
@@ -61,7 +69,8 @@ consent (separately, and never silently), and which AI backend to use - probing 
 choose. Every step is skippable and every answer can be changed by running it again.
 
 It writes only to `%APPDATA%\Nox\user.yaml`. Secrets never go in there; they go to the Windows
-Credential Manager, via `nox secrets set <name>`.
+Credential Manager (an owner-only `secrets.json` on a Linux server without a keyring), via
+`nox secrets set <name>`.
 
 ## 4. Start it
 
@@ -92,7 +101,8 @@ The installer offers one (ticked by default). From a source checkout, make one b
 To start it with Windows, put that same shortcut in
 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` (press Win+R and type `shell:startup`).
 
-An installed copy from an installer built before 0.5.0's start fix does not start at all - see
+An installed copy from an installer built from any version up to and including 0.5.0 does not
+start at all - see
 "Repairing an installation that does not start" in `installer/README.md`.
 
 ## What to try first
@@ -124,6 +134,9 @@ which setting to change when you ask for something it cannot reach.
 | It will not start | `nox doctor`. It names the missing piece. |
 | The pet window is blank | The UIs were not built - step 1's `npm run build`, both of them. |
 | No voice | The `voice` extra and its models: `uv sync --extra voice`, then `nox doctor`. |
+| Nox does not hear you | Windows has its own microphone switch, apart from Nox's consent: *Settings → Privacy & security → Microphone*, and **Let desktop apps access your microphone** must be on. `python -m nox.worker --service voice --selftest` tests devices and a short recording. |
+| Nox only answers "hello", the time and its status | No model is reachable: neither the Claude Code CLI (signed in) nor Ollama (running, model pulled). `nox doctor` says which. |
+| Windows or the antivirus blocks `python.exe` | The embedded or `.venv` Python is an unfamiliar, unsigned program started by another program, and security software can quarantine it. Look at *Windows Security → Virus & threat protection → Protection history*, restore it, or exclude the Nox folder if you trust your copy. The installer is unsigned too, so SmartScreen may ask: *More info → Run anyway* - but only for an installer you built yourself. |
 | "no folder is configured" | That is the file boundary doing its job. Add one to `files.roots`. |
 | "the coding plugin is not running" | Self-extension needs the coding profile. Switch to it. |
 
