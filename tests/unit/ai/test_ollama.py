@@ -48,6 +48,8 @@ def rec() -> Recorder:
 
 
 def provider(rec: Recorder, **cfg: object) -> OllamaProvider:
+    """A provider whose model is the one `TAGS` lists, whatever Nox ships as its default."""
+    cfg.setdefault("model", "llama3.2:3b")
     return OllamaProvider(OllamaConfig(**cfg), rec.factory())  # type: ignore[arg-type]
 
 

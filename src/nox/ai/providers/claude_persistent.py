@@ -39,16 +39,23 @@ import os
 import tempfile
 import time
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
 from nox.ai._log import get_logger
 from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, Message
 from nox.ai.config import ClaudeCodeConfig
-from nox.ai.errors import ProviderError, ProviderTimeoutError, ProviderUnavailableError
+from nox.ai.errors import (
+    ProviderError,
+    ProviderLimitedError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
+from nox.ai.limits import ProviderLimit, limit_for, looks_like_limit
 from nox.ai.providers.claude_cost import TurnCost
 from nox.ai.providers.claude_session import ClaudeSession, SessionSpec
-from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem
+from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem, merge_refusals
 from nox.tools.names import from_wire
 
 log = get_logger(__name__)
@@ -73,6 +80,11 @@ DRAIN_GRACE_S = 2.0
 COST_LIMIT_NOTICE = {
     "de": " Ich höre hier auf: Das Kostenlimit für eine Antwort ist erreicht.",
     "en": " I am stopping here: the cost limit for one answer is reached.",
+}
+#: Said when the plan limit ends an answer that has already begun.
+LIMIT_CUTOFF_NOTICE = {
+    "de": " Hier muss ich aufhören: Mein Claude-Kontingent ist aufgebraucht.",
+    "en": " I have to stop here: my Claude usage limit is used up.",
 }
 
 #: Environment variables the CLI process may inherit. Everything else - an outer Claude Code
@@ -173,8 +185,13 @@ class PersistentClaude:
         workdir: Path | None,
         env: Mapping[str, str] | None = None,
         also_inherit: frozenset[str] = frozenset(),
+        on_limit: Callable[[ProviderLimit], None] | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self._cfg = config
+        #: Told when a turn ran into the plan limit (the provider keeps the state, not this class).
+        self._on_limit = on_limit
+        self._now = now or (lambda: datetime.now(UTC))
         self._also_inherit = also_inherit
         self._executable = executable
         self._creationflags = creationflags
@@ -498,6 +515,8 @@ class PersistentClaude:
                 log.debug("claude_persistent.token_pending")
         parser = ClaudeStreamParser()
         parts: list[str] = []
+        refusal: StreamItem | None = None
+        api_error: StreamItem | None = None
         first_token_ms: int | None = None
         finished = False
         #: Text after a tool call is a new block; without a space it would run into the last one.
@@ -514,6 +533,12 @@ class PersistentClaude:
                     raise ProviderError(PROVIDER_ID, "the Claude Code session ended mid-turn")
                 item = parser.feed(line)
                 if item is None:
+                    continue
+                if item.refused:
+                    refusal = merge_refusals(refusal, item)
+                    continue
+                if item.kind == "api_error":
+                    api_error = item
                     continue
                 if item.kind == "status" and item.text == "message_start":
                     cost.step_started(
@@ -560,11 +585,29 @@ class PersistentClaude:
                     finished = True
                     # The answer reached its end here (also after a halt): nothing is left to drain.
                     self._dirty = False
+                    limit = self._limit_of(item, refusal)
+                    if api_error is not None and limit is None and not parts:
+                        # The CLI's own sentence about a failed request: the error, not an answer.
+                        raise self._error_for(api_error.error or api_error.text)
+                    if limit is not None and parts:
+                        # The answer was under way: end it with a sentence instead of silence.
+                        notice = LIMIT_CUTOFF_NOTICE.get(
+                            request.metadata.get("language", "de")[:2], LIMIT_CUTOFF_NOTICE["en"]
+                        )
+                        parts.append(notice)
+                        yield AiChunk(request_id=request.request_id, delta=notice)
+                    elif limit is not None:
+                        told = refusal.error if refusal and refusal.synthetic else ""
+                        raise ProviderLimitedError(
+                            PROVIDER_ID, told or item.error or "usage limit reached", limit
+                        )
                     self._finish(session, request, item, parts, started, first_token_ms)
                     break
         except ProviderTimeoutError:
             self._abandon(session)
             raise
+        except ProviderLimitedError:
+            raise  # the session is fine: the plan is used up, not the process broken
         except ProviderError as exc:
             tail = session.stderr_tail()
             session.kill()
@@ -577,6 +620,36 @@ class PersistentClaude:
                 # left (or replaces the process if it does not wind down).
                 self._abandon(session)
         yield AiChunk(request_id=request.request_id, delta="", done=True)
+
+    def _limit_of(self, result: StreamItem, refusal: StreamItem | None) -> ProviderLimit | None:
+        """The plan limit that ended this turn, told to the provider; `None` for any other end."""
+        told = refusal is not None and refusal.synthetic
+        if not result.is_error and not told:
+            return None
+        message = (
+            (refusal.error if told and refusal else "") or result.error or result.terminal_reason
+        )
+        if refusal is None and not looks_like_limit(message):
+            return None
+        limit = limit_for(
+            PROVIDER_ID,
+            kind=refusal.limit_kind if refusal else "",
+            resets_at=refusal.limit_resets_at if refusal else None,
+            now=self._now(),
+            message=message,
+        )
+        if self._on_limit is not None:
+            self._on_limit(limit)
+        return limit
+
+    @staticmethod
+    def _error_for(message: str) -> ProviderError:
+        """The exception for a failure the CLI described itself: a login problem is
+        `unavailable`, anything else a plain provider error."""
+        lowered = message.lower()
+        if "login" in lowered or "logged in" in lowered or "authentication" in lowered:
+            return ProviderUnavailableError(PROVIDER_ID, message)
+        return ProviderError(PROVIDER_ID, message)
 
     def _over_budget(self, cost: TurnCost) -> bool:
         return self._cfg.max_budget_usd > 0 and cost.usd > self._cfg.max_budget_usd

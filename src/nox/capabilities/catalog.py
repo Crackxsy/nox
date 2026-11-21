@@ -56,13 +56,22 @@ def _target_dependent(profile: Profile, tool: str) -> bool:
 
 
 def stale_gaps(tools: ToolRegistry) -> list[str]:
-    """Curated gaps that name a tool which now exists.
+    """Curated gaps that name a tool which now exists, or the prefix of one (`desktop.audio` when
+    `desktop.audio.volume` ships).
 
     The failure this prevents is the quiet one: a capability ships, the row stays behind, and Nox
     starts denying something it can do. Checked in the tests and again at build time, because a
-    wrong "I cannot" is as damaging as a wrong "I can".
+    wrong "I cannot" is as damaging as a wrong "I can". Only names are compared: a capability
+    that ships under a different name (`view.render` became `view.show`) is for the person who
+    ships it to take out of the table. `tests/integration/test_capabilities.py` runs this check
+    against the registry of a real core, with every extension installed.
     """
-    return [gap.name for gap in CURATED_GAPS if gap.name in tools]
+    names = tools.names()
+    return [
+        gap.name
+        for gap in CURATED_GAPS
+        if any(name == gap.name or name.startswith(f"{gap.name}.") for name in names)
+    ]
 
 
 def build_report(

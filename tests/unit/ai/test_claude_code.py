@@ -6,6 +6,8 @@ import asyncio
 import json
 import shutil
 import sys
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psutil
@@ -13,7 +15,12 @@ import pytest
 
 from nox.ai.base import AiRole, Message
 from nox.ai.config import ClaudeCodeConfig
-from nox.ai.errors import ProviderError, ProviderTimeoutError, ProviderUnavailableError
+from nox.ai.errors import (
+    ProviderError,
+    ProviderLimitedError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
 from nox.ai.providers.claude_code import ClaudeCodeProvider, ClaudeStreamParser, render_prompt
 from nox.core.events import HealthStatus
 
@@ -177,9 +184,19 @@ def test_render_prompt_multi_turn() -> None:
 FAKE_CLI = r"""
 import json, os, sys, time
 args = sys.argv[1:]
+calls = os.environ.get("FAKE_CLI_CALLS")
+if calls:
+    with open(calls, "a") as fh:
+        fh.write(" ".join(args[:2]) + "\n")
 if "--version" in args:
     print("9.9.9 (fake)"); sys.exit(0)
-mode = os.environ.get("FAKE_CLI_MODE", "ok")
+if args[:2] == ["auth", "status"]:
+    auth = os.environ.get("FAKE_CLI_AUTH", "in")
+    if auth == "unsupported":
+        sys.stderr.write("unknown command: auth\n"); sys.exit(1)
+    print(json.dumps({"loggedIn": auth == "in"})); sys.exit(0 if auth == "in" else 1)
+mode_file = os.environ.get("FAKE_CLI_MODE_FILE")
+mode = open(mode_file).read().strip() if mode_file else os.environ.get("FAKE_CLI_MODE", "ok")
 prompt = sys.stdin.read()
 pidfile = os.environ.get("FAKE_CLI_PIDFILE")
 if pidfile:
@@ -192,11 +209,28 @@ if mode == "logged_out":
           "result": "Not logged in · Please run /login", "usage": {}}); sys.exit(1)
 if mode == "crash":
     sys.stderr.write("segfault-ish\n"); sys.exit(3)
+def refuse(with_event):
+    if with_event:
+        emit({"type": "rate_limit_event", "rate_limit_info": {
+              "status": "rejected", "rateLimitType": "five_hour",
+              "resetsAt": float(os.environ.get("FAKE_CLI_RESET", "0"))}})
+    sentence = "You've hit your limit · resets 11pm (Europe/Berlin)"
+    emit({"type": "assistant", "message": {"model": "<synthetic>", "role": "assistant",
+          "content": [{"type": "text", "text": sentence}]},
+          "error": "rate_limit", "isApiErrorMessage": True})
+    emit({"type": "result", "subtype": "success", "is_error": True,
+          "result": sentence, "usage": {}}); sys.exit(1)
+if mode == "limit":
+    refuse(True)
+if mode == "limit_text":
+    refuse(False)
 for piece in ["Echo: ", prompt.strip()[:20]]:
     emit({"type": "stream_event", "event": {"type": "content_block_delta",
           "delta": {"type": "text_delta", "text": piece}}})
     if mode == "hang":
         time.sleep(30)
+    if mode == "limit_late":
+        refuse(True)
     time.sleep(0.02)
 emit({"type": "result", "subtype": "success", "is_error": False, "result": "Echo: x",
       "total_cost_usd": 0.001, "duration_ms": 50,
@@ -211,7 +245,13 @@ def fake_cli(tmp_path: Path) -> Path:
     return script
 
 
-def fake_provider(script: Path, env: dict[str, str], **cfg: object) -> ClaudeCodeProvider:
+def fake_provider(
+    script: Path,
+    env: dict[str, str],
+    *,
+    now: Callable[[], datetime] | None = None,
+    **cfg: object,
+) -> ClaudeCodeProvider:
     import os
 
     full_env = {**os.environ, "PYTHONIOENCODING": "utf-8", **env}
@@ -219,6 +259,7 @@ def fake_provider(script: Path, env: dict[str, str], **cfg: object) -> ClaudeCod
         ClaudeCodeConfig(**cfg),  # type: ignore[arg-type]
         env=full_env,
         command_override=[sys.executable, str(script)],
+        now=now,
     )
 
 
@@ -279,15 +320,191 @@ async def test_cancel_kills_child(fake_cli: Path, tmp_path: Path) -> None:
     assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
 
 
-async def test_health_with_fake_cli(fake_cli: Path) -> None:
-    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "ok"})
+async def test_the_opt_in_roundtrip_probe_verifies_the_login_with_a_real_request(
+    fake_cli: Path,
+) -> None:
+    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "ok"}, health_roundtrip=True)
     info = await p.health()
     assert info.status is HealthStatus.AVAILABLE and p.version == "9.9.9 (fake)"
-    p2 = fake_provider(fake_cli, {"FAKE_CLI_MODE": "logged_out"})
+    assert "round-trip" in info.reason
+    p2 = fake_provider(fake_cli, {"FAKE_CLI_MODE": "logged_out"}, health_roundtrip=True)
     info2 = await p2.health()
     assert info2.status is HealthStatus.UNAVAILABLE and "logged in" in info2.reason
-    p3 = fake_provider(fake_cli, {"FAKE_CLI_MODE": "ok"}, health_roundtrip=False)
-    assert (await p3.health()).status is HealthStatus.LIMITED
+
+
+def calls_of(path: Path) -> list[str]:
+    return path.read_text("utf-8").splitlines() if path.exists() else []
+
+
+async def test_health_asks_no_model_and_spawns_nothing_once_checked(
+    fake_cli: Path, tmp_path: Path
+) -> None:
+    calls, pidfile = tmp_path / "calls", tmp_path / "pid"
+    env = {"FAKE_CLI_CALLS": str(calls), "FAKE_CLI_AUTH": "in", "FAKE_CLI_PIDFILE": str(pidfile)}
+    p = fake_provider(fake_cli, env)
+
+    first = await p.health()
+    again = await p.health()
+
+    assert first.status is HealthStatus.AVAILABLE and "signed in" in first.reason
+    assert again.status is HealthStatus.AVAILABLE and p.version == "9.9.9 (fake)"
+    assert calls_of(calls) == ["--version", "auth status"]  # once, and neither asks the model
+    assert not pidfile.exists()
+
+
+async def test_a_signed_out_account_is_unavailable_without_a_model_call(
+    fake_cli: Path, tmp_path: Path
+) -> None:
+    pidfile = tmp_path / "pid"
+    p = fake_provider(fake_cli, {"FAKE_CLI_AUTH": "out", "FAKE_CLI_PIDFILE": str(pidfile)})
+
+    info = await p.health()
+
+    assert info.status is HealthStatus.UNAVAILABLE and "not signed in" in info.reason
+    assert not pidfile.exists()
+
+
+async def test_a_cli_without_auth_status_is_limited_not_guessed_available(fake_cli: Path) -> None:
+    p = fake_provider(fake_cli, {"FAKE_CLI_AUTH": "unsupported"})
+
+    info = await p.health()
+
+    assert info.status is HealthStatus.LIMITED and "login not verified" in info.reason
+
+
+async def test_an_answered_request_makes_health_available_without_another_check(
+    fake_cli: Path, tmp_path: Path
+) -> None:
+    calls = tmp_path / "calls"
+    p = fake_provider(fake_cli, {"FAKE_CLI_CALLS": str(calls), "FAKE_CLI_AUTH": "unsupported"})
+    assert (await p.health()).status is HealthStatus.LIMITED
+
+    await p.complete(make_request("Hallo"))
+    seen = len(calls_of(calls))
+    info = await p.health()
+
+    assert info.status is HealthStatus.AVAILABLE and "answering" in info.reason
+    assert len(calls_of(calls)) == seen
+
+
+async def test_a_failed_request_is_limited_and_checks_the_installation_again(
+    fake_cli: Path, tmp_path: Path
+) -> None:
+    calls, mode = tmp_path / "calls", tmp_path / "mode"
+    mode.write_text("crash")
+    p = fake_provider(fake_cli, {"FAKE_CLI_CALLS": str(calls), "FAKE_CLI_MODE_FILE": str(mode)})
+    await p.health()
+    with pytest.raises(ProviderError):
+        await p.complete(make_request("Hallo"))
+    before = len(calls_of(calls))
+
+    failed = await p.health()
+    mode.write_text("ok")
+    await p.complete(make_request("Hallo"))
+    recovered = await p.health()
+
+    assert failed.status is HealthStatus.LIMITED and "last request failed" in failed.reason
+    assert calls_of(calls)[before : before + 2] == ["--version", "auth status"]
+    assert recovered.status is HealthStatus.AVAILABLE
+
+
+NOW = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = NOW
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+async def test_a_plan_limit_keeps_claude_out_until_the_reset_and_costs_no_process(
+    fake_cli: Path, tmp_path: Path
+) -> None:
+    calls, mode, clock = tmp_path / "calls", tmp_path / "mode", Clock()
+    reset = NOW + timedelta(hours=2)
+    mode.write_text("limit")
+    env = {
+        "FAKE_CLI_CALLS": str(calls),
+        "FAKE_CLI_MODE_FILE": str(mode),
+        "FAKE_CLI_RESET": str(reset.timestamp()),
+    }
+    p = fake_provider(fake_cli, env, now=clock)
+
+    with pytest.raises(ProviderLimitedError) as caught:
+        await p.complete(make_request("Hallo"))
+    limited = await p.health()
+    spawned = len(calls_of(calls))
+    with pytest.raises(ProviderLimitedError):
+        await p.complete(make_request("Hallo"))
+
+    assert caught.value.limit.until == reset and caught.value.limit.kind == "five_hour"
+    assert limited.status is HealthStatus.UNAVAILABLE and limited.limited_until == reset
+    assert "five_hour" in limited.reason
+    assert len(calls_of(calls)) == spawned  # the second request started no process
+
+    mode.write_text("ok")
+    clock.now = reset + timedelta(seconds=1)
+    after = await p.complete(make_request("Hallo"))
+    info = await p.health()
+
+    assert after.text == "Echo: Hallo"
+    assert info.status is not HealthStatus.UNAVAILABLE and info.limited_until is None
+
+
+async def test_a_limit_told_only_in_words_takes_its_reset_time_from_the_sentence(
+    fake_cli: Path,
+) -> None:
+    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "limit_text"}, now=Clock())
+
+    with pytest.raises(ProviderLimitedError) as caught:
+        await p.complete(make_request("Hallo"))
+
+    # "resets 11pm (Europe/Berlin)" asked at 12:00 UTC (13:00 in Berlin): tonight, 22:00 UTC.
+    assert caught.value.limit.estimated is False
+    assert caught.value.limit.until == datetime(2026, 3, 10, 22, 0, tzinfo=UTC)
+    assert "You've hit your limit" in str(caught.value)
+
+
+async def test_the_clis_own_limit_sentence_is_never_delivered_as_an_answer(
+    fake_cli: Path,
+) -> None:
+    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "limit_text"}, now=Clock())
+    received: list[str] = []
+
+    with pytest.raises(ProviderLimitedError):
+        async for chunk in p.stream(make_request("Hallo")):
+            received.append(chunk.delta)
+
+    assert received == []
+
+
+async def test_a_limit_in_the_middle_of_an_answer_ends_in_an_error_not_in_silence(
+    fake_cli: Path,
+) -> None:
+    reset = (NOW + timedelta(hours=1)).timestamp()
+    p = fake_provider(
+        fake_cli, {"FAKE_CLI_MODE": "limit_late", "FAKE_CLI_RESET": str(reset)}, now=Clock()
+    )
+    received: list[str] = []
+
+    with pytest.raises(ProviderLimitedError):
+        async for chunk in p.stream(make_request("Hallo", timeout_s=20)):
+            received.append(chunk.delta)
+
+    assert received == ["Echo: "]
+    assert p.active_limit() is not None
+
+
+async def test_a_login_error_is_not_mistaken_for_a_limit(fake_cli: Path) -> None:
+    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "logged_out"})
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        await p.complete(make_request())
+
+    assert not isinstance(caught.value, ProviderLimitedError)
+    assert p.active_limit() is None
 
 
 async def test_missing_command_is_unavailable() -> None:

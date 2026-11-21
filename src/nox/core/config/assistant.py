@@ -170,7 +170,8 @@ class ClaudeCodeProviderConfig(StrictSection):
     model: str = ""  # empty = the CLI default; an alias (sonnet, haiku) or a full id
     safe_mode: bool = True  # no user hooks, plugins or tool servers in Nox's requests
     max_budget_usd: float = Field(default=0.0, ge=0.0)
-    health_roundtrip: bool = True  # health() does a one-token request, which costs quota
+    #: A real 1-token request with every health check: costs quota, so off (see `nox.ai.config`).
+    health_roundtrip: bool = False
     # The conversation session (`nox.ai.providers.claude_persistent`); see `nox.ai.config`.
     persistent: bool = True
     prewarm: bool = True
@@ -184,7 +185,9 @@ class ClaudeCodeProviderConfig(StrictSection):
 class OllamaProviderConfig(StrictSection):
     enabled: bool = True
     base_url: str = "http://127.0.0.1:11434"
-    model: str = "llama3.2:3b"
+    # The same name as `nox.ai.config.DEFAULT_OLLAMA_MODEL` and `config/defaults.yaml`: the core
+    # configuration does not import the AI package, and a test holds the three to each other.
+    model: str = "qwen3:4b-instruct"
     gpu_allowed_modes: list[str] = Field(
         default_factory=lambda: ["companion", "coding", "research", "idle"]
     )

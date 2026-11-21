@@ -85,9 +85,11 @@ from nox.core.events.stream import (
     TwitchResynced,
 )
 from nox.core.events.system import (
+    AiProviderLimited,
     AiRequestFailed,
     AiRequestStarted,
     AiResponseReady,
+    AiTurnFailed,
     AuditEntry,
     CaptureChanged,
     HealthChanged,
@@ -121,6 +123,8 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     E.AI_REQUEST_STARTED: AiRequestStarted,
     E.AI_RESPONSE_READY: AiResponseReady,
     E.AI_REQUEST_FAILED: AiRequestFailed,
+    E.AI_PROVIDER_LIMITED: AiProviderLimited,
+    E.AI_TURN_FAILED: AiTurnFailed,
     E.PET_STATE_CHANGED: PetStateChanged,
     E.PRIVACY_MODE_CHANGED: PrivacyModeChanged,
     E.PRIVACY_CAPTURE_CHANGED: CaptureChanged,

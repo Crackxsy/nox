@@ -14,6 +14,7 @@ import sys
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,8 @@ import pytest
 
 from nox.ai.base import AiChunk, AiRequest, AiRole, Message, ToolDefinition
 from nox.ai.config import ClaudeCodeConfig
-from nox.ai.errors import ProviderUnavailableError
+from nox.ai.errors import ProviderLimitedError, ProviderUnavailableError
+from nox.ai.limits import ProviderLimit
 from nox.ai.providers.claude_persistent import PersistentClaude
 
 FAKE = Path(__file__).with_name("fake_claude.py")
@@ -60,9 +62,15 @@ def log(tmp_path: Path) -> Path:
     return tmp_path / "fake.jsonl"
 
 
+LIMIT_NOW = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+#: What the provider was told about a plan limit, in order.
+told_limits: list[ProviderLimit] = []
+
+
 def _provider(
     tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch, **env: str
 ) -> tuple[PersistentClaude, FakeBridge]:
+    told_limits.clear()
     monkeypatch.setenv("FAKE_LOG", str(log))
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -74,7 +82,11 @@ def _provider(
         creationflags=0x08000000 if sys.platform == "win32" else 0,
         workdir=tmp_path / "claude",
         env=dict(os.environ),
-        also_inherit=frozenset({"FAKE_LOG", "FAKE_CHILD", "FAKE_INIT_DELAY", "FAKE_DELTA_DELAY"}),
+        also_inherit=frozenset(
+            {"FAKE_LOG", "FAKE_CHILD", "FAKE_INIT_DELAY", "FAKE_DELTA_DELAY", "FAKE_RESET"}
+        ),
+        on_limit=told_limits.append,
+        now=lambda: LIMIT_NOW,
     )
     bridge = FakeBridge(tmp_path)
     provider.attach_tools(bridge)
@@ -398,3 +410,41 @@ async def test_a_start_thrown_away_after_a_kill_returns_only_once_the_process_is
     with pytest.raises(ProviderUnavailableError):
         await turn
     assert pid is not None and _gone(pid)  # at once, not eventually
+
+
+async def test_a_plan_limit_before_any_text_is_a_limit_error_and_not_a_broken_session(
+    tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset = LIMIT_NOW + timedelta(hours=3)
+    provider, _ = _provider(tmp_path, log, monkeypatch, FAKE_RESET=str(reset.timestamp()))
+
+    with pytest.raises(ProviderLimitedError) as caught:
+        await _collect(provider.stream(_request("LIMITNOW")))
+
+    assert caught.value.limit.until == reset and caught.value.limit.kind == "five_hour"
+    assert told_limits == [caught.value.limit]
+    # The process is fine and must not count towards giving the warm session up.
+    assert provider.failures == 0 and not provider.disabled and provider.pid is not None
+    answer = await _collect(provider.stream(_request("Hallo", request_id="r2")))
+    assert "".join(c.delta for c in answer) == "Hallo Welt."
+    await provider.close()
+
+
+async def test_a_plan_limit_after_the_first_words_ends_the_answer_with_a_sentence(
+    tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider, _ = _provider(tmp_path, log, monkeypatch)
+    german = _request("LIMITLATE")
+    german.metadata["language"] = "de"
+    english = _request("LIMITLATE", request_id="r2")
+    english.metadata["language"] = "en"
+
+    chunks = await _collect(provider.stream(german))
+    text_de = "".join(c.delta for c in chunks)
+    text_en = "".join(c.delta for c in await _collect(provider.stream(english)))
+
+    assert text_de.startswith("Hallo Welt.") and "Kontingent ist aufgebraucht" in text_de
+    assert text_en.startswith("Hallo Welt.") and "usage limit is used up" in text_en
+    assert chunks[-1].done and len(told_limits) == 2
+    assert provider.last["r1"].text == text_de  # what is recorded is what was said
+    await provider.close()

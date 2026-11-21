@@ -94,3 +94,21 @@ def test_twitch_chat_message_defaults_to_public_channel() -> None:
         E.TWITCH_CHAT_MESSAGE, {"chat_event_id": 1, "viewer_id": "v1", "text": "hi"}
     )
     assert validated["channel"] == "public"
+
+
+def test_the_limit_and_failed_turn_events_have_payload_models() -> None:
+    limited = validate_payload(
+        E.AI_PROVIDER_LIMITED,
+        {
+            "provider": "claude_code",
+            "kind": "five_hour",
+            "until": "2026-03-10T15:00:00+00:00",
+            "estimated": False,
+            "fallback": "local",
+        },
+    )
+    failed = validate_payload(E.AI_TURN_FAILED, {"cause": "limit", "language": "en"})
+
+    assert limited["fallback"] == "local" and limited["kind"] == "five_hour"
+    assert failed["until"] == "" and failed["estimated"] is False
+    assert E.AI_PROVIDER_LIMITED in PAYLOAD_MODELS and E.AI_TURN_FAILED in PAYLOAD_MODELS

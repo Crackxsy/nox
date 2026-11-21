@@ -56,6 +56,11 @@ def render_date(now: datetime, language: Language) -> str:
     return now.strftime("%A, %B %d, %Y")
 
 
+def render_weekday(when: datetime, language: Language) -> str:
+    """The weekday as a person says it: ``Montag`` or ``Monday``."""
+    return _WEEKDAYS_DE[when.weekday()] if language == "de" else when.strftime("%A")
+
+
 def render_clock(now: datetime, _language: Language) -> str:
     """The wall-clock time as ``14:05``.
 

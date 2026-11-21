@@ -10,30 +10,47 @@ requests but keeps the CLI login; ``--bare`` is NOT used because it ignores OAut
 disabled (``--tools ""``); agentic coding sessions are a separate wrapper, not this provider. No
 secrets are passed: the CLI authenticates itself. The child process is killed when the request is
 cancelled (kill switch).
+
+Health is derived from what the provider already knows, not from asking the model: the CLI is
+resolved and `--version` and `auth status` (both local, no model call) run once and again only
+after a request failed; real answers and failures update the state in between. A 1-token
+round-trip is still available as `health_roundtrip`, off by default because it costs quota and a
+process start every time the health result expires. A used-up plan limit (`rate_limit_event` plus
+the error that ends the request) keeps the provider `unavailable` until the window resets.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import shutil
 import sys
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from nox.ai._log import get_logger
 from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, Message, ProviderInfo
 from nox.ai.config import ClaudeCodeConfig
-from nox.ai.errors import ProviderError, ProviderTimeoutError, ProviderUnavailableError
+from nox.ai.errors import (
+    ProviderError,
+    ProviderLimitedError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
+from nox.ai.limits import ProviderLimit, describe_limit, limit_for, looks_like_limit
 from nox.ai.providers.claude_persistent import PersistentClaude
-from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem
+from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem, merge_refusals
 from nox.core.events import HealthStatus
 
 PROVIDER_ID = "claude_code"
 STDOUT_LINE_LIMIT = 4 * 1024 * 1024
 STDERR_CAPTURE_BYTES = 16 * 1024
+#: How long the local `--version` and `auth status` checks may take.
+LOCAL_CHECK_TIMEOUT_S = 15.0
 
 log = get_logger(__name__)
 
@@ -72,8 +89,10 @@ class ClaudeCodeProvider:
         command_override: Sequence[str] | None = None,
         roles: list[AiRole] | None = None,
         workdir: Path | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self._cfg = config
+        self._now = now or (lambda: datetime.now(UTC))
         self._env = dict(env) if env is not None else None
         self._command_override = list(command_override) if command_override else None
         self._resolved: str | None = None
@@ -89,12 +108,24 @@ class ClaudeCodeProvider:
         self._last: dict[str, AiResponse] = {}
         self.last_cost_usd: dict[str, float] = {}
         self.version: str = ""
+        #: The plan limit that is used up right now, until it resets.
+        self._limit: ProviderLimit | None = None
+        #: Whether the local installation and login checks passed and no request failed since.
+        self._checked = False
+        #: What `claude auth status` said: signed in, signed out, or `None` for "could not tell".
+        self._signed_in: bool | None = None
+        #: Whether a request was answered since the last failure.
+        self._answered = False
+        #: Why the last request failed (not a limit), until the next one is answered.
+        self._failure = ""
         self.conversation = PersistentClaude(
             config,
             executable=self.executable,
             creationflags=_creationflags(),
             workdir=workdir,
             env=self._env,
+            on_limit=self._note_limit,
+            now=self._now,
         )
 
     @property
@@ -168,40 +199,97 @@ class ClaudeCodeProvider:
             self._info = info
         return info
 
+    def _report(
+        self, status: HealthStatus, reason: str, *, limited_until: datetime | None = None
+    ) -> ProviderInfo:
+        self._info = self._info.model_copy(
+            update={"status": status, "reason": reason, "limited_until": limited_until}
+        )
+        return self._info
+
+    def active_limit(self) -> ProviderLimit | None:
+        """The plan limit that is used up right now; forgotten once its window has reset."""
+        limit = self._limit
+        if limit is not None and not limit.active(self._now()):
+            log.info("claude_code.limit_over", kind=limit.kind)
+            self._limit = limit = None
+        return limit
+
+    def _refuse_while_limited(self) -> None:
+        """No process is started for a request while the plan limit holds: it would only fail."""
+        limit = self.active_limit()
+        if limit is not None:
+            raise ProviderLimitedError(PROVIDER_ID, describe_limit(limit), limit)
+
     async def _probe(self) -> ProviderInfo:
-        """``claude --version`` plus (if configured) a 1-token round-trip that verifies the login.
-        The round-trip costs quota (about 0.005 USD equivalent on sonnet); the router caches it."""
+        """What is known about the CLI without asking the model.
+
+        A limit that is used up, a missing or disabled CLI, or a signed-out account make the
+        provider `unavailable`; a request that failed since the last check makes it `limited`
+        (the next request decides); otherwise it is `available`. The two local checks
+        (`--version`, `auth status`) run once and again after a failure; `health_roundtrip` adds
+        a real 1-token request to every probe, which costs quota.
+        """
         if not self._cfg.enabled:
-            self._info = self._info.model_copy(
-                update={"status": HealthStatus.UNAVAILABLE, "reason": "disabled in config"}
+            return self._report(HealthStatus.UNAVAILABLE, "disabled in config")
+        limit = self.active_limit()
+        if limit is not None:
+            return self._report(
+                HealthStatus.UNAVAILABLE, describe_limit(limit), limited_until=limit.until
             )
-            return self._info
         try:
             exe = self.executable()
         except ProviderUnavailableError as exc:
-            self._info = self._info.model_copy(
-                update={"status": HealthStatus.UNAVAILABLE, "reason": exc.message}
+            return self._report(HealthStatus.UNAVAILABLE, exc.message)
+        if self._cfg.health_roundtrip:
+            return await self._probe_with_roundtrip(exe)
+        if not self._checked:
+            problem = await self._check_installation(exe)
+            if problem:
+                return self._report(HealthStatus.UNAVAILABLE, problem)
+        if self._failure:
+            return self._report(
+                HealthStatus.LIMITED, f"{self.version}; last request failed: {self._failure}"
             )
-            return self._info
+        if self._answered:
+            return self._report(HealthStatus.AVAILABLE, f"{self.version}; answering")
+        if self._signed_in:
+            return self._report(HealthStatus.AVAILABLE, f"{self.version}; signed in")
+        return self._report(HealthStatus.LIMITED, f"{self.version}; login not verified")
+
+    async def _check_installation(self, exe: list[str]) -> str:
+        """`--version` and `auth status`: empty when the CLI is there and not signed out, else the
+        reason it is unusable. Both are local; neither calls a model."""
         try:
-            version = await self._run_simple([*exe, "--version"], timeout_s=15.0)
+            version = await self._run_simple([*exe, "--version"], timeout_s=LOCAL_CHECK_TIMEOUT_S)
         except ProviderError as exc:
-            self._info = self._info.model_copy(
-                update={
-                    "status": HealthStatus.UNAVAILABLE,
-                    "reason": f"--version failed: {exc.message}",
-                }
-            )
-            return self._info
+            return f"--version failed: {exc.message}"
         self.version = version.strip()
-        if not self._cfg.health_roundtrip:
-            self._info = self._info.model_copy(
-                update={
-                    "status": HealthStatus.LIMITED,
-                    "reason": f"{self.version}; login not verified",
-                }
+        self._signed_in = await self._login_state(exe)
+        if self._signed_in is False:
+            return f"{self.version}; not signed in (run `claude` once and log in)"
+        self._checked = True
+        return ""
+
+    async def _login_state(self, exe: list[str]) -> bool | None:
+        """`claude auth status`: whether an account is signed in, or `None` when the CLI is too
+        old to have the command or answered with something else."""
+        try:
+            out = await self._run_simple(
+                [*exe, "auth", "status"], timeout_s=LOCAL_CHECK_TIMEOUT_S, check=False
             )
-            return self._info
+            signed_in = json.loads(out).get("loggedIn")
+        except (ProviderError, ValueError, AttributeError):
+            return None
+        return signed_in if isinstance(signed_in, bool) else None
+
+    async def _probe_with_roundtrip(self, exe: list[str]) -> ProviderInfo:
+        """`health_roundtrip`: `--version` plus a 1-token request that verifies the login."""
+        try:
+            version = await self._run_simple([*exe, "--version"], timeout_s=LOCAL_CHECK_TIMEOUT_S)
+        except ProviderError as exc:
+            return self._report(HealthStatus.UNAVAILABLE, f"--version failed: {exc.message}")
+        self.version = version.strip()
         probe = AiRequest(
             request_id="health-probe",
             role=AiRole.CHAT,
@@ -211,29 +299,56 @@ class ClaudeCodeProvider:
         )
         try:
             response = await self.complete(probe, model=self._cfg.model or "haiku")
-        except ProviderError as exc:
-            self._info = self._info.model_copy(
-                update={
-                    "status": HealthStatus.UNAVAILABLE,
-                    "reason": f"{self.version}; {exc.message}",
-                }
+        except ProviderLimitedError as exc:
+            return self._report(
+                HealthStatus.UNAVAILABLE, describe_limit(exc.limit), limited_until=exc.limit.until
             )
-            return self._info
-        self._info = self._info.model_copy(
-            update={
-                "status": HealthStatus.AVAILABLE,
-                "reason": f"{self.version}; round-trip {response.latency_ms} ms",
-            }
+        except ProviderError as exc:
+            return self._report(HealthStatus.UNAVAILABLE, f"{self.version}; {exc.message}")
+        return self._report(
+            HealthStatus.AVAILABLE, f"{self.version}; round-trip {response.latency_ms} ms"
         )
-        return self._info
+
+    # -- what real requests teach -------------------------------------------------------------
+
+    def _note_limit(self, limit: ProviderLimit) -> None:
+        """A request ran into the plan limit: stay out until it resets."""
+        log.warning(
+            "claude_code.limit_reached",
+            kind=limit.kind,
+            until=limit.until.isoformat(),
+            estimated=limit.estimated,
+        )
+        self._limit = limit
+
+    def _note_answered(self) -> None:
+        self._answered, self._failure = True, ""
+
+    def _note_failure(self, exc: ProviderError) -> None:
+        """A request failed for a reason other than a limit: check the installation again at the
+        next probe, and say what happened until a request is answered."""
+        self._answered, self._checked = False, False
+        self._failure = exc.message[:200]
+
+    async def _observed(self, chunks: AsyncGenerator[AiChunk]) -> AsyncGenerator[AiChunk]:
+        """The chunks of one request, noting how it ended for the health state."""
+        try:
+            async with contextlib.aclosing(chunks) as inner:
+                async for chunk in inner:
+                    yield chunk
+        except ProviderLimitedError:
+            raise  # already noted by whoever recognised it
+        except ProviderError as exc:
+            self._note_failure(exc)
+            raise
+        else:
+            self._note_answered()
 
     # -- AiProvider -----------------------------------------------------------------------------
 
     async def complete(self, request: AiRequest, *, model: str | None = None) -> AiResponse:
-        parts: list[str] = []
-        async for chunk in self._stream(request, model=model):
-            if chunk.delta:
-                parts.append(chunk.delta)
+        async for _chunk in self._observed(self._stream(request, model=model)):
+            pass
         result = self._last.pop(request.request_id, None)
         if result is None:  # cannot happen: _stream always records before the final chunk
             raise ProviderError(PROVIDER_ID, "stream ended without a result line")
@@ -243,15 +358,16 @@ class ClaudeCodeProvider:
         """Conversation turns (the orchestrator's, marked by `session_id`) go to the warm session
         with tools; everything else to a one-shot process without tools."""
         if self._cfg.persistent and request.metadata.get("session_id"):
-            return self._stream_conversation(request)
-        return self._stream(request)
+            return self._observed(self._stream_conversation(request))
+        return self._observed(self._stream(request))
 
-    async def _stream_conversation(self, request: AiRequest) -> AsyncIterator[AiChunk]:
+    async def _stream_conversation(self, request: AiRequest) -> AsyncGenerator[AiChunk]:
         """The warm session; if it cannot answer, the same model one-shot - never silently a
         different provider. After repeated failures the session is off for this run (health
         says so) and every conversation turn goes one-shot, without Nox's tools."""
         if not self._cfg.enabled:
             raise ProviderUnavailableError(PROVIDER_ID, "disabled in config")
+        self._refuse_while_limited()
         if not self.conversation.disabled:
             yielded = False
             try:
@@ -283,9 +399,10 @@ class ClaudeCodeProvider:
 
     async def _stream(
         self, request: AiRequest, *, model: str | None = None
-    ) -> AsyncIterator[AiChunk]:
+    ) -> AsyncGenerator[AiChunk]:
         if not self._cfg.enabled:
             raise ProviderUnavailableError(PROVIDER_ID, "disabled in config")
+        self._refuse_while_limited()
         system_prompt, prompt = render_prompt(request)
         if not prompt.strip():
             raise ProviderError(PROVIDER_ID, "empty prompt", retryable=False)
@@ -297,6 +414,8 @@ class ClaudeCodeProvider:
         parser = ClaudeStreamParser()
         parts: list[str] = []
         result: StreamItem | None = None
+        refusal: StreamItem | None = None
+        api_error: StreamItem | None = None
         first_token_ms: int | None = None
 
         proc = await self._spawn(args)
@@ -321,7 +440,11 @@ class ClaudeCodeProvider:
                 item = parser.feed(raw.decode("utf-8", errors="replace"))
                 if item is None:
                     continue
-                if item.kind == "delta" and item.text:
+                if item.refused:
+                    refusal = merge_refusals(refusal, item)
+                elif item.kind == "api_error":
+                    api_error = item
+                elif item.kind == "delta" and item.text:
                     if first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - started) * 1000)
                     parts.append(item.text)
@@ -329,7 +452,7 @@ class ClaudeCodeProvider:
                 elif item.kind == "result":
                     result = item
                     break
-            await self._finish(proc, stderr_task, result)
+            await self._finish(proc, stderr_task, result, refusal, api_error)
         finally:
             await _kill(proc)
             if not stderr_task.done():
@@ -365,8 +488,13 @@ class ClaudeCodeProvider:
         proc: asyncio.subprocess.Process,
         stderr_task: asyncio.Future[bytes],
         result: StreamItem | None,
+        refusal: StreamItem | None = None,
+        api_error: StreamItem | None = None,
     ) -> None:
-        """Wait for exit, then translate error results into exceptions."""
+        """Wait for exit, then translate error results into exceptions. A request that a plan
+        limit refused (`refusal`, or the wording of the error) becomes `ProviderLimitedError`.
+        The CLI's own sentence about a failure (`refusal`/`api_error` with `synthetic`) is the
+        error, never an answer."""
         try:
             await asyncio.wait_for(proc.wait(), timeout=10.0)
         except TimeoutError:
@@ -379,8 +507,24 @@ class ClaudeCodeProvider:
         if result is None:
             detail = stderr.strip().splitlines()[-1:] or [f"exit code {proc.returncode}"]
             raise ProviderError(PROVIDER_ID, f"no result line ({detail[0][:200]})")
-        if result.is_error:
-            message = result.error or result.terminal_reason or "unknown error"
+        told = refusal if refusal is not None and refusal.synthetic else api_error
+        if result.is_error or told is not None:
+            message = (
+                (told.error or told.text if told else "")
+                or result.error
+                or result.terminal_reason
+                or "unknown error"
+            )
+            if refusal is not None or looks_like_limit(message):
+                limit = limit_for(
+                    PROVIDER_ID,
+                    kind=refusal.limit_kind if refusal else "",
+                    resets_at=refusal.limit_resets_at if refusal else None,
+                    now=self._now(),
+                    message=message,
+                )
+                self._note_limit(limit)
+                raise ProviderLimitedError(PROVIDER_ID, message, limit)
             lowered = message.lower()
             if "not logged in" in lowered or "login" in lowered or "authentication" in lowered:
                 raise ProviderUnavailableError(PROVIDER_ID, message)
@@ -402,7 +546,8 @@ class ClaudeCodeProvider:
         except OSError as exc:
             raise ProviderError(PROVIDER_ID, f"cannot start {args[0]}: {exc}") from exc
 
-    async def _run_simple(self, args: list[str], *, timeout_s: float) -> str:
+    async def _run_simple(self, args: list[str], *, timeout_s: float, check: bool = True) -> str:
+        """Run a short command and return its stdout; with `check`, a non-zero exit is an error."""
         proc = await self._spawn(args)
         try:
             out, err = await asyncio.wait_for(proc.communicate(b""), timeout=timeout_s)
@@ -411,7 +556,7 @@ class ClaudeCodeProvider:
             raise ProviderTimeoutError(PROVIDER_ID, f"{args[1:]} timed out") from exc
         finally:
             await _kill(proc)
-        if proc.returncode != 0:
+        if check and proc.returncode != 0:
             raise ProviderError(
                 PROVIDER_ID, f"exit {proc.returncode}: {err.decode('utf-8', 'replace')[:200]}"
             )

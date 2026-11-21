@@ -104,9 +104,11 @@ from nox.core.events.stream import (
     TwitchResynced,
 )
 from nox.core.events.system import (
+    AiProviderLimited,
     AiRequestFailed,
     AiRequestStarted,
     AiResponseReady,
+    AiTurnFailed,
     AuditEntry,
     CaptureChanged,
     HealthChanged,
@@ -127,9 +129,11 @@ from nox.core.events.system import (
 )
 
 __all__ = [
+    "AiProviderLimited",
     "AiRequestFailed",
     "AiRequestStarted",
     "AiResponseReady",
+    "AiTurnFailed",
     "AuditEntry",
     "CaptureChanged",
     "ClipExported",

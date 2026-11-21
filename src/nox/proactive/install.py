@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from nox.core.events import Event
 from nox.ipc.dispatch import EmptyPayload
 from nox.ipc.roles import UI_ROLES
+from nox.proactive.ai_notices import AiNoticeRelay
 from nox.proactive.dashboard import (
     HealthHistoryRequest,
     make_config_effective_handler,
@@ -50,13 +51,14 @@ class _Core(Protocol):
 @dataclass(slots=True)
 class ProactiveRuntime:
     """Handle for the caller. Nothing here runs in the background: the service reacts to calls
-    and the registered requests live on the core's registry, so `stop` has nothing to undo and
-    exists so every extension is shut down the same way."""
+    and events, and the registered requests live on the core's registry, so `stop` only ends the
+    event subscriptions and exists so every extension is shut down the same way."""
 
     service: ProactiveService
+    relay: AiNoticeRelay
 
     def stop(self) -> None:
-        return None
+        self.relay.detach()
 
 
 class _TextSpeaker:
@@ -82,7 +84,13 @@ def install(core: _Core) -> ProactiveRuntime:
     service = _build_service(core)
     _register_requests(core)
     _register_tools(core, service)
-    return ProactiveRuntime(service=service)
+    relay = AiNoticeRelay(
+        service,
+        language=lambda: str(core.config.identity.ui_language),
+        mode=lambda: str(core.state.get("assistant.mode")),
+    )
+    relay.attach(core.bus)
+    return ProactiveRuntime(service=service, relay=relay)
 
 
 def _build_service(core: _Core) -> ProactiveService:

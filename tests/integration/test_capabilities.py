@@ -22,6 +22,9 @@ import yaml
 
 from nox.ai.tooluse import SENTINEL, render_offer
 from nox.app import DEFAULTS_PATH, NoxCore
+from nox.capabilities.catalog import stale_gaps
+from nox.capabilities.gaps import CURATED_GAPS
+from nox.capabilities.model import GapReason
 from nox.core.config import load_config
 from nox.ipc.dispatch import RequestContext
 from nox.ipc.protocol import Envelope, Kind, Source
@@ -103,6 +106,23 @@ async def _as_model(core: NoxCore, tool: str, /, **arguments: Any) -> Any:
 
 async def test_the_extension_is_installed(core: NoxCore) -> None:
     assert "capabilities" in core.extensions
+
+
+async def test_no_curated_gap_names_a_tool_this_core_really_has(core: NoxCore) -> None:
+    """The unit test checks the table against a toy registry; this is the registry the model is
+    offered, with every extension installed. A row left behind there is a wrong "I cannot"."""
+    assert stale_gaps(core.tool_registry) == []
+    assert "view.show" in core.tool_registry.names()  # what the old `view.render` row denied
+
+
+async def test_the_boundaries_stay_boundaries_and_are_never_registered_as_tools(
+    core: NoxCore,
+) -> None:
+    forbidden = {gap.name for gap in CURATED_GAPS if gap.reason is GapReason.FORBIDDEN}
+
+    assert forbidden == {"home.lock", "game.input"}
+    for name in core.tool_registry.names():
+        assert not any(name == gap or name.startswith(f"{gap}.") for gap in forbidden), name
 
 
 async def test_the_model_can_see_the_capability_tools(core: NoxCore) -> None:
