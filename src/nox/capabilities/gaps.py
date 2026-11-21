@@ -9,7 +9,7 @@ Two kinds of entry live here:
 * **Curated** - the table below. It has to be maintained by hand, and the rule for maintaining it
   is simple: when a capability ships, its row moves out of here and into the registry. A row left
   behind after the tool exists is worse than no row at all, so the tests check that no entry names
-  a tool that is actually registered.
+  a tool - or the prefix of a tool - that is actually registered, in a real core.
 * **Derived** - produced from the running system: a plugin present but not enabled, a tool whose
   credential is missing. Those cannot be curated because they depend on this installation.
 """
@@ -30,6 +30,8 @@ CURATED_GAPS: tuple[Gap, ...] = (
     # Files are no longer here: `file.list/read/write/move/delete` exist, bounded by
     # `files.roots`. A row left behind after a capability ships is worse than no row, which is
     # what `stale_gaps()` is for.
+    # `view.render` moved out when `view.show` shipped: the model draws charts, tables and live
+    # views on the dashboard's Board page now.
     # `desktop.process_start` was removed here: `shell.run` starts programs now (sandboxed, with a
     # confirmation and per-command-pattern remembering). `desktop.software_install` likewise moved
     # out when `package.install`/`package.remove` shipped. `browser.control` and
@@ -39,19 +41,29 @@ CURATED_GAPS: tuple[Gap, ...] = (
         name="desktop.audio",
         what="change the volume or switch the output device",
         reason=GapReason.MISSING,
-        detail="audio is output only, through the voice worker",
+        detail=(
+            "no tool for the system volume or the default output device; Nox's own output device "
+            "is chosen on the Settings page, and `home.media` only reaches the media players "
+            "Home Assistant knows"
+        ),
     ),
     Gap(
         name="desktop.devices",
         what="see which devices are attached",
         reason=GapReason.MISSING,
-        detail="no device enumeration; a new microphone cannot be noticed, let alone set up",
+        detail=(
+            "no tool lists attached devices (USB, displays, printers); the Settings page lists "
+            "the audio outputs Nox can speak through, and nothing sets a new device up"
+        ),
     ),
     Gap(
         name="desktop.settings",
         what="change a Windows setting, service or driver",
         reason=GapReason.MISSING,
-        detail="`config.set` changes Nox's own settings and nothing else on the machine",
+        detail=(
+            "`config.set` is the Settings page's request for Nox's own settings and is not offered "
+            "to the model; Windows settings, services and drivers are out of reach"
+        ),
     ),
     Gap(
         name="security.scan",
@@ -81,13 +93,6 @@ CURATED_GAPS: tuple[Gap, ...] = (
             "one file that can type refuses while any watched game runs, and CI checks both that "
             "exemption and its guard"
         ),
-    ),
-    # ---- on the roadmap, and honest about it --------------------------------------------------
-    Gap(
-        name="view.render",
-        what="draw a chart, a table or a live view of its own",
-        reason=GapReason.MISSING,
-        detail="the dashboard has fixed pages; nothing lets the core produce a view",
     ),
 )
 

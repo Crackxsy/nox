@@ -165,6 +165,22 @@ def test_the_curated_gaps_do_not_name_registered_tools(registry: ToolRegistry) -
     assert stale_gaps(registry) == []
 
 
+def test_a_gap_is_stale_too_when_its_capability_shipped_under_a_longer_name(
+    registry: ToolRegistry,
+) -> None:
+    """`desktop.audio` is the row; the tool that closes it would be `desktop.audio.volume`."""
+    registry.register(spec("desktop.audio.volume", Risk.MEDIUM))
+    registry.register(spec("desktop.audiobook", Risk.LOW))  # a different word, not a child
+
+    assert stale_gaps(registry) == ["desktop.audio"]
+
+
+def test_what_the_view_tool_does_is_not_listed_as_missing() -> None:
+    """`view.render` stayed in the table after `view.show` shipped and told the user Nox cannot
+    draw a chart."""
+    assert "view.render" not in {gap.name for gap in CURATED_GAPS}
+
+
 def test_a_plugin_that_is_installed_but_off_becomes_a_gap() -> None:
     gaps = derived_gaps(installed_plugins=["home", "obs"], enabled_plugins=["obs"])
 
