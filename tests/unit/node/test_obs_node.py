@@ -14,7 +14,7 @@ import pytest
 from nox.ipc.overlay_tokens import OverlayTokenStore
 from nox.ipc.tokens import TokenStore
 from nox.node.device.obs import NodeObs, ObsSettings, obs_tools
-from nox.node.device.voice import voice_tools
+from nox.node.device.voice.satellite import voice_tools
 from nox.node.hub.pairing import NodePairing
 from nox.node.hub.repo import NodeRepository
 from nox.node.hub.satellites import node_overlay_label

@@ -1,42 +1,5 @@
-"""The voice satellite: Nox listens and speaks on this device; only text crosses the network.
-
-With the group `voice` enabled on this device (`nox node allow voice`, off by default) - and
-switched on for it on the core as well, where it starts switched off (`nox.node.hub.policy`,
-`CORE_OPT_IN`) - the node runs the core's own voice pipeline (`nox.voice.pipeline`) here:
-
-* **Listening** - push-to-talk (the microphone is open only while it is held) or the wake word
-  (the microphone stays open behind the wake-word gate). `mode: auto`, the default, is
-  push-to-talk on a device with a screen (the tray's key, a terminal) and the wake word on one
-  without (a headless Pi has no key to hold; `listening_mode`). Wake word, voice activity and
-  speech recognition (faster-whisper; `tiny` on a Pi, `base` elsewhere unless set) run on this
-  device. Only the recognised **text** goes to the core (`nox/voice/heard`); audio never leaves
-  the device and is never written anywhere - it lives in memory for one utterance.
-* **Who may open the microphone** - all of: the group is enabled here and not narrowed by the
-  core, the node is not stopped, it is connected to a core that understands satellites, the
-  core's privacy allows the microphone right now (`nox/voice/gate`: off until the core says
-  so - panic, safe mode, the capture switch, a privacy zone and the kill switch close it), and
-  the local mute switch is off (`nox node voice mute`, the tray). Only this device unmutes.
-* **Speaking** - the core's answer comes back as text, sentence by sentence (`nox/voice/say`),
-  accepted only for a question this device asked in the last minutes; this device synthesises it
-  (Supertonic 3, voice F3, by default; Piper when Supertonic is missing - the core's AI-voice
-  disclosure rule for streams applies to that voice like to the core's own). `voice.say` lets the
-  model say something here on purpose (low risk, receipt, budget, audit). The loudness of what is
-  played goes to the core as a number (`nox/voice/level`), for a pet on this device.
-* **Seen and heard** - while the microphone is open the tray shows it ("Nox hört zu",
-  `voice.json` in the node's folder) and, with `earcon` on, a short tone says so when push-to-talk
-  starts and when a question was taken.
-* **"Nox, Notaus"** never reaches the core as text: it stops this node at once (as
-  `nox node stop`), which stops Nox everywhere; only this device resumes.
-
-**Models** come only from `nox node voice setup` (asks first, downloads into the node's folder):
-the node loads faster-whisper with `local_files_only` and never fetches a model by itself.
-`voice.say` is offered only where the voice libraries are installed (`voice_support`).
-
-No transcript is stored on this device; the node's audit records that something was heard and
-how long it was, never what. On the core the turn follows its privacy mode like a turn spoken
-into the core's own microphone, except that facts learned from it wait for confirmation
-(`turn_origin("node")`).
-"""
+"""`VoiceSatellite`: listening (push-to-talk or the wake word), speaking what the core says, the
+local mute switch and the state the tray shows, and `voice_tools`, the tools it offers."""
 
 from __future__ import annotations
 
@@ -44,205 +7,72 @@ import asyncio
 import contextlib
 import json
 import math
-import platform
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from nox.core.events.names import E
 from nox.core.logging import get_logger
 from nox.node.device.tools import NodeRefusal, NodeTool
+from nox.node.device.voice.engines import (
+    AskCore,
+    EngineLoader,
+    TellCore,
+    VoiceEngines,
+    load_engines,
+)
+from nox.node.device.voice.settings import (
+    MUTE_FILE,
+    PTT_FILE,
+    STATE_FILE,
+    VoiceSettings,
+    listening_mode,
+    voice_support,
+)
+from nox.node.device.voice.setup import _models_missing
 from nox.node.wire import protocol as p
 from nox.node.wire.arguments import SayArgs
 from nox.node.wire.speech import say_refusal, speakable
 
 log = get_logger(__name__)
 
-# The imports inside functions below are deliberate. They are not cycle workarounds: the speech
-# stack (faster-whisper, sounddevice, numpy, the voice pipeline and its models) belongs to the
-# optional extras `voice` and `voice-supertonic`, so a device without them must still import this
-# module and report what is missing (`voice_support`) instead of failing to start.
 
-__all__ = [
-    "MUTE_FILE",
-    "listening_mode",
-    "voice_setup",
-    "voice_support",
-    "PTT_FILE",
-    "STATE_FILE",
-    "VoiceEngines",
-    "VoiceSatellite",
-    "VoiceSettings",
-    "voice_config",
-    "voice_tools",
-]
-
-#: Marker files in the node's folder: muted here (only this device removes it), push-to-talk held
-#: (written by the tray's key or `nox node voice talk`), and what the tray shows.
-MUTE_FILE = "voice-muted"
-PTT_FILE = "voice-ptt"
-STATE_FILE = "voice.json"
 #: A push-to-talk marker older than this is a key that was never released: ignored and removed.
 PTT_STALE_S = 30.0
+
+
 #: How long an answer to one of this device's questions may keep coming.
 TURN_TTL_S = 180.0
+
+
 MAX_TURNS = 8
+
+
 MAX_SENTENCES = 40
+
+
 #: How long after this device stopped speaking what it hears still counts as its own echo.
 ECHO_TAIL_S = 0.3
+
+
 #: The low two-tone "no" after the core refused an utterance, and how often it may sound.
 REFUSAL_TONES = (330.0, 220.0)
+
+
 REFUSAL_SOUND_EVERY_S = 20.0
+
+
 #: Levels sent to the core per second at most (the pet needs no more).
 LEVEL_HZ = 15
+
+
 POLL_S = 0.2
-
-
-class VoiceSettings(BaseModel):
-    """The `voice:` part of this node's `satellites.yaml`. How it listens and speaks - not
-    whether: that is the group `voice` (`nox node allow voice`)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    #: `auto`: push-to-talk with a screen, the wake word without one (`listening_mode`).
-    mode: Literal["auto", "push_to_talk", "wake_word"] = "auto"
-    wake_word: str = Field(default="Nox", min_length=2, max_length=32)
-    language: Literal["de", "en", "auto"] = "de"
-    #: Empty: by device - `tiny` on a Raspberry Pi (arm), `base` elsewhere.
-    stt_model: Literal["", "tiny", "base", "small"] = ""
-    tts_engine: Literal["supertonic", "piper"] = "supertonic"
-    tts_voice: str = Field(default="", max_length=64)
-    volume: float = Field(default=0.8, ge=0.0, le=1.0)
-    #: A short tone when push-to-talk starts and when a question was taken.
-    earcon: bool = True
-    #: Where the model files are; empty: `models` in the node's folder.
-    models_dir: str = Field(default="", max_length=400)
-
-
-def listening_mode(
-    settings: VoiceSettings, screen: Callable[[], bool] | None = None
-) -> Literal["push_to_talk", "wake_word"]:
-    """How this device listens: the setting, or for `auto` push-to-talk where there is a screen
-    (a key to hold, a tray) and the wake word where there is none - read when asked, so a desktop
-    session that starts later counts."""
-    if settings.mode != "auto":
-        return settings.mode
-    if screen is None:
-        from nox.node.device.confirm import has_screen  # noqa: PLC0415 - resolved at call time, so a replaced probe is seen
-
-        screen = has_screen
-    return "push_to_talk" if screen() else "wake_word"
-
-
-def voice_support(has_module: Callable[[str], bool] | None = None) -> str | None:
-    """Why the voice satellite cannot work on this device (a library is missing), or None."""
-    if has_module is None:
-        has_module = installed_module()
-    if not has_module("sounddevice"):
-        return "the microphone and speaker need the extra `voice` (sounddevice)"
-    if has_module is installed_module() and not _portaudio_there():
-        return (
-            "the microphone and speaker need the PortAudio library "
-            "(Linux: sudo apt install libportaudio2)"
-        )
-    if not has_module("faster_whisper"):
-        return "speech recognition needs the extra `voice` (faster-whisper)"
-    if not (has_module("supertonic") or has_module("piper")):
-        return "speaking needs the extra `voice-supertonic` or `voice` (Piper)"
-    return None
-
-
-def installed_module() -> Callable[[str], bool]:
-    # Loaded here: `world` pulls in the agent and with it the TLS and token stack, which the
-    # speech setup commands and the tray's state reads never need (start time on a small device).
-    from nox.node.device.world import installed  # noqa: PLC0415
-
-    return installed
-
-
-def _portaudio_there() -> bool:
-    """sounddevice imports only with the system's PortAudio library behind it."""
-    try:
-        import sounddevice  # noqa: F401, PLC0415
-    except OSError:
-        return False
-    except ImportError:
-        return True  # not installed: said by the check before
-    return True
-
-
-def small_device(machine: str | None = None) -> bool:
-    arch = (machine if machine is not None else platform.machine()).lower()
-    return arch.startswith(("arm", "aarch"))
-
-
-def voice_config(settings: VoiceSettings, home: Path) -> Any:
-    """The core's `VoiceConfig` for this device: its engines, sized for it."""
-    from nox.core.config.assistant import VoiceConfig  # noqa: PLC0415
-
-    model = settings.stt_model or ("tiny" if small_device() else "base")
-    return VoiceConfig.model_validate(
-        {
-            "stt": {
-                "model": model,
-                "language": settings.language,
-                "wake_word": settings.wake_word,
-                "listening_mode": "ptt_only"
-                if listening_mode(settings) == "push_to_talk"
-                else "continuous",
-                # No follow-up without the wake word on a satellite (one utterance per wake).
-                "conversation_window_s": 0.0,
-            },
-            "tts": {
-                "engine": settings.tts_engine,
-                "voice": settings.tts_voice,
-                "volume": settings.volume,
-            },
-            "models_dir": settings.models_dir or str(home / "models"),
-        }
-    )
-
-
-@dataclass
-class VoiceEngines:
-    audio_in: Any
-    audio_out: Any
-    stt: Any
-    tts: Any
-    wake_gate: Any = None
-
-    async def unload(self) -> None:
-        for engine in (self.stt, self.tts):
-            with contextlib.suppress(Exception):
-                await engine.unload()
-
-
-async def load_engines(settings: VoiceSettings, home: Path) -> VoiceEngines:
-    """The core's engines on this device (`nox.worker.main`), loaded off the event loop."""
-    from nox.worker.main import build_components, build_wake_gate, load_tts  # noqa: PLC0415
-
-    cfg = voice_config(settings, home)
-    parts = await asyncio.to_thread(build_components, cfg, service="voice")
-    stt, tts = parts["stt"], parts["tts"]
-    # Never a download on its own: the models come from `nox node voice setup` (asked first).
-    stt.local_files_only = True
-    await stt.load()
-    tts = await load_tts(tts, cfg)
-    gate = build_wake_gate(cfg) if listening_mode(settings) == "wake_word" else None
-    return VoiceEngines(parts["audio_in"], parts["audio_out"], stt, tts, gate)
-
-
-EngineLoader = Callable[[VoiceSettings, Path], Awaitable[VoiceEngines]]
-#: Sends one request to the core and returns its answer (None: not connected / no answer).
-AskCore = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any] | None]]
-#: Sends one notification to the core.
-TellCore = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 @dataclass
@@ -749,97 +579,3 @@ def voice_tools(
         precheck=precheck,  # never the wake word or a kill phrase: it would come back as one
     )
     return {tool.name: tool}
-
-
-# ---- the models: only with a yes (`nox node voice setup`) ---------------------------------------
-
-
-def _models_missing(exc: BaseException) -> bool:
-    """Whether loading failed because a model is not downloaded yet (never fetched by itself)."""
-    names = {type(e).__name__ for e in (exc, exc.__cause__, exc.__context__) if e is not None}
-    hints = ("LocalEntryNotFound", "EntryNotFound", "FileNotFound", "missing")
-    return any(hint in name for name in names for hint in hints) or "missing" in str(exc)
-
-
-#: The Hugging Face revision of each faster-whisper model `nox node voice setup` fetches - a commit,
-#: so the files are exactly the ones this release was checked with, whatever `main` becomes.
-#: Read from the repositories' heads on 2026-11-12; moved on purpose, with a release.
-WHISPER_REVISIONS = {
-    "tiny": "d90ca5fe260221311c53c58e660288d3deb8d356",
-    "base": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
-    "small": "536b0662742c02347bc0e980a01041f333bce120",
-}
-
-
-def _download_whisper(model: str, target: Path) -> None:
-    """faster-whisper's own download, pinned to `WHISPER_REVISIONS`, into a plain folder
-    `<target>/whisper-<model>` - which the speech engine prefers over its cache
-    (`FasterWhisperStt._load_sync`)."""
-    from faster_whisper.utils import download_model  # noqa: PLC0415 - the extra `voice`
-
-    revision = WHISPER_REVISIONS.get(model)
-    if revision is None:
-        raise ValueError(f"no pinned revision for the model {model!r}")
-    folder = target / f"whisper-{model}"
-    folder.mkdir(parents=True, exist_ok=True)
-    download_model(model, output_dir=str(folder), revision=revision)
-
-
-def _download_tts(engine: str, target: Path, echo: Callable[[str], None]) -> int:
-    from nox.voice.models import download_engine  # noqa: PLC0415
-
-    return download_engine(engine, target, echo=echo)
-
-
-def voice_setup(
-    home: Path,
-    settings: VoiceSettings,
-    *,
-    confirm: Callable[[str], bool] | None,
-    echo: Callable[[str], None] = print,
-    download_whisper: Callable[[str, Path], None] = _download_whisper,
-    download_tts: Callable[[str, Path, Callable[[str], None]], int] = _download_tts,
-) -> int:
-    """`nox node voice setup`: the speech models for this device, into its own folder (or
-    `voice.models_dir`) - only after a yes (`confirm`; None: the person said `--yes`). Speech
-    recognition (Whisper, sized for this device) and the configured voice (Supertonic 3; Piper
-    voices are placed by hand). 0 when everything is there, 1 when refused or failed."""
-    from nox.node.device.cli_text import t  # noqa: PLC0415 - the words load only for this command
-    from nox.voice.models import engine_models_dir  # noqa: PLC0415
-
-    support = voice_support()
-    if support is not None:
-        echo(t("vs_not_installed", reason=support))
-        return 1
-    cfg = voice_config(settings, home)
-    stt_model = str(cfg.stt.model)
-    whisper_dir = engine_models_dir("faster-whisper", cfg.models_dir)
-    engine = settings.tts_engine
-    tts_dir = engine_models_dir(engine, cfg.models_dir)
-    sizes = {"tiny": "75 MB", "base": "145 MB", "small": "480 MB"}
-    size = sizes.get(stt_model, "?")
-    question = t(
-        "vs_question",
-        model=stt_model,
-        size=size,
-        where=whisper_dir,
-        voice=t("vs_voice_part") if engine == "supertonic" else "",
-    )
-    if confirm is not None and not confirm(question):
-        echo(t("vs_nothing"))
-        return 1
-    try:
-        echo(t("vs_whisper", model=stt_model, where=whisper_dir))
-        download_whisper(stt_model, whisper_dir)
-    except Exception as exc:  # noqa: BLE001 - reported, nothing half-claimed
-        echo(t("vs_whisper_failed", error=f"{type(exc).__name__}: {str(exc)[:200]}"))
-        return 1
-    if engine == "piper":
-        echo(t("vs_piper", where=tts_dir))
-        return 0
-    code = download_tts(engine, tts_dir, echo)
-    if code != 0:
-        echo(t("vs_tts_failed", engine=engine, code=code))
-        return 1
-    echo(t("vs_done"))
-    return 0

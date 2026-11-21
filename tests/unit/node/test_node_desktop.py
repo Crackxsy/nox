@@ -10,10 +10,11 @@ from pathlib import Path
 import pytest
 
 from nox.node.device import appid, tools
-from nox.node.device.cli import NodeRuntime, keep_updated
+from nox.node.device.cli.runtime import NodeRuntime
+from nox.node.device.cli.updates import keep_updated
 from nox.node.device.home import NodeHome
 from nox.node.device.tray import STOP_KEYS, allowed_here, stop_here, view
-from nox.node.device.update import UpdateCheck
+from nox.node.device.update.state import UpdateCheck
 from nox.shell.hotkeys import HotkeyTracker
 from nox.shell.logic import HotkeyAction
 
@@ -59,7 +60,7 @@ def test_the_tray_says_when_listening_is_not_switched_on_in_the_dashboard(tmp_pa
     import json
 
     from nox.node.device.tray import has_voice, not_switched_on
-    from nox.node.device.voice import STATE_FILE
+    from nox.node.device.voice.settings import STATE_FILE
 
     home = NodeHome(tmp_path / "node")
     home.ensure()
@@ -219,7 +220,7 @@ def test_the_tray_starts_isolated_in_the_app_folder(monkeypatch: pytest.MonkeyPa
 def test_the_trial_start_runs_isolated_in_the_new_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import update
+    from nox.node.device.update import updater
 
     seen: dict[str, object] = {}
 
@@ -231,9 +232,9 @@ def test_the_trial_start_runs_isolated_in_the_new_copy(
         seen.update(argv=argv, **kwargs)
         return Done()
 
-    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
     monkeypatch.setenv("PYTHONHOME", "elsewhere")
-    assert update._default_smoke(tmp_path, "python-here") == "0.5.1"  # noqa: SLF001
+    assert updater._default_smoke(tmp_path, "python-here") == "0.5.1"  # noqa: SLF001
     # Isolated, and no bytecode written into the folder the launcher checks file by file.
     assert seen["argv"][:3] == ["python-here", "-I", "-B"]  # type: ignore[index]
     assert seen["cwd"] == str(tmp_path)
@@ -283,7 +284,7 @@ async def test_only_a_core_that_accepts_this_node_counts_as_connected(
     core that refuses this node's protocol never confirms a version on trial."""
     from datetime import UTC, datetime
 
-    from nox.node.device.agent import NodeAgent
+    from nox.node.device.agent.node_agent import NodeAgent
     from nox.node.device.gate import NodeGate
     from nox.node.device.home import NodeIdentity
     from nox.node.device.keystore import NodeKeyStore

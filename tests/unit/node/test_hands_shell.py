@@ -24,7 +24,7 @@ from tests.unit.node.support_hands import FakeSandbox, hand_tools_for, link_fold
 
 
 async def test_shell_is_refused_without_a_strong_sandbox(fs_world: dict[str, Path]) -> None:
-    from nox.node.device.hands import ShellArgs
+    from nox.node.device.hands.args import ShellArgs
 
     for sandbox in (None, FakeSandbox(weak=True)):
         tools = hand_tools_for(fs_world, sandbox)
@@ -36,7 +36,7 @@ async def test_shell_is_refused_without_a_strong_sandbox(fs_world: dict[str, Pat
 
 
 async def test_shell_runs_in_the_sandbox(fs_world: dict[str, Path]) -> None:
-    from nox.node.device.hands import ShellArgs
+    from nox.node.device.hands.args import ShellArgs
 
     sandbox = FakeSandbox()
     tools = hand_tools_for(fs_world, sandbox)
@@ -52,7 +52,7 @@ def test_packages_are_not_offered_on_nodes_yet(fs_world: dict[str, Path]) -> Non
 
 def test_the_default_sandbox_never_accepts_the_weak_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     import nox.sandbox
-    from nox.node.device.hands import default_sandbox
+    from nox.node.device.hands.node_hands import default_sandbox
 
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(nox.sandbox, "make_sandbox", lambda **kw: seen.append(kw) or "made")

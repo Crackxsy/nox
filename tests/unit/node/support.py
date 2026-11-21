@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict
 from websockets.asyncio.client import ClientConnection, connect
 
 from nox.lan.tls import TlsMaterial
-from nox.node.device.agent import NodeAgent
+from nox.node.device.agent.node_agent import NodeAgent
 from nox.node.device.gate import NodeGate
 from nox.node.device.home import NodeHome, NodeIdentity
 from nox.node.device.keystore import NodeKeyStore
@@ -476,13 +476,13 @@ def call_meta(signer: ReceiptSigner, name: str, args: Any, **kw: Any) -> NoxCall
 
 def node_home(tmp_path: Path, *, paired: bool = True) -> Any:
     """A node folder; `paired` records the defaults a pairing confirms on the device."""
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import pairing as cli_pairing
     from nox.node.device.home import NodeHome
 
     home = NodeHome(tmp_path / "node-home")
     home.ensure()
     if paired:
-        node_cli.confirm_defaults(home, None)
+        cli_pairing.confirm_defaults(home, None)
     return home
 
 

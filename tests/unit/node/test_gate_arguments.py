@@ -17,7 +17,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from nox.lan.tls import TlsMaterial
-from nox.node.device.agent import confirmation_text
+from nox.node.device.agent.dialog_text import confirmation_text
 from nox.node.device.gate import NodeGate, inside
 from nox.node.device.tools import NodeTool, default_tools
 from nox.node.hub.listener import NodeListener

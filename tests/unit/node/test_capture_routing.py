@@ -14,7 +14,7 @@ import pytest
 
 from nox.lan.tls import TlsMaterial
 from nox.node.device.tools import NodeRefusal
-from nox.node.device.world import world_tools
+from nox.node.device.world.catalogue import world_tools
 from nox.node.hub.listener import NodeListener
 from nox.node.hub.pairing import NodePairing
 from nox.node.hub.registry import BLOB_RESULT_KEY

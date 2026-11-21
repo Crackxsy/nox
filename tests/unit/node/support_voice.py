@@ -14,7 +14,9 @@ import numpy as np
 
 from nox.ipc.tokens import TokenStore
 from nox.node.device.gate import NodeGate
-from nox.node.device.voice import VoiceEngines, VoiceSatellite, VoiceSettings
+from nox.node.device.voice.engines import VoiceEngines
+from nox.node.device.voice.satellite import VoiceSatellite
+from nox.node.device.voice.settings import VoiceSettings
 from nox.node.hub.satellites import NodeDirectory, OverlayAccess, SatelliteHub, VoiceAssistant
 from nox.node.wire import protocol as p
 from nox.node.wire.manifest import GROUPS, NodeManifest

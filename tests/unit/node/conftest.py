@@ -34,9 +34,9 @@ def _english_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
 def _instant_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scripted confirmers answer at once; the 1.5 s rule against reflex answers is tested on
     its own (`test_device_confirmation.py`)."""
-    from nox.node.device import agent as agent_module
+    from nox.node.device.agent import calls as agent_calls
 
-    monkeypatch.setattr(agent_module, "MIN_DECISION_S", 0.0)
+    monkeypatch.setattr(agent_calls, "MIN_DECISION_S", 0.0)
 
 
 @pytest.fixture
@@ -111,15 +111,17 @@ def _same_groups_on_every_test_os(monkeypatch: pytest.MonkeyPatch) -> None:
 
     if sys.platform != "darwin":
         return
-    from nox.node.device import cli, cli_text
+    from nox.node.device import cli_text
+    from nox.node.device.cli import allow, controls
 
     real = cli_text.unsupported_reason
     monkeypatch.setattr(
-        cli, "unsupported_reason", lambda group, platform="linux": real(group, platform)
+        allow, "unsupported_reason", lambda group, platform="linux": real(group, platform)
     )
-    monkeypatch.setattr(
-        cli, "supported_here", lambda group, platform="linux": real(group, platform) is None
-    )
+    for module in (allow, controls):  # each looks `supported_here` up in its own namespace
+        monkeypatch.setattr(
+            module, "supported_here", lambda group, platform="linux": real(group, platform) is None
+        )
 
 
 @pytest.fixture(autouse=True)

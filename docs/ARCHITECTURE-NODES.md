@@ -89,8 +89,8 @@ The rules are a contract that CI checks (`lint-imports`, configured in `pyprojec
 
 Two imports are still allowed against rule 2, each with its reason next to it in
 `pyproject.toml` (`ignore_imports`): `hub.install.routes` reads the file tools' argument models and
-refusal words from `device.hands` (they depend on the write rules inside `device.safe_fs`), and
-`device.voice` builds the voice pipeline with the helpers in `nox.worker.main`, which reach the
+refusal words from `device.hands.args` (they depend on the write rules in `device.safe_fs`), and
+`device.voice.engines` builds the voice pipeline with the helpers in `nox.worker.main`, which reach the
 core application only through its `voice setup` command. The list may only get shorter.
 
 ### Core side (`node/hub/`)
@@ -136,17 +136,17 @@ ends the connection) and listed before its microphone gate is pushed, and
 
 | Module | Owns | Does not |
 | --- | --- | --- |
-| `node/device/cli.py`, `node/device/cli_text.py` | `nox-node pair / run / allow / deny / stop / ...`: the only way to widen what the device allows. | Accept anything from the core. |
+| `node/device/cli/`, `node/device/cli_text.py` | `nox-node pair / run / allow / deny / stop / ...`: the only way to widen what the device allows. `cli/runtime.py` (what every command shares, `build`), `pairing.py`, `serve.py` (`run`), `updates.py`, `controls.py` (`status`, `log`, `stop`, `resume`), `allow.py` (`allow`, `games`). | Accept anything from the core. |
 | `node/device/enroll.py` | Pairing from the device: pin the authority from the link, then send the code and a certificate request. | — |
 | `node/device/home.py`, `node/device/keystore.py` | The node folder and the private key (never leaves the device). | — |
 | `node/device/confirmed.py` | Which part of `node.yaml` a person really confirmed (HMAC in the node's audit trail). | Trust the file alone. |
-| `node/device/agent.py` | The connection (`run`, backoff), the dispatch of what the core sends (`_dispatch`), one call (`_call`), the question on the device (`_confirm_here`), stop states, the dead-man rule, renewal. | Decide whether a call is allowed (that is the gate). |
+| `node/device/agent/` | `NodeAgent`, built in layers: `base.py` (state, stop state, replies, audit lines), `calls.py` (one call: `_call`, the question on the device `_confirm_here`, the dead-man rule, blob chunks), `core_requests.py` (`ask_core`, `notify_core`, renewal), `node_agent.py` (the connection: `run`, backoff, one session, `_dispatch`); `dialog_text.py` (the sentences of the question), `netinfo.py` (the addresses it reports). | Decide whether a call is allowed (that is the gate). |
 | `node/device/gate.py` | `NodeGate`: every check before a handler runs, in a fixed order (`CHECK_ORDER`), budget, audit of every decision. | Open files or ask anyone. |
 | `node/device/confirm.py` | The dialog itself on Windows, macOS, Linux; "is there a screen". | Decide when to ask. |
-| `node/device/tools.py`, `node/device/hands.py`, `node/device/world.py` | The tools: `system.info` (reading in `wire/sysinfo.py`), `notify.show`; `file.*`, `shell.run`; captures, browser, desktop, computer use, media. | Check permissions (the gate did). They hold their *own* boundary: `safe_fs`, the sandbox, the game lock. |
-| `node/device/safe_fs.py` | Opening a path so that the verdict is taken on the open handle; what a write may contain. | — |
-| `node/device/voice.py`, `node/device/obs.py`, `node/device/overlay.py`, `node/device/satellite_node.py`, `node/device/satellite_cli.py`, `node/device/satellite_settings.py` | The satellites on the device: microphone and speaker, the device's own OBS, the overlay relay on loopback, their settings and commands. | Send audio to the core. |
-| `node/device/update.py`, `node/device/bundle.py`, `node/device/renewal.py` | Self-update from a signed release; certificate renewal. | Take an update from the core. |
+| `node/device/tools.py`, `node/device/hands/`, `node/device/world/` | The tools: `system.info` (reading in `wire/sysinfo.py`), `notify.show`; `file.*`, `shell.run` (`hands/args.py`, `files.py`, `node_hands.py`, `catalogue.py`); captures, browser, desktop, computer use, media (`world/node_world.py`, `game_lock.py`, `media.py`, `notices.py`, `catalogue.py`). | Check permissions (the gate did). They hold their *own* boundary: `safe_fs`, the sandbox, the game lock. |
+| `node/device/safe_fs/` | Opening a path so that the verdict is taken on the open handle; what a write may contain. `formats.py` and `text_checks.py` (what may be written, decided on the text), `secret_places.py`, `workspace.py`, `folders.py` (where nothing is reached), `posix.py`, `windows.py`, `windows_files.py` (the open on a handle, per platform), `opening.py`, `move_delete.py` (the entry points). | — |
+| `node/device/voice/`, `node/device/obs.py`, `node/device/overlay.py`, `node/device/satellite_node.py`, `node/device/satellite_cli.py`, `node/device/satellite_settings.py` | The satellites on the device: microphone and speaker, the device's own OBS, the overlay relay on loopback, their settings and commands. | Send audio to the core. |
+| `node/device/update/`, `node/device/bundle.py`, `node/device/renewal.py` | Self-update from a signed release (`update/fetch.py`, `state.py`, `updater.py`); certificate renewal. | Take an update from the core. |
 | `node/device/tray.py`, `node/device/appid.py` | Tray icon and stop key; the notification identity. | — |
 
 ### Shared wire code (`node/wire/`)
@@ -157,7 +157,7 @@ ends the connection) and listed before its microphone gate is pushed, and
 | `node/wire/receipts.py` | Both ends of a receipt: `ReceiptSigner` (the core signs what it decided) and `ReceiptVerifier` (the device checks the signature, expiry, replay). |
 | `node/wire/manifest.py` | `node.yaml` and the capability groups (`GROUPS`) - the words the device, the core and the dashboard share. |
 | `node/wire/names.py` | Which device names are allowed (a name is typed on the device: untrusted text). |
-| `node/wire/arguments.py` | The strict argument models of the tools both sides validate (`NoArgs`, `NotifyArgs`, `SayArgs`, `MediaArgs`, `ObsArgs`). The file tools' arguments stay in `device/hands.py` with their refusal rules. |
+| `node/wire/arguments.py` | The strict argument models of the tools both sides validate (`NoArgs`, `NotifyArgs`, `SayArgs`, `MediaArgs`, `ObsArgs`). The file tools' arguments stay in `device/hands/args.py` with their refusal rules. |
 | `node/wire/speech.py` | What may be said on a node's speaker (`latin_only`, `speakable`, `say_refusal`): the core filters a sentence with it and the device filters it again. |
 | `node/wire/paths.py` | Path spellings the device never resolves for the core (`names_a_path_alias`, `is_remote_or_device_path`): decided on the text alone. |
 | `node/wire/addresses.py` | This machine's own addresses (`all_local_addresses`) and the value that means "unreadable" (`ADDRESSES_UNREADABLE`). |
@@ -288,14 +288,14 @@ sequenceDiagram
 | 7 | A "confirm" for a delegated call is not asked on the core: the device asks. Otherwise the user is asked here. Then the kill switch is checked once more. | `tools/executor.py::ToolExecutor.call` | denied; stopped | `test_core_delegation.py::test_the_executor_skips_its_own_prompt_only_when_delegated` |
 | 8 | The handler runs exactly what the scope decided - it never re-decides, even if the registry changed meanwhile. Offline at this moment: fail fast, nothing is queued, no other device is substituted. | `router.py::routed_spec` (`handler`), `registry.py::NodeRegistry.call` | `not_routed`, `device_offline` | `test_core_delegation.py::test_the_handler_never_re_decides_what_the_scope_decided`, `test_router.py::test_a_device_gone_between_permission_and_run_fails_fast` |
 | 9 | Sign the receipt (see below) and send `tools/call` with the `_nox` metadata on the node's open connection. The call waits `NODE_CALL_TIMEOUT_S`, plus the dialog's minute when it is high risk. | `registry.py::NodeRegistry.call`, `receipts.py::ReceiptSigner.sign` | `invalid_arguments` (arguments that cannot be signed) | `test_receipts.py::test_a_receipt_binds_exactly_this_call` |
-| 10 | On the device: only methods in `CORE_TO_NODE` are served; at most `MAX_CONCURRENT_CALLS` calls at once; the arguments are brought into one Unicode form (NFC) so that the text signed, shown and run is the same. | `agent.py::NodeAgent._dispatch`, `_call` | "not supported", `busy`, `update_needed` | `test_agent.py::test_methods_outside_the_core_list_are_refused`, `test_gate.py::test_a_flood_of_calls_is_capped`, `test_gate_arguments.py::test_the_same_text_is_signed_shown_and_run` |
-| 11 | The tool's slow text check, off the event loop and stateless - pings, a stop and the dead-man rule keep running; a check that runs out of time is abandoned and has spent nothing. | `agent.py::NodeAgent._call`, `gate.py::NodeGate.precheck` | `check_timeout`, the check's own reason | `test_write_text_checks.py::test_a_check_that_runs_out_of_time_spends_nothing_and_allows_nothing` |
+| 10 | On the device: only methods in `CORE_TO_NODE` are served; at most `MAX_CONCURRENT_CALLS` calls at once; the arguments are brought into one Unicode form (NFC) so that the text signed, shown and run is the same. | `agent/node_agent.py::NodeAgent._dispatch`, `agent/calls.py::CallRunner._call` | "not supported", `busy`, `update_needed` | `test_agent.py::test_methods_outside_the_core_list_are_refused`, `test_gate.py::test_a_flood_of_calls_is_capped`, `test_gate_arguments.py::test_the_same_text_is_signed_shown_and_run` |
+| 11 | The tool's slow text check, off the event loop and stateless - pings, a stop and the dead-man rule keep running; a check that runs out of time is abandoned and has spent nothing. | `agent/calls.py::CallRunner._call`, `gate.py::NodeGate.precheck` | `check_timeout`, the check's own reason | `test_write_text_checks.py::test_a_check_that_runs_out_of_time_spends_nothing_and_allows_nothing` |
 | 12 | Gate 2: `NodeGate.check`. The order is in the next table. | `gate.py::NodeGate._decide` | see below | `test_gate_order.py` |
-| 13 | High risk: the question on the device. | `agent.py::NodeAgent._confirm_here`, `confirm.py` | `high_needs_local_confirmation`, `cannot_show_in_full`, `denied_on_device`, `confirmation_timeout` | `test_device_confirmation.py` |
-| 14 | The handler runs. With a side effect it runs under the dead-man rule ([5](#5-stopping)). A hand that meets its own boundary raises `NodeRefusal`. | `agent.py::NodeAgent._call`, `_under_dead_man`, `hands.py` | `dead_man`, `outside_folders` and the other `safe_fs` reasons, `sandbox_unavailable` | `test_stop_and_dead_man.py::test_the_dead_man_aborts_a_side_effect_when_the_core_goes_silent`, `test_hands_shell.py::test_shell_is_refused_without_a_strong_sandbox` |
-| 15 | `file.*` opens through `safe_fs`: text -> handle -> verdict on the handle ([6g](#6g-files-check-on-the-handle)). | `safe_fs.py::open_existing`, `open_new` | `invalid_path`, `link_refused`, `hard_link_refused`, `node_home_protected`, `execution_trigger`, `working_tree_refused`, ... | `test_safe_fs_read_write.py::test_a_swap_between_the_text_check_and_the_open_is_caught` |
-| 16 | Audit on both sides: the node's own hash-chained trail records every gate decision and every confirmation (the core cannot read or erase it); the core's audit records the call with its device. | `gate.py::NodeGate._record`, `agent.py::_audit_event`, `tools/executor.py::ToolExecutor._finish` | — | `test_node_local.py::test_the_gate_records_a_hostile_tool_name_escaped` |
-| 17 | The answer: structured content plus text; a capture's bytes travel before it as `nox/blob` chunks and are not kept on the node. A result too large for one frame is an honest error, not a cut result. | `agent.py::NodeAgent._call`, `_send_blob`; `listener.py::NodeSession.take_blob` | "result too large", "capture too large" | `test_agent.py::test_a_result_too_large_for_a_frame_is_an_honest_error`, `test_capture_routing.py::test_a_capture_travels_as_blob_chunks_and_needs_the_device_dialog` |
+| 13 | High risk: the question on the device. | `agent/calls.py::CallRunner._confirm_here`, `confirm.py` | `high_needs_local_confirmation`, `cannot_show_in_full`, `denied_on_device`, `confirmation_timeout` | `test_device_confirmation.py` |
+| 14 | The handler runs. With a side effect it runs under the dead-man rule ([5](#5-stopping)). A hand that meets its own boundary raises `NodeRefusal`. | `agent/calls.py::CallRunner._call`, `_under_dead_man`, `hands/` | `dead_man`, `outside_folders` and the other `safe_fs` reasons, `sandbox_unavailable` | `test_stop_and_dead_man.py::test_the_dead_man_aborts_a_side_effect_when_the_core_goes_silent`, `test_hands_shell.py::test_shell_is_refused_without_a_strong_sandbox` |
+| 15 | `file.*` opens through `safe_fs`: text -> handle -> verdict on the handle ([6g](#6g-files-check-on-the-handle)). | `safe_fs/opening.py::open_existing`, `open_new` | `invalid_path`, `link_refused`, `hard_link_refused`, `node_home_protected`, `execution_trigger`, `working_tree_refused`, ... | `test_safe_fs_read_write.py::test_a_swap_between_the_text_check_and_the_open_is_caught` |
+| 16 | Audit on both sides: the node's own hash-chained trail records every gate decision and every confirmation (the core cannot read or erase it); the core's audit records the call with its device. | `gate.py::NodeGate._record`, `agent/base.py::AgentBase._audit_event`, `tools/executor.py::ToolExecutor._finish` | — | `test_node_local.py::test_the_gate_records_a_hostile_tool_name_escaped` |
+| 17 | The answer: structured content plus text; a capture's bytes travel before it as `nox/blob` chunks and are not kept on the node. A result too large for one frame is an honest error, not a cut result. | `agent/calls.py::CallRunner._call`, `_send_blob`; `listener.py::NodeSession.take_blob` | "result too large", "capture too large" | `test_agent.py::test_a_result_too_large_for_a_frame_is_an_honest_error`, `test_capture_routing.py::test_a_capture_travels_as_blob_chunks_and_needs_the_device_dialog` |
 | 18 | Cleaning: the raw answer never reaches the model. Only text items and a bounded structured result pass; a refusal becomes `refused_on_device` with a short reason. | `registry.py::clean_result` | `malformed_result`, `refused_on_device`, `failed_on_device` | `test_router.py::test_a_malformed_result_is_an_error_never_raw`, `::test_an_oversized_result_is_truncated_with_a_marker` |
 | 19 | After the answer (`around`): a capture is checked against its hash and this core's privacy and stored on the core; a session report is taken by `NodeControl` and removed from what the model sees; window titles are hidden while this core is in panic or safe mode (`private_now`). | `world_routes.py::_capture_around`, `NodeControl.around`, `_redact_around` | a capture that does not match is refused | `test_capture_routing.py::test_a_capture_that_does_not_match_its_hash_or_privacy_is_refused` |
 | 20 | The tool loop marks the conversation tainted: what a node returns is untrusted data ([6d](#6d-taint)). | `core/toolloop.py::ToolLoop._mark` | — | `test_router.py::test_node_results_taint_the_conversation` |
@@ -418,7 +418,7 @@ in answers, pongs and hellos that can arrive late, out of order, or from a node 
 **The rule.** The lock is *derived* from the node's reports, never switched by an event
 (`world_routes.py::NodeControl`). Every report carries a **generation**: a random epoch per run
 of the node in the high bits plus a counter that goes up by one with every session start and
-end (`world.py`, the `gen` field and `session_changed`). A report older than the newest known
+end (`world/node_world.py`, the `gen` field and `session_changed`). A report older than the newest known
 one is ignored. And only a
 session **this core started on this connection** can hold the lock.
 
@@ -654,7 +654,7 @@ Tests: `tests/unit/core/test_orchestrator_turn_slot.py`
 ### 6f. The update chain
 
 A node updates itself from the project's signed release and **never from its core**
-(`node/device/update.py`, `node/device/bundle.py`) - otherwise a compromised core could replace the one
+(`node/device/update/updater.py`, `node/device/bundle.py`) - otherwise a compromised core could replace the one
 program that is meant to say no to it.
 
 ```mermaid
@@ -704,7 +704,7 @@ allowed folder: /home/alex/Notes        the node folder (key, certificate): ~/.l
  3. open("Notes/list.txt")   -> opens node.key
 ```
 
-**The rule** (`node/device/safe_fs.py`, module docstring; `open_existing`, `open_new`, `_verify`).
+**The rule** (`node/device/safe_fs/__init__.py`, package docstring; `open_existing`, `open_new`, `_verify`).
 Three steps, and the verdict comes last, on the thing that was really opened:
 
 1. **The text.** Spellings only the file system could resolve are refused before anything
@@ -729,7 +729,7 @@ The swap is staged for real in
 `test_safe_fs_read_write.py::test_a_swap_between_the_text_check_and_the_open_is_caught`.
 
 **The write model.** A write is the dangerous one, so it has rules of its own
-(`safe_fs.py::write_refusal`, `content_refusal`, `execution_trigger`; `hands.py`).
+(`safe_fs/formats.py::write_refusal`, `execution_trigger`, `safe_fs/text_checks.py::content_refusal`; `hands/`).
 
 | Rule | What it means | Why |
 | --- | --- | --- |

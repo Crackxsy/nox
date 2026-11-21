@@ -31,7 +31,7 @@ from tests.unit.node.support_sessions import (
 
 
 def test_addresses_are_compared_in_one_spelling() -> None:
-    from nox.node.device.agent import local_addresses
+    from nox.node.device.agent.netinfo import local_addresses
     from nox.node.hub.world_routes import host_of
 
     assert host_of("[FE80::1%eth0]") == "fe80::1"
@@ -95,7 +95,7 @@ async def test_the_node_says_where_it_is_in_its_hello_and_every_pong(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`NodeHello.addresses` and `nox/pong` `addresses`, reused for a while."""
-    from nox.node.device import agent as agent_module
+    from nox.node.device.agent import node_agent as agent_module
     from nox.node.wire.protocol import NodeHello, Ping
 
     calls: list[int] = []
@@ -126,7 +126,7 @@ async def test_the_node_says_where_it_is_in_its_hello_and_every_pong(
 def test_real_interfaces_come_before_virtual_ones(monkeypatch: pytest.MonkeyPatch) -> None:
     import psutil
 
-    from nox.node.device.agent import local_addresses
+    from nox.node.device.agent.netinfo import local_addresses
 
     def entry(address: str) -> Any:
         return SimpleNamespace(address=address)
@@ -302,7 +302,7 @@ async def test_the_listener_takes_the_addresses_the_agent_sends_in_hello_and_pon
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import nox.node.device.agent as agent_module
+    from nox.node.device.agent import node_agent as agent_module
 
     current = {"addresses": ["192.0.2.10", "fe80::10"]}
     monkeypatch.setattr(agent_module, "local_addresses", lambda: list(current["addresses"]))

@@ -1,10 +1,10 @@
 """`file.move` and `file.delete` on a node.
 
 Both ends of a move and the file deleted follow the write rules and are decided on handles
-(`nox.node.device.safe_fs.move_file`, `trash_file`). The escapes are tried for real on this OS
-(junctions on Windows, symlinks elsewhere) and a swap between the check and the rename is staged by
-wrapping the rename itself. A delete goes into the trash or does not happen: the real Recycle
-Bin is used only on a CI runner, the freedesktop trash in a temporary home."""
+(`nox.node.device.safe_fs.move_delete.move_file`, `trash_file`). The escapes are tried for real on
+this OS (junctions on Windows, symlinks elsewhere) and a swap between the check and the rename is
+staged by wrapping the rename itself. A delete goes into the trash or does not happen: the real
+Recycle Bin is used only on a CI runner, the freedesktop trash in a temporary home."""
 
 from __future__ import annotations
 
@@ -16,17 +16,14 @@ from typing import Any
 
 import pytest
 
-from nox.node.device import safe_fs
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import (
-    MoveArgs,
-    NodeHands,
-    PathArgs,
-    delete_refusal,
-    hand_tools,
-    move_refusal,
-)
-from nox.node.device.safe_fs import Folders, OutsideFolders, move_file, trash_file
+from nox.node.device.hands.args import MoveArgs, PathArgs, delete_refusal, move_refusal
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
+from nox.node.device.safe_fs import move_delete, posix, windows_files
+from nox.node.device.safe_fs.core import OutsideFolders
+from nox.node.device.safe_fs.folders import Folders
+from nox.node.device.safe_fs.move_delete import move_file, trash_file
 from nox.node.device.tools import NodeRefusal
 from nox.node.hub.install.routes import delete_precheck, move_precheck, move_target
 from nox.node.hub.registry import ROUTABLE
@@ -233,14 +230,14 @@ def test_a_target_folder_swapped_for_a_link_after_the_check_changes_nothing(
     rename is relative to the verified fd, so the file lands in the real (renamed) folder - never
     behind the link."""
     f = folders(world)
-    real = safe_fs._rename_noreplace
+    real = posix._rename_noreplace
 
     def swap_then_rename(*args: Any) -> None:
         os.rename(world["root"] / "archiv", world["root"] / "archiv-echt")
         os.symlink(world["outside"], world["root"] / "archiv", target_is_directory=True)
         real(*args)
 
-    monkeypatch.setattr(safe_fs, "_rename_noreplace", swap_then_rename)
+    monkeypatch.setattr(posix, "_rename_noreplace", swap_then_rename)
     move_file(f, "notizen/einkauf.txt", "archiv/einkauf.txt")
     assert (world["root"] / "archiv-echt" / "einkauf.txt").exists()
     assert not (world["outside"] / "einkauf.txt").exists()
@@ -251,7 +248,7 @@ def test_a_source_swapped_after_the_check_is_moved_back_and_refused(
     world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     f = folders(world)
-    real = safe_fs._rename_noreplace
+    real = posix._rename_noreplace
     calls: list[int] = []
 
     def swap_then_rename(*args: Any) -> None:
@@ -262,7 +259,7 @@ def test_a_source_swapped_after_the_check_is_moved_back_and_refused(
         calls.append(1)
         real(*args)
 
-    monkeypatch.setattr(safe_fs, "_rename_noreplace", swap_then_rename)
+    monkeypatch.setattr(posix, "_rename_noreplace", swap_then_rename)
     assert reason(lambda: move_file(f, "notizen/einkauf.txt", "archiv/einkauf.txt")) == "changed"
     assert (world["root"] / "notizen" / "einkauf.txt").read_text() == "untergeschoben"
     assert not (world["root"] / "archiv" / "einkauf.txt").exists()
@@ -276,7 +273,7 @@ def test_without_a_no_replace_rename_a_hard_link_still_never_replaces(
         def __getattr__(self, _name: str) -> Any:
             raise AttributeError
 
-    monkeypatch.setattr(safe_fs, "_libc", lambda: NoRename())
+    monkeypatch.setattr(posix, "_libc", lambda: NoRename())
     f = folders(world)
     (world["root"] / "archiv" / "einkauf.txt").write_text("schon da", encoding="utf-8")
     with pytest.raises(FileExistsError):
@@ -293,7 +290,7 @@ def test_on_windows_the_pinned_target_folder_cannot_be_swapped(
     """The target folder is held without FILE_SHARE_DELETE while the source handle is renamed
     into it: replacing it by a junction in between is refused by Windows itself."""
     f = folders(world)
-    real = safe_fs._win_rename
+    real = windows_files._win_rename
     tried: list[str] = []
 
     def swap_then_rename(fd: int, new_path: str) -> None:
@@ -305,7 +302,7 @@ def test_on_windows_the_pinned_target_folder_cannot_be_swapped(
                 tried.append("pinned")
         real(fd, new_path)
 
-    monkeypatch.setattr(safe_fs, "_win_rename", swap_then_rename)
+    monkeypatch.setattr(windows_files, "_win_rename", swap_then_rename)
     move_file(f, "notizen/einkauf.txt", "archiv/einkauf.txt")
     assert tried == ["pinned"]
     assert (world["root"] / "archiv" / "einkauf.txt").exists()
@@ -345,7 +342,7 @@ def test_a_file_swapped_before_the_trash_rename_is_put_back(
     world: dict[str, Path], xdg_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     f = folders(world)
-    real = safe_fs._rename_noreplace
+    real = move_delete._rename_noreplace
     calls: list[int] = []
 
     def swap_then_rename(*args: Any) -> None:
@@ -356,7 +353,7 @@ def test_a_file_swapped_before_the_trash_rename_is_put_back(
         calls.append(1)
         real(*args)
 
-    monkeypatch.setattr(safe_fs, "_rename_noreplace", swap_then_rename)
+    monkeypatch.setattr(move_delete, "_rename_noreplace", swap_then_rename)
     assert reason(lambda: trash_file(f, "notizen/einkauf.txt")) == "changed"
     assert (world["root"] / "notizen" / "einkauf.txt").read_text() == "untergeschoben"
     assert not list((xdg_home / "Trash" / "info").iterdir())
@@ -398,13 +395,13 @@ def test_a_file_on_another_drive_than_the_trash_is_refused(
 
     def other_drive(fd: int) -> os.stat_result:
         info = real_fstat(fd)
-        if safe_fs._final_path(fd) == trash:
+        if posix._final_path(fd) == trash:
             values = list(info)
             values[2] = info.st_dev + 1  # st_dev: the trash is on another drive
             return os.stat_result(values)
         return info
 
-    monkeypatch.setattr(safe_fs.os, "fstat", other_drive)
+    monkeypatch.setattr(os, "fstat", other_drive)
     assert reason(lambda: trash_file(f, "notizen/einkauf.txt")) == "trash_unavailable"
     assert (world["root"] / "notizen" / "einkauf.txt").exists()
 
@@ -421,7 +418,7 @@ def test_on_windows_the_file_must_end_up_in_the_recycle_bin(
     f = folders(world)
     fake_bin = world["root"] / "$Recycle.Bin" / "S-1-5-21-0"
     fake_bin.mkdir(parents=True)
-    monkeypatch.setattr(safe_fs, "_win_bin_refusal", lambda _final, _size: None)
+    monkeypatch.setattr(windows_files, "_win_bin_refusal", lambda _final, _size: None)
     monkeypatch.setattr(
         recycle, "to_recycle_bin", lambda path: os.rename(path, fake_bin / "$RAB12CD.txt")
     )
@@ -453,14 +450,14 @@ def test_on_windows_a_bin_that_would_not_keep_the_file_refuses(
     called: list[Path] = []
     monkeypatch.setattr(recycle, "to_recycle_bin", called.append)
     monkeypatch.setattr(
-        safe_fs, "_win_bin_refusal", lambda _final, _size: "the drive has no Recycle Bin"
+        windows_files, "_win_bin_refusal", lambda _final, _size: "the drive has no Recycle Bin"
     )
     assert reason(lambda: trash_file(folders(world), "notizen/einkauf.txt")) == (
         "trash_unavailable"
     )
     assert called == [] and (world["root"] / "notizen" / "einkauf.txt").exists()
     # Read-only on the real machine: the drive of the test folder is a fixed one with a bin.
-    assert safe_fs._win_bin_refusal(str(world["root"]), 10) in (None, *_KNOWN_BIN_REASONS)
+    assert windows_files._win_bin_refusal(str(world["root"]), 10) in (None, *_KNOWN_BIN_REASONS)
 
 
 _KNOWN_BIN_REASONS = (

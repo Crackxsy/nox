@@ -81,7 +81,7 @@ class NodeManifest(BaseModel):
     folders: list[str] = Field(default_factory=list, max_length=16)
     #: Games of this device on top of the core's default list (`nox node games add`): while one
     #: runs or is in front, Nox sends no input here. Adding only narrows; removing is confirmed
-    #: like a widening (`nox.node.device.cli.games`).
+    #: like a widening (`nox.node.device.cli.allow.games`).
     games: list[str] = Field(default_factory=list, max_length=64)
 
     @field_validator("games")

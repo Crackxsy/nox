@@ -32,6 +32,12 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   twice (provisioned with portal and claim; fresh with the window expiring).
 
 ### Changed
+- **The device side of the node code is cut along its responsibilities** (`nox.node.device`): the seven
+  modules above the size rule in `docs/CODE_STANDARDS.md` (`safe_fs`, `agent`, `cli`, `voice`,
+  `world`, `hands`, `update`) are now packages of modules of 100 to 570 lines, each saying what it
+  owns (`docs/ARCHITECTURE-NODES.md`, module map). Code moved unchanged: behaviour, the wire
+  protocol and the files on a device are the same, and the two imports the layer contract still
+  ignores now name the module that holds them (`device.hands.args`, `device.voice.engines`).
 - **The dashboard is rebuilt around four areas**: Heute, Nox (Gespräch, Ansichten,
   Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one form). Every page
   has the same header - what Nox is doing and its Modus, "n warten auf dich", the privacy level and

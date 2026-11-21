@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 
-from nox.node.device import cli as node_cli
+from nox.node.device.cli import pairing as cli_pairing
+from nox.node.device.cli import runtime as cli_runtime
 from nox.node.device.home import NodeHome
 from nox.node.device.tools import NodeRefusal
-from nox.node.device.world import PlatformMedia
+from nox.node.device.world.media import PlatformMedia
 from nox.node.wire.arguments import MediaArgs
 from tests.unit.node.support_sessions import device_world, world_gate, world_meta
 
@@ -93,8 +94,8 @@ async def test_music_is_announced_once_on_the_device(tmp_path: Path) -> None:
             shown.append(text)
 
     home = NodeHome(tmp_path / "node")
-    node_cli.confirm_defaults(home, None)
-    runtime = node_cli.build(home, notifier=Notifier())
-    assert await node_cli.media_notice_once(runtime) is True
-    assert await node_cli.media_notice_once(runtime) is False
-    assert shown == [node_cli.media_notice()]
+    cli_pairing.confirm_defaults(home, None)
+    runtime = cli_runtime.build(home, notifier=Notifier())
+    assert await cli_runtime.media_notice_once(runtime) is True
+    assert await cli_runtime.media_notice_once(runtime) is False
+    assert shown == [cli_runtime.media_notice()]
