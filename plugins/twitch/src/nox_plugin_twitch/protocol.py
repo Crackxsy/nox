@@ -91,6 +91,9 @@ class ChatTags:
     badges: list[str] = field(default_factory=list)
     #: Bits cheered with this message (`bits` tag); 0 for an ordinary message.
     bits: int = 0
+    #: Login of the author of the message this one replies to (Twitch's reply feature); empty for
+    #: a message that is not a reply.
+    reply_parent_login: str = ""
 
 
 def non_negative_int(value: object) -> int:
@@ -107,6 +110,7 @@ def parse_chat_tags(tags: Mapping[str, Any]) -> ChatTags:
     badges = [b for b in badges_raw.split(",") if b]
     return ChatTags(
         bits=non_negative_int(tags.get("bits", 0)),
+        reply_parent_login=str(tags.get("reply-parent-user-login", "")).strip().lower(),
         display_name=str(tags.get("display-name", "")),
         user_id=str(tags.get("user-id", "")),
         mod=str(tags.get("mod", "0")) == "1",

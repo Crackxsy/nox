@@ -122,12 +122,37 @@ def make_manifest(**overrides: Any):
     return parse_manifest({**TWITCH_MANIFEST, **overrides})
 
 
-def make_api(client: FakeClient, *, port: int, **config_overrides: Any) -> PluginApi:
+class RecordingLogger:
+    """A plugin logger that keeps every call, so a test reads what was logged without depending on
+    how structlog happens to be configured by the tests that ran before it."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    def _record(self, level: str, event: str, **fields: Any) -> None:
+        self.records.append({"level": level, "event": event, **fields})
+
+    def debug(self, event: str, **fields: Any) -> None:
+        self._record("debug", event, **fields)
+
+    def info(self, event: str, **fields: Any) -> None:
+        self._record("info", event, **fields)
+
+    def warning(self, event: str, **fields: Any) -> None:
+        self._record("warning", event, **fields)
+
+    def error(self, event: str, **fields: Any) -> None:
+        self._record("error", event, **fields)
+
+
+def make_api(
+    client: FakeClient, *, port: int, logger: Any = None, **config_overrides: Any
+) -> PluginApi:
     manifest = make_manifest(
         config={**TWITCH_MANIFEST["config"], "port": port, **config_overrides},
         network={"egress": [f"127.0.0.1:{port}"]},
     )
-    return PluginApi(manifest=manifest, client=client)
+    return PluginApi(manifest=manifest, client=client, logger=logger)
 
 
 @pytest.fixture
