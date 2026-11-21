@@ -1,6 +1,8 @@
 """`ModerationGate`: deterministic pre-send check for every outgoing chat message (Stream Bot). Runs
 on *Nox's own* text - `twitch.chat.send` and every built-in command reply go through it - never on
-inbound viewer chat (that is untrusted data, evaluated, not acted on as instructions).
+inbound viewer chat (that is untrusted data, evaluated, not acted on as instructions). What a line
+may *do* in chat (links, command prefixes, mass mentions, invisible characters) is `outbound.py`'s
+job and runs first; this gate judges what is *said*, on the already cleaned line.
 
 The hard exclusions below are independent of chat mood/insult level and cannot be relaxed by
 config, a profile, or a "mach einfach" grant: hate speech against a protected group, sexual content

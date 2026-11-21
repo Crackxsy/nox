@@ -6,7 +6,7 @@ Wraps one `TwitchIrcClient` (see `nox_plugin_twitch.irc_client`) and exposes it 
 `twitch.command_invoked`, `stream.funken_awarded`, `stream.minigame_started/ended`), and the built-
 in `!rps`/`!funken`/`!streamplan`/`!befehle`/`!hilfe` chat commands (English aliases `!schedule`,
 `!commands`, `!help`), all answered through the same `_send` path as the `twitch.chat.send` tool
-(rate limiter + `ModerationGate`, never bypassed).
+(output filter, `ModerationGate` and rate limiter, never bypassed).
 
 Funken are requested, never booked: chat messages, cheered bits, subscriptions, gifted subs and
 raids become `stream.funken_awarded` events (`delta` 0 = "use the configured rate"), and the
@@ -34,6 +34,7 @@ from nox.security.model import Risk
 
 from .irc_client import TwitchIrcClient, has_line_break
 from .moderation import ModerationGate
+from .outbound import filter_outbound
 from .protocol import ChatTags, non_negative_int
 from .ratelimit import RateLimiter
 from .relevance import RelevanceClassifier
@@ -399,6 +400,16 @@ class TwitchPlugin:
         # `IpcError` survives that hop with its real message and a typed code intact.
         if has_line_break(text):
             raise IpcError(ERR_VALIDATION, "chat text must be one line (no CR, LF or NUL)")
+        outbound = filter_outbound(text)
+        if outbound.blocked:
+            # The reason and the length only: the line is the model's or a viewer-influenced text.
+            self.api.log.warning(
+                "twitch.outbound_blocked", reason=outbound.blocked, chars=len(text)
+            )
+            raise IpcError(ERR_PERMISSION, f"message blocked by output filter: {outbound.blocked}")
+        if outbound.changes:
+            self.api.log.info("twitch.outbound_cleaned", changes=list(outbound.changes))
+        text = outbound.text
         ok, reason = self.moderation.check(text)
         if not ok:
             raise IpcError(ERR_PERMISSION, f"message blocked by moderation gate: {reason}")

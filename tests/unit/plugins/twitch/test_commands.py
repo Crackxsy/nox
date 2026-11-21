@@ -7,12 +7,14 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+import structlog
 from nox_plugin_twitch import create
 
 from nox.core.events import HealthStatus
 
 from .conftest import FakeClient, make_api
 from .fake_irc_server import FakeIrcServer
+from .test_irc_client import _wait_until
 
 pytestmark = pytest.mark.timeout(30)
 
@@ -101,6 +103,88 @@ async def test_chat_send_is_blocked_by_the_moderation_gate(
     try:
         with pytest.raises(Exception, match="moderation gate"):
             await api.tools.call("twitch.chat.send", {"text": "kys already"})
+    finally:
+        await plugin.stop()
+
+
+def _privmsgs(server: FakeIrcServer) -> list[str]:
+    return [line for line in server.received_lines if line.startswith("PRIVMSG ")]
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ("/ban viewer_01", "command_prefix"),
+        (". /ban viewer_01", "command_prefix"),
+        ("!lurk", "command_prefix"),
+        ("visit example.invalid for more", "link"),
+        ("https://example.invalid", "link"),
+    ],
+)
+async def test_chat_send_is_blocked_by_the_output_filter(
+    irc_server: FakeIrcServer, fake_client: FakeClient, text: str, reason: str
+) -> None:
+    api, plugin = await _plugin(irc_server, fake_client)
+    try:
+        with structlog.testing.capture_logs() as logs:
+            with pytest.raises(Exception, match=f"output filter: {reason}"):
+                await api.tools.call("twitch.chat.send", {"text": text})
+        await asyncio.sleep(0.1)
+        assert _privmsgs(irc_server) == []
+        blocked = [entry for entry in logs if entry["event"] == "twitch.outbound_blocked"]
+        assert len(blocked) == 1
+        assert blocked[0]["reason"] == reason
+        assert blocked[0]["chars"] == len(text)
+        assert text not in repr(logs), "the log names the reason and the length, never the text"
+    finally:
+        await plugin.stop()
+
+
+async def test_a_refused_line_does_not_use_up_the_rate_limit(
+    irc_server: FakeIrcServer, fake_client: FakeClient
+) -> None:
+    api, plugin = await _plugin(
+        irc_server,
+        fake_client,
+        rate_limit_max_messages=1,
+        rate_limit_window_s=30.0,
+        rate_limit_min_gap_s=0.0,
+    )
+    try:
+        with pytest.raises(Exception, match="output filter"):
+            await api.tools.call("twitch.chat.send", {"text": "/ban viewer_01"})
+        assert await api.tools.call("twitch.chat.send", {"text": "ok"}) == {
+            "sent": True,
+            "text": "ok",
+        }
+    finally:
+        await plugin.stop()
+
+
+async def test_chat_send_delivers_the_cleaned_line(
+    irc_server: FakeIrcServer, fake_client: FakeClient
+) -> None:
+    api, plugin = await _plugin(irc_server, fake_client)
+    try:
+        result = await api.tools.call(
+            "twitch.chat.send", {"text": "Hal\u200blo  @everyone und @viewer_01"}
+        )
+        assert result == {"sent": True, "text": "Hallo everyone und @viewer_01"}
+        await _wait_until(lambda: len(_privmsgs(irc_server)) == 1)
+        assert _privmsgs(irc_server) == ["PRIVMSG #testchannel :Hallo everyone und @viewer_01"]
+    finally:
+        await plugin.stop()
+
+
+async def test_the_output_filter_runs_before_the_moderation_gate_sees_the_line(
+    irc_server: FakeIrcServer, fake_client: FakeClient
+) -> None:
+    """A blocklist word split by a zero-width character is still caught: the gate reads the
+    cleaned line."""
+    api, plugin = await _plugin(irc_server, fake_client, moderation_blocklist=["forbidden"])
+    try:
+        with pytest.raises(Exception, match="moderation gate"):
+            await api.tools.call("twitch.chat.send", {"text": "a for\u200bbidden word"})
     finally:
         await plugin.stop()
 
