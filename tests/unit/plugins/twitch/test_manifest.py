@@ -29,6 +29,21 @@ def test_twitch_manifest_loads_and_declares_the_expected_tools() -> None:
     assert "twitch.moderation.ban" not in tools
 
 
+def test_the_stream_profiles_moderation_rules_are_marked_reserved() -> None:
+    """The profile keeps a confirm rule for a ban and a timeout, but no plugin has such a tool: the
+    rules say so in their reason, so the profile does not read as a promise of a capability."""
+    manifest = load_manifest(TWITCH_PLUGIN_DIR)
+    assert not [p.tool for p in manifest.permissions if "moderation" in p.tool]
+    rules = {rule.id: rule for rule in load_profile(PROFILES_DIR / "stream.yaml").rules}
+    for rule_id, action in (
+        ("stream.twitch.ban", "moderation.ban"),
+        ("stream.twitch.timeout", "moderation.timeout"),
+    ):
+        assert rules[rule_id].action == action
+        assert rules[rule_id].decision.value == "confirm"
+        assert rules[rule_id].reason.startswith("reserved, no such tool exists")
+
+
 def test_twitch_manifest_events_match_events_py() -> None:
     manifest = load_manifest(TWITCH_PLUGIN_DIR)
     assert set(manifest.events.emits) == {

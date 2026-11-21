@@ -126,7 +126,13 @@ class FunkenService:
 
     async def spend(self, viewer_id: str, amount: float, *, reason: str) -> FunkenChangeResult:
         """Deduct Funken for a pet interaction/minigame entry. Raises when the balance would go
-        negative - deterministic, no partial spends."""
+        negative - deterministic, no partial spends.
+
+        Nothing calls this outside the tests yet: viewers can earn Funken today, but there is no
+        place to spend them. The method is the tested ledger half of that feature and stays
+        unused until a spending feature (pet interactions, minigame entries) is built; it does not
+        mean spending exists.
+        """
         if amount < 0:
             raise ValueError("spend amount must be >= 0")
         current = self.balance(viewer_id)
