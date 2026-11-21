@@ -3,18 +3,20 @@
 [![CI](https://github.com/Crackxsy/nox/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Crackxsy/nox/actions/workflows/ci.yml)
 [![Status: pre-1.0](https://img.shields.io/badge/status-pre--1.0-orange)](CHANGELOG.md)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-0078d4)](#requirements)
+[![Platform: Windows desktop, Linux server](https://img.shields.io/badge/platform-Windows%20desktop%20%7C%20Linux%20server-0078d4)](#platforms)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776ab)](#requirements)
 
-A local-first AI companion that lives on your Windows desktop — one entity with a stable
-personality, not a chat window with a mascot on top.
+A local-first AI companion — on your Windows desktop, and at home as a small server that your other
+devices share — one entity with a stable personality, not a chat window with a mascot on top.
 
-> **Kurzfassung (Deutsch):** Nox ist ein lokaler KI-Begleiter für Windows: ein Desktop-Pet mit
-> Stimme, ein Twitch-/OBS-Streambot, ein Rocket-League-Coach (nur Beobachtung, niemals
-> Eingaben ins Spiel) und ein Coding-Agent. Alles läuft so weit wie möglich auf dem eigenen
-> Rechner, es gibt keine Telemetrie, und Kill-Switch, Privacy-Modi und Berechtigungen sind
-> **unterhalb** des Sprachmodells in Code durchgesetzt. Die Oberfläche ist deutsch, die
-> Dokumentation englisch. Nox ist vor Version 1.0 — die Liste unten sagt ehrlich, was heute
+> **Kurzfassung (Deutsch):** Nox ist ein lokaler KI-Begleiter: auf dem Windows-PC ein Desktop-Pet
+> mit Stimme, ein Twitch-/OBS-Streambot, ein Rocket-League-Coach (nur Beobachtung, niemals
+> Eingaben ins Spiel) und ein Coding-Agent. Der Kern läuft auch als Heimserver unter Linux
+> (Raspberry Pi); weitere Computer binden sich als Nodes an. Alles läuft so weit wie möglich auf
+> dem eigenen Rechner, es gibt keine Telemetrie, und Kill-Switch, Privacy-Modi und Berechtigungen
+> sind **unterhalb** des Sprachmodells in Code durchgesetzt. Die App spricht Deutsch oder
+> Englisch; die Dokumentation ist englisch, drei Anleitungen gibt es auch auf Deutsch
+> ([Sprachen](#languages)). Nox ist vor Version 1.0 — die Liste unten sagt ehrlich, was heute
 > funktioniert.
 
 ## What Nox is
@@ -24,8 +26,9 @@ personality, not a chat window with a mascot on top.
 - **Twitch / OBS stream companion** — chat responder, a "Funken" viewer loyalty currency, and a
   deliberately narrow OBS tool surface (scene switching is a confirmed action; there is no
   scene-delete and no stream-stop tool at all).
-- **Rocket League coach** — **observation only**: screen/HUD capture, game audio and replay files.
-  Nox never sends input to the game and never reads or writes its process memory. This is a
+- **Rocket League coach** — **observation only**: it notices the game, reads the HUD from the
+  screen and parses your replay files; it has no game-audio capture. Nox never sends input to the
+  game and never reads or writes its process memory. This is a
   code-level boundary enforced by a CI job, not a setting you could flip.
 - **Coding agent** — orchestrates the Claude Code CLI inside workspaces you configured, under the
   permission engine.
@@ -46,7 +49,8 @@ install, `nox doctor`, `nox onboard`, `nox supervisor`.
 
 ## What works today (60-second version)
 
-Nox is **pre-1.0**. Honest state as of the latest release:
+Nox is **pre-1.0**. Honest state of the `develop` branch (the latest release is 0.5.0; see
+[`CHANGELOG.md`](CHANGELOG.md) for what is only in `develop` so far):
 
 | Area | State |
 | --- | --- |
@@ -58,7 +62,7 @@ Nox is **pre-1.0**. Honest state as of the latest release:
 | Twitch chat bot, OBS scene control, Funken ledger, dashboard Stream page | Works (stream and rocket_league profiles) |
 | Telegram bridge | Works once a bot token is set |
 | Smart home via Home Assistant: lights, sockets, scenes, media, thermostats, blinds, dashboard Zuhause page | Works against the documented API; never tested against a real instance yet — see [Home Assistant](#home-assistant-smart-home) |
-| Rocket League coach | Stage 1: observation and replay pipeline; coaching quality is early |
+| Rocket League coach | Stage 1 works: game detection, HUD capture and calibration, replay parsing, short callouts. A first on-screen analysis (classical OpenCV colour heuristics) exists but is off by default and its thresholds are not calibrated on real matches; coaching quality is early |
 | Tools in a conversation: anything on the dashboard is reachable by typing or saying it | Works; the model is offered only what the active profile allows |
 | Capability catalogue: what Nox can do, may do, and cannot do, as data | Works; "I have no entry for that" is a real answer |
 | Presets: one phrase, several systems | Works; ships empty, so a fresh install can run nothing |
@@ -70,28 +74,46 @@ Nox is **pre-1.0**. Honest state as of the latest release:
 | Self-extension: Nox proposes a change to its own source on a branch | Mechanism works and is tested; **not proven end to end** - needs the coding profile and a configured workspace |
 | Coding agent (Claude Code orchestration) | Works inside configured workspaces; still rough |
 | Clips, creative-app detection, mobile companion | Early, partly scaffolding |
-| Signed installer, auto-update, rollback | Not proven yet — run from source for now |
+| Linux server / Raspberry Pi: installer, update, rollback, snapshots | Built and exercised in CI on Linux runners; not part of a published release yet (the latest, 0.5.0, predates it), so the one-line command in [`docs/RASPBERRY_PI.md`](docs/RASPBERRY_PI.md) only works once a release carries the script |
+| Nodes: Nox's hands on your other computers (Windows, Linux; macOS beta) | Works; see [`docs/NODES.md`](docs/NODES.md) for what a node offers and the known limits |
+| Nox-OS: a flashable Raspberry Pi image | Built and boot-tested in CI; not a release asset yet, and the guided setup after the first claim is not built ([`os/README.md`](os/README.md)) |
+| Windows installer | Builds, and CI installs, upgrades and uninstalls it on a clean runner; **unsigned**, never tried by hand on a clean machine, no download yet - run from source for now |
+| Signed releases, auto-update (Windows) | The signing mechanism is built, the release key is not set up, so nothing is verified yet ([`docs/RELEASES.md`](docs/RELEASES.md)); the Windows desktop has no auto-update |
 
 `nox doctor` prints the same picture for *your* machine, including why something is unavailable.
 See [`CHANGELOG.md`](CHANGELOG.md) for what shipped when.
 
+## Platforms
+
+What runs where, as shipped today:
+
+| Platform | Runs | How you get it today | Not available there |
+| --- | --- | --- | --- |
+| **Windows 11** | The full desktop companion: core, pet window, tray, hotkeys, voice, window and program control, privacy zones, Twitch/OBS and the Rocket League coach. Also a node. | From source ([`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)); an unsigned installer you can build yourself ([`installer/README.md`](installer/README.md)) | - |
+| **Linux server**: Raspberry Pi 4/5 (64-bit Raspberry Pi OS), Debian 12+, Ubuntu 22.04+, ARM64 or x86-64 | The core as a service with the dashboard, for the whole household ([`docs/RASPBERRY_PI.md`](docs/RASPBERRY_PI.md)). Also a headless node. | The installer script, which is in this repository but not yet in a published release (see the table above) | The pet window, hotkeys, window and program control, Twitch/OBS and the Rocket League coach (these belong on the PC); voice on the Pi is planned |
+| **Linux desktop** | A node: Nox's hands on that computer ([`docs/NODES.md`](docs/NODES.md)) | The same installer script, `--node` | The core with the desktop shell |
+| **macOS** | A node, **beta**: tested less than the others, CI lints the installer and runs the node's tests | `scripts/install-macos.sh --node` from a checkout; it does not verify release signatures | The core, the desktop shell, shell commands and media control on the node |
+| **Phone, tablet, any browser in the home network** | The dashboard, once the device is paired ([`docs/NETWORK_ACCESS.md`](docs/NETWORK_ACCESS.md)) | A QR code; no app to install | Changing how Nox is set up |
+
+The Windows-only parts are the ones that need the Windows desktop: the pet window, global hotkeys,
+per-window privacy zones, typing and window control, the AppContainer command sandbox. CI runs the
+tests on Windows, on Linux (x86-64 and ARM64) and, for the node, on macOS.
+
 ## Requirements
 
-- **Windows 11** for the desktop companion: the pet window, hotkeys, window and program control,
-  per-window privacy zones. On Windows you also need:
+- **For the Windows desktop companion:**
+  - **Windows 11.**
   - **Python 3.13 from [python.org](https://www.python.org/downloads/)** — *not* the Microsoft
     Store build: Store Python virtualises `%APPDATA%`, so Nox's runtime token files end up
     somewhere other tools cannot read and startup fails with `token_acl_failed`.
   - **Node.js 20 or newer** to build the two UIs (the core serves the built bundles).
-- **Or Linux as a server** - a Raspberry Pi 4/5 with 64-bit Raspberry Pi OS, Debian or Ubuntu,
-  ARM64 or x86-64. One command installs the core as a service and brings its own Python and the
-  built dashboard: [`docs/RASPBERRY_PI.md`](docs/RASPBERRY_PI.md) (deutsch:
-  [`docs/RASPBERRY_PI.de.md`](docs/RASPBERRY_PI.de.md)). macOS is not a supported target yet.
-- **Any phone, tablet or PC in your home network** opens the dashboard once it is paired - a QR
-  code, no app to install: [`docs/NETWORK_ACCESS.md`](docs/NETWORK_ACCESS.md).
-- **[Ollama](https://ollama.com) (optional)** for fully local language models and embeddings.
-- **[Claude Code CLI](https://claude.com/claude-code) (optional)** for cloud-grade reasoning and
-  the coding agent.
+- **For the Linux server or a node:** see the guides in the table above; Python and the built
+  dashboard come with the installer.
+- **A way for Nox to think** — without one, Nox gives only canned rule answers (it greets you, tells
+  the time, says who it is) and says so:
+  - **[Claude Code CLI](https://claude.com/claude-code) (optional)** for cloud-grade reasoning and
+    the coding agent; it needs a Claude account you sign in with.
+  - **[Ollama](https://ollama.com) (optional)** for fully local language models and embeddings.
 - A microphone if you want voice. A GPU is not required.
 
 ## Install (from source)
@@ -491,9 +513,22 @@ The pydantic models in `src/nox/ipc/protocol.py` and `src/nox/core/events.py` ar
 truth for the TypeScript types under `ui/shared/generated/` — regenerate with
 `python scripts/gen_ts_types.py` after changing a contract, or CI will fail.
 
-CI (`.github/workflows/ci.yml`) runs all of the above on Windows runners, plus a Playwright
-end-to-end smoke test, a guard against input-synthesis/process-memory APIs, a third-party license
+CI (`.github/workflows/ci.yml`) runs all of the above on Windows runners, the Python tests also on
+Linux (x86-64 and ARM64) and the node's on macOS, plus a Playwright end-to-end smoke test, a guard against input-synthesis/process-memory APIs, a third-party license
 audit and a full-history secrets scan.
+
+## Languages
+
+- **The app** speaks German or English: `identity.ui_language` (`de` by default, set at onboarding)
+  chooses the language of the dashboard and the pet window.
+- **The documentation is English.** Three guides also exist in German: Nodes
+  ([`docs/NODES.de.md`](docs/NODES.de.md)), Network access
+  ([`docs/NETWORK_ACCESS.de.md`](docs/NETWORK_ACCESS.de.md)) and Raspberry Pi
+  ([`docs/RASPBERRY_PI.de.md`](docs/RASPBERRY_PI.de.md)). **Where an English and a German version
+  differ, the English one is authoritative**; the German ones are translations and can lag behind. Everything else - this README apart from its short German summary at the
+  top, the user guide, security and privacy statements, the changelog - exists in English only.
+- Code, comments, commit messages and pull requests are English too
+  ([`CONTRIBUTING.md`](CONTRIBUTING.md)).
 
 ## Contributing
 
