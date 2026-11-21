@@ -517,7 +517,7 @@ truth for the TypeScript types under `ui/shared/generated/` — regenerate with
 
 CI (`.github/workflows/ci.yml`) runs all of the above on Windows runners, the Python tests also on
 Linux (x86-64 and ARM64) and the node's on macOS, plus a Playwright end-to-end smoke test, a guard against input-synthesis/process-memory APIs, a third-party license
-audit and a full-history secrets scan.
+audit and a secrets scan of the working tree and the branch's history.
 
 ## Languages
 

@@ -124,10 +124,11 @@ Status words: **done** (checked), **partly** (some of the evidence exists, the r
 - [ ] **12. Security negative-test suite green** (`docs/SECURITY.md`, "Security test obligations")
       - **partly.** The tests (`tests/unit/security/`, plus the kill-switch, audit and IPC-role tests
       elsewhere in `tests/unit` and `tests/integration`) run in the required CI job on every pull
-      request and push, not ad hoc. Missing: a published list that maps each of the nine
-      obligations to the tests that cover it, which the external review package asks for.
+      request and push, not ad hoc. Missing: a recorded run of those tests (the `pytest` output for
+      `tests/unit/security` and the other negative tests) handed to the reviewer, which the external
+      review package asks for.
       _Evidence so far: CI job "Python (ruff, mypy, unit + integration tests)". Still needed: the
-      mapping, with a run attached._
+      pytest run for the review package._
 - [x] **13. Secrets scan clean on tree and full history** - `python scripts/secrets_scan.py --check`
       exits 0: 40 findings, all reviewed (test fixtures and placeholder literals, documented in
       `docs/scan_policy_secrets.yaml`), 0 open (run on 2026-11-21). GitHub secret scanning and push
@@ -213,10 +214,13 @@ Status words: **done** (checked), **partly** (some of the evidence exists, the r
 - [ ] **25. A release that carries the Linux installer** - **open.** **Owner action.** The
       Raspberry Pi guide, the node installers and the Nox-OS image all install "the newest
       release" - but the latest release (0.5.0) predates them and has no assets, so the one-line
-      install command downloads a script that is not there. A release needs the version bump, items
-      21 and 23 for a signed manifest, and the changelog entry.
-      _Evidence needed: a release whose assets include `install-linux.sh`, its checksum and the
-      signed manifest, and a fresh Pi install from it._
+      install command downloads a script that is not there. A release needs the version bump and
+      the changelog entry; the release workflow then uploads the script and its checksum even
+      without a signature (it fails the run afterwards with "Release not signed"), so installs
+      from it are checked by checksum only until item 21 is done. The Windows installer (item 23)
+      is a separate matter.
+      _Evidence needed: a release whose assets include `install-linux.sh` and its checksum - and,
+      once item 21 is done, the signed manifest - and a fresh Pi install from it._
 - [ ] **26. Decision on encrypting stored data at rest** - **open.** **Owner action.** The memory
       database, logs, clips and the vault are not encrypted by Nox; the OS permissions and the
       user's disk encryption are what protect them, as [`PRIVACY.md`](PRIVACY.md) says. Decide

@@ -95,7 +95,9 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   authoritative); the privacy statement says the database and vault are not encrypted at rest,
   where data lives and how to delete it; the Rocket League text no longer claims game-audio
   capture; the v1.0 release checklist and the review package carry status and evidence for every
-  item and list what is still missing (signing key, Authenticode, SBOM, dependency scan).
+  item and list what is still missing (signing key, Authenticode, SBOM, dependency scan); the
+  install commands that point at release downloads say that no release carries them yet; secrets
+  are described as the OS keyring or, on a Linux server without one, an owner-only file.
 
 ### Added
 - **Twitch chat, every interaction (Stream Bot):** `!befehle` (English `!commands`) lists all chat

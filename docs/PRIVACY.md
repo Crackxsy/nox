@@ -71,6 +71,11 @@ sync or on a disk that was not erased. What protects them today is the operating
 - **Linux server / Raspberry Pi:** the data folder (`/var/lib/nox`) belongs to the `nox` user with
   mode 0700, and the update snapshots in `/var/backups/nox` are readable by root only. A removed SD
   card or disk is readable on any other machine; use full-disk encryption (LUKS) if that matters.
+- **The home network's keys** - the private keys of Nox's own certificate authority and of its
+  HTTPS server (`ca.key`, `server.key`, in the `tls` folder; used when other devices open the dashboard) - are
+  PEM files without a passphrase, readable by the owner only. Whoever can read the data folder
+  can impersonate `.local` names and private addresses to the devices that installed the
+  authority; treat a copy of it accordingly.
 - **Secrets** are the exception where an OS keyring exists: the Credential Manager, Keychain or
   keyring encrypts them for your account. The audit log is tamper-*evident* (hash-chained), not
   confidential.
@@ -140,8 +145,9 @@ window's title/process name) and that detection itself never leaves the machine.
   (14 and 7 days by default). To delete everything Nox keeps, stop Nox and delete the data folder
   (vault moved out first, see above): that also removes your settings, the audit log, the pairings
   and the downloaded voice models (about 400 MB to fetch again), and Nox starts as new.
-- **Update snapshots** (Linux server): `/var/backups/nox` holds copies of the data folder, secrets
-  included, from before each update (the last five). Delete them as well
+- **Update snapshots** (Linux server): `/var/backups/nox` holds a compressed copy of the data folder from
+  before each update (the last five) - without the voice models, runtime files and caches, but
+  with the database and the secrets. Delete them as well
   (`sudo rm -r /var/backups/nox`) if you wipe the data.
 - **Paired devices** see everything the dashboard shows; remove one with `nox unpair <name>` or in
   the dashboard's Devices tab ([`NETWORK_ACCESS.md`](NETWORK_ACCESS.md)).
