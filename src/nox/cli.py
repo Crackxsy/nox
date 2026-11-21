@@ -590,7 +590,7 @@ def node_voice_setup(
     downloads a model by itself)."""
     from nox.node.device.cli_text import ask_yes  # noqa: PLC0415
     from nox.node.device.satellite_settings import SATELLITES_FILE, SettingsFile  # noqa: PLC0415
-    from nox.node.device.voice import voice_setup  # noqa: PLC0415
+    from nox.node.device.voice.setup import voice_setup  # noqa: PLC0415
 
     home = _node_home()
     home.ensure()

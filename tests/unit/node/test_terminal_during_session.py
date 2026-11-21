@@ -30,7 +30,7 @@ def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
     tmp_path: Path, raw: str | None
 ) -> None:
     from nox.node.device import cli, satellite_cli
-    from nox.node.device.voice import MUTE_FILE
+    from nox.node.device.voice.settings import MUTE_FILE
 
     home = plain_node_home(tmp_path)
     _session(home, raw=raw)

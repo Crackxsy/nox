@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from nox.node.device.voice import voice_tools
+from nox.node.device.voice.satellite import voice_tools
 from nox.node.hub.pairing import NodePairing
 from nox.node.hub.policy import CORE_OPT_IN, NodePolicy
 from nox.node.hub.repo import NodeRepository

@@ -59,7 +59,7 @@ def test_the_tray_says_when_listening_is_not_switched_on_in_the_dashboard(tmp_pa
     import json
 
     from nox.node.device.tray import has_voice, not_switched_on
-    from nox.node.device.voice import STATE_FILE
+    from nox.node.device.voice.settings import STATE_FILE
 
     home = NodeHome(tmp_path / "node")
     home.ensure()

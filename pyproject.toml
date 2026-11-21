@@ -194,7 +194,7 @@ ignore_imports = [
     # reaches the core application only through its `voice setup` command (a lazy import of
     # `entrypoints`), which a device never runs. It goes once the builders live in a module of
     # their own.
-    "nox.node.device.voice -> nox.worker.main",
+    "nox.node.device.voice.engines -> nox.worker.main",
 ]
 
 [[tool.importlinter.contracts]]

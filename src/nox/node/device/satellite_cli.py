@@ -19,7 +19,7 @@ from nox.node.device.home import NodeHome
 from nox.node.device.obs import OBS_PANIC_FILE, OBS_SECRET
 from nox.node.device.overlay import overlay_url
 from nox.node.device.satellite_settings import SATELLITES_FILE, SettingsFile
-from nox.node.device.voice import MUTE_FILE, PTT_FILE, STATE_FILE, listening_mode
+from nox.node.device.voice.settings import MUTE_FILE, PTT_FILE, STATE_FILE, listening_mode
 from nox.node.wire.manifest import load_manifest
 from nox.security.model import SecretStore
 
