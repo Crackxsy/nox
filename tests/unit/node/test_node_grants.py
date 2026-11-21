@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from nox.node.device.hands import WriteArgs
+from nox.node.device.hands.args import WriteArgs
 from nox.node.hub.router import routed_spec
 from nox.security.model import Risk
 from tests.unit.node.support import FakeRegistry, registry_entry

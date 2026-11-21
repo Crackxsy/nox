@@ -195,7 +195,7 @@ async def test_a_tool_only_nodes_have_is_unavailable_while_none_with_it_is_onlin
 async def test_a_tool_the_core_has_itself_is_never_reported_missing(
     tmp_path: Path, db: Database
 ) -> None:
-    from nox.node.device.hands import PathArgs
+    from nox.node.device.hands.args import PathArgs
     from nox.node.hub.install import install
     from tests.unit.node.support_wiring import build_core
 

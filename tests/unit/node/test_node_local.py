@@ -14,7 +14,10 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 
 from nox.lan.terminal import render_node
-from nox.node.device import cli as node_cli
+from nox.node.device.cli import allow as cli_allow
+from nox.node.device.cli import controls as cli_controls
+from nox.node.device.cli import pairing as cli_pairing
+from nox.node.device.cli import runtime as cli_runtime
 from nox.node.device.enroll import EnrollError, enroll
 from nox.node.device.home import NodeHome, NodeIdentity
 from nox.node.device.keystore import PASSPHRASE_SECRET, NodeKeyStore
@@ -78,25 +81,25 @@ def test_narrowing_never_widens() -> None:
 def test_allow_and_deny_change_the_device_file_and_are_audited(tmp_path: Path) -> None:
     home = NodeHome(tmp_path / "h")
     said: list[str] = []
-    node_cli.allow(
+    cli_allow.allow(
         home, "shell", True, say=said.append, interactive=lambda: True, confirm=lambda _p: True
     )
     assert load_manifest(home.manifest_file).groups["shell"] is True
-    node_cli.allow(home, "shell", False, say=said.append)
+    cli_allow.allow(home, "shell", False, say=said.append)
     assert load_manifest(home.manifest_file).groups["shell"] is False
-    with pytest.raises(node_cli.NodeCliError):
-        node_cli.allow(home, "everything", True, say=said.append)
-    log = node_cli.log_lines(home)
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_allow.allow(home, "everything", True, say=said.append)
+    log = cli_controls.log_lines(home)
     assert any("node.allow" in line for line in log) and any("node.deny" in line for line in log)
     assert log[-1] == "Chain intact."
 
 
 def test_status_says_what_nox_may_do(tmp_path: Path) -> None:
     home = NodeHome(tmp_path / "h")
-    assert node_cli.status(home) == ["Not paired."]
+    assert cli_controls.status(home) == ["Not paired."]
     home.save_pairing(_identity(), cert_pem="x", ca_pem="x")
     save_manifest(home.manifest_file, NodeManifest())
-    lines = node_cli.status(home)
+    lines = cli_controls.status(home)
     assert any(GROUPS["notify"].label_en in line for line in lines)
 
 
@@ -200,8 +203,8 @@ async def test_a_refused_code_leaves_no_key(tmp_path: Path) -> None:
 
 def test_a_bad_link_is_refused_before_anything_happens(tmp_path: Path) -> None:
     home = NodeHome(tmp_path / "h")
-    with pytest.raises(node_cli.NodeCliError):
-        node_cli.pair("https://example.com/pair", home=home)
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_pairing.pair("https://example.com/pair", home=home)
     assert not home.path.exists() or not any(home.path.iterdir())
 
 
@@ -307,10 +310,10 @@ def test_the_core_cannot_narrow_with_names_that_are_no_groups() -> None:
 
 def test_nox_node_log_escapes_every_field_even_of_old_entries(tmp_path: Path) -> None:
     home = NodeHome(tmp_path / "h")
-    audit = node_cli.open_audit(home)
+    audit = cli_runtime.open_audit(home)
     for evil in EVIL:  # written directly, as an older release or another writer might have
         audit.append(actor=evil, tool=evil, action=evil, target=evil, decision="deny", result=evil)
-    lines = node_cli.log_lines(home)
+    lines = cli_controls.log_lines(home)
     assert len(lines) == len(EVIL) + 1
     assert all(_clean(line) for line in lines)
     assert r"\x1b[2J" in lines[0]
@@ -321,7 +324,7 @@ def test_nox_node_status_escapes_what_the_core_or_a_file_says(tmp_path: Path) ->
     identity = _identity().model_copy(update={"name": "Lap\x1b[2Jtop\u202e"})
     home.save_pairing(identity, cert_pem="x", ca_pem="x")
     home.write_status({"state": "connected\r\nState:     removed", "at": "now"})
-    assert all(_clean(line) for line in node_cli.status(home))
+    assert all(_clean(line) for line in cli_controls.status(home))
 
 
 async def test_a_paired_device_does_not_pair_again(tmp_path: Path) -> None:

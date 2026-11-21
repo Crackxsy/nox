@@ -15,8 +15,8 @@ from typing import Any
 import pytest
 
 from nox.lan.tls import TlsMaterial
-from nox.node.device import agent as agent_module
-from nox.node.device.agent import NodeAgent
+from nox.node.device.agent import calls as agent_calls
+from nox.node.device.agent.node_agent import NodeAgent
 from nox.node.device.gate import NodeGate
 from nox.node.device.home import NodeHome
 from nox.node.device.keystore import NodeKeyStore
@@ -106,8 +106,8 @@ async def test_the_dead_man_aborts_a_side_effect_when_the_core_goes_silent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(agent_module, "DEAD_MAN_S", 0.5)
-    monkeypatch.setattr(agent_module, "DEAD_MAN_TICK_S", 0.05)
+    monkeypatch.setattr(agent_calls, "DEAD_MAN_S", 0.5)
+    monkeypatch.setattr(agent_calls, "DEAD_MAN_TICK_S", 0.05)
     node = await start_node(listener, pairing, tls, tmp_path)
     try:
         session = await session_of(listener, node.node_id)
@@ -304,7 +304,7 @@ async def test_the_dead_man_stop_lifts_after_pings_and_the_core_sees_it(
     try:
         session = await session_of(listener, node.node_id)
         node.agent.dead_man = True
-        for seq in range(1, agent_module.DEAD_MAN_RESET_PINGS + 1):
+        for seq in range(1, agent_calls.DEAD_MAN_RESET_PINGS + 1):
             await session.client.notify("nox/ping", {"seq": seq, "ts": time.time()})
             for _ in range(100):
                 if session.node_state != "" or node.agent.dead_man is False:

@@ -4,7 +4,7 @@ All of them act on this device only, as the logged-in user: the microphone's mut
 this device unmutes), push-to-talk from a terminal, the OBS password in this device's keyring,
 lifting the OBS panic latch, and the overlay URL for an OBS browser source here. Unmuting and
 lifting the latch widen what Nox may do: both refuse while Nox controls mouse and keyboard here
-(`nox.node.device.cli.session_refusal`). The words follow `nox.node.device.cli_text`.
+(`nox.node.device.cli.runtime.session_refusal`). The words follow `nox.node.device.cli_text`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from nox.node.device.home import NodeHome
 from nox.node.device.obs import OBS_PANIC_FILE, OBS_SECRET
 from nox.node.device.overlay import overlay_url
 from nox.node.device.satellite_settings import SATELLITES_FILE, SettingsFile
-from nox.node.device.voice import MUTE_FILE, PTT_FILE, STATE_FILE, listening_mode
+from nox.node.device.voice.settings import MUTE_FILE, PTT_FILE, STATE_FILE, listening_mode
 from nox.node.wire.manifest import load_manifest
 from nox.security.model import SecretStore
 
@@ -41,7 +41,7 @@ class SatelliteCliError(RuntimeError):
 
 
 def _refuse_during_session(home: NodeHome) -> None:
-    from nox.node.device.cli import session_refusal  # noqa: PLC0415 - the heavy module, only here
+    from nox.node.device.cli.runtime import session_refusal  # noqa: PLC0415 - the heavy module, only here
 
     refusal = session_refusal(home)
     if refusal is not None:

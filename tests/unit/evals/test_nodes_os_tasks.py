@@ -32,7 +32,7 @@ from kann_alles.nodes import (
 from kann_alles.scoring import Observation, evaluate_check
 from kann_alles.tasks import Check, Environment, Task, load_tasks
 from nox.core.events import E, Event
-from nox.node.device.hands import PathArgs
+from nox.node.device.hands.args import PathArgs
 from nox.node.hub.registry import NodeEntry
 from nox.node.hub.router import routed_spec
 from nox.node.wire.arguments import MediaArgs, NoArgs, NotifyArgs

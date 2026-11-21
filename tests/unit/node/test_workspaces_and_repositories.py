@@ -62,7 +62,8 @@ async def test_a_repository_or_vault_around_the_allowed_folder_takes_no_writes(
 
 
 def test_allowing_a_folder_inside_a_repository_or_vault_is_refused(tmp_path: Path) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
 
     home = NodeHome(tmp_path / "h")
     yes = {"interactive": lambda: True, "confirm": lambda _p: True}
@@ -72,14 +73,14 @@ def test_allowing_a_folder_inside_a_repository_or_vault_is_refused(tmp_path: Pat
         inner.mkdir(parents=True)
         (outer / marker).mkdir()
         for folder in (outer, inner):
-            with pytest.raises(node_cli.NodeCliError) as caught:
-                node_cli.allow(  # type: ignore[arg-type]
+            with pytest.raises(cli_runtime.NodeCliError) as caught:
+                cli_allow.allow(  # type: ignore[arg-type]
                     home, "files", True, say=lambda _t: None, folder=str(folder), **yes
                 )
             assert "Obsidian" in str(caught.value)
     plain = tmp_path / "Nox-Dateien"
     plain.mkdir()
-    node_cli.allow(home, "files", True, say=lambda _t: None, folder=str(plain), **yes)  # type: ignore[arg-type]
+    cli_allow.allow(home, "files", True, say=lambda _t: None, folder=str(plain), **yes)  # type: ignore[arg-type]
 
 
 # ---- renamed vault config folders, the home folder, more link schemes ----------------------------

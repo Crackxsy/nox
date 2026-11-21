@@ -10,11 +10,14 @@ from typing import Any
 
 import pytest
 
-from nox.node.device import cli as node_cli
-from nox.node.device.confirmed import effective_manifest
+from nox.node.device.cli import allow as cli_allow
+from nox.node.device.cli import pairing as cli_pairing
+from nox.node.device.cli import runtime as cli_runtime
+from nox.node.device.confirmed import effective_manifest, manifest_key
 from nox.node.device.gate import NodeGate
 from nox.node.device.home import NodeHome
-from nox.node.device.world import GameLock, world_tools
+from nox.node.device.world.catalogue import world_tools
+from nox.node.device.world.game_lock import GameLock
 from nox.node.wire.manifest import NodeManifest
 from tests.unit.node.support_sessions import LAPTOP, device_world, world_gate, world_meta
 
@@ -155,9 +158,9 @@ def test_off_windows_there_is_no_input_at_all() -> None:
 
 def test_the_devices_own_games_lock_and_only_the_device_removes_them(tmp_path: Path) -> None:
     home = NodeHome(tmp_path / "node")
-    node_cli.confirm_defaults(home, None)
-    node_cli.games(home, "ExampleGame.exe", True, say=print)
-    runtime = node_cli.build(home, notifier=SimpleNamespace())
+    cli_pairing.confirm_defaults(home, None)
+    cli_allow.games(home, "ExampleGame.exe", True, say=print)
+    runtime = cli_runtime.build(home, notifier=SimpleNamespace())
     assert runtime.world is not None
     assert "ExampleGame.exe" in runtime.gate.manifest.games
     assert "examplegame.exe" in runtime.world.lock._names()
@@ -166,22 +169,22 @@ def test_the_devices_own_games_lock_and_only_the_device_removes_them(tmp_path: P
 
     found = load_manifest(home.manifest_file)
     save_manifest(home.manifest_file, found.model_copy(update={"games": []}))
-    audit = node_cli.open_audit(home)
-    key = node_cli.manifest_key(home.path, None)
+    audit = cli_runtime.open_audit(home)
+    key = manifest_key(home.path, None)
     assert (
         "ExampleGame.exe" in effective_manifest(load_manifest(home.manifest_file), audit, key).games
     )
-    with pytest.raises(node_cli.NodeCliError, match="interactive"):
-        node_cli.games(home, "ExampleGame.exe", False, say=print, interactive=lambda: False)
-    node_cli.games(
+    with pytest.raises(cli_runtime.NodeCliError, match="interactive"):
+        cli_allow.games(home, "ExampleGame.exe", False, say=print, interactive=lambda: False)
+    cli_allow.games(
         home, "ExampleGame.exe", False, say=print, interactive=lambda: True, confirm=lambda _p: True
     )
     assert (
         "ExampleGame.exe"
         not in effective_manifest(load_manifest(home.manifest_file), audit, key).games
     )
-    with pytest.raises(node_cli.NodeCliError):
-        node_cli.games(home, "C:/Games/x.exe", True, say=print)
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_allow.games(home, "C:/Games/x.exe", True, say=print)
 
 
 def test_the_core_can_only_add_games() -> None:
@@ -270,8 +273,8 @@ def test_removing_a_game_without_a_confirmation_writes_nothing(tmp_path: Path) -
     home.ensure()
     save_manifest(home.manifest_file, NodeManifest(games=["ExampleGame.exe"]))
     before = home.manifest_file.read_text(encoding="utf-8")
-    with pytest.raises(node_cli.NodeCliError):
-        node_cli.games(
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_allow.games(
             home,
             "ExampleGame.exe",
             False,

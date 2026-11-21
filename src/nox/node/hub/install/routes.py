@@ -19,7 +19,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from nox.capabilities.model import CapabilityState
-from nox.node.device.hands import (
+from nox.node.device.hands.args import (
     MoveArgs,
     PathArgs,
     ShellArgs,
