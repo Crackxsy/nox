@@ -9,6 +9,7 @@ import pytest
 
 from nox.core.config import NoxConfig
 from nox.core.speech_policy import SpeechPolicy, in_quiet_hours
+from nox.core.state import Mode
 from tests.unit.fakes import FakeState
 
 
@@ -147,3 +148,19 @@ def test_in_quiet_hours_table(start: str, end: str, hour: int, expected: bool) -
 
     quiet = QuietHoursConfig(start=start, end=end)
     assert in_quiet_hours(quiet, time(hour, 0)) is expected
+
+
+@pytest.mark.parametrize("mode", [m.value for m in Mode if m is not Mode.ROCKET_LEAGUE])
+def test_a_failure_is_reported_aloud_as_a_reply_whatever_the_privacy_situation(mode: str) -> None:
+    """The privacy case (no local model while the cloud is off) is the one that must be heard."""
+    policy = make_policy(active_zone="bedroom", privacy_mode="offline", clock_hour=2)
+
+    assert policy.may_report_failure(mode) == (True, "ok")
+
+
+def test_a_failure_is_not_reported_aloud_while_a_game_runs() -> None:
+    assert make_policy().may_report_failure("rocket_league") == (False, "silent_mode")
+
+
+def test_a_failure_is_not_reported_aloud_while_muted() -> None:
+    assert make_policy(muted=True).may_report_failure("companion") == (False, "muted")

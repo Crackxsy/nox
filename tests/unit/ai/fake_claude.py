@@ -7,6 +7,8 @@ FAKE_CHILD        "1": start a long-lived child process at `initialize`, like th
 FAKE_DELTA_DELAY  seconds between text deltas (a slow answer, for barge-in and kill tests)
 FAKE_FAIL_INIT    "1": the `initialize` control request ends the process (a changed protocol)
 FAKE_SLOW_EXIT    seconds to wait after stdin closes before exiting
+A user message containing "LIMITNOW" is refused by a used-up plan limit before any text,
+"LIMITLATE" after the first words (`FAKE_RESET`: when the limit resets, Unix seconds).
 A user message containing "TOOL" is answered with text, a tool_use block, then more text;
 "SEARCH" makes seven WebSearch calls; "SLOW" keeps writing until interrupted.
 Without `--input-format` it behaves like a one-shot `claude -p` and answers "Einmal."
@@ -70,6 +72,50 @@ def delta(text: str) -> None:
     )
 
 
+LIMIT_SENTENCE = "You've hit your limit · resets 11pm (Europe/Berlin)"
+
+
+def synthetic_limit_message() -> dict[str, object]:
+    """What the real CLI writes when a plan limit refuses a request: a message of its own, from the
+    model `<synthetic>`, flagged as an API error - not something a model said."""
+    return {
+        "type": "assistant",
+        "message": {
+            "model": "<synthetic>",
+            "role": "assistant",
+            "content": [{"type": "text", "text": LIMIT_SENTENCE}],
+        },
+        "error": "rate_limit",
+        "isApiErrorMessage": True,
+    }
+
+
+def refuse_by_limit() -> None:
+    """The plan limit refuses the turn: the status event (unless `FAKE_NO_EVENT`), the CLI's own
+    sentence, then an error result."""
+    if not os.environ.get("FAKE_NO_EVENT"):
+        out(
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {
+                    "status": "rejected",
+                    "rateLimitType": "five_hour",
+                    "resetsAt": float(os.environ.get("FAKE_RESET", "0")),
+                },
+            }
+        )
+    out(synthetic_limit_message())
+    out(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "result": LIMIT_SENTENCE,
+            "usage": {},
+        }
+    )
+
+
 def one_shot() -> None:
     log({"pid": os.getpid(), "one_shot": sys.stdin.read()[-200:]})
     out({"type": "system", "subtype": "init", "model": "default", "session_id": "o"})
@@ -125,10 +171,16 @@ def main() -> None:
         assert isinstance(body, dict)
         content = str(body["content"])
         out({"type": "system", "subtype": "init", "model": model, "session_id": "s"})
+        if "LIMITNOW" in content:
+            refuse_by_limit()
+            continue
         words = ["Hallo", " Welt."]
         for word in words:
             delta(word)
             time.sleep(float(os.environ.get("FAKE_DELTA_DELAY", "0")))
+        if "LIMITLATE" in content:
+            refuse_by_limit()
+            continue
         if "TOOL" in content:
             out(
                 {

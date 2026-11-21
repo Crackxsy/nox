@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nox.ai.base import AiRole
 
+#: The local model Nox asks Ollama for unless the user chose another. `config/defaults.yaml` and
+#: `nox.core.config` repeat the name; a test holds the three to each other.
+DEFAULT_OLLAMA_MODEL = "qwen3:4b-instruct"
+
 
 class RouterConfig(BaseModel):
     """``ai.router``. Per-role chains default to the fallback chain; ``roles`` overrides them."""
@@ -55,7 +59,10 @@ class ClaudeCodeConfig(BaseModel):
     model: str = ""  # empty = CLI default; alias (sonnet, haiku) or full id
     safe_mode: bool = True  # --safe-mode: no user hooks/plugins/MCP in Nox requests
     max_budget_usd: float = Field(default=0.0, ge=0.0)  # 0 = no per-request cap
-    health_roundtrip: bool = True  # health() also does a 1-token request (costs quota)
+    #: Health also sends a real 1-token request every time the router's health result expires.
+    #: Costs quota and a process start each time, so it is off: health is then derived from the
+    #: answers Nox actually gets plus local checks (`--version`, `auth status`) that call no model.
+    health_roundtrip: bool = False
     #: Conversation turns go to one long-lived Claude Code process (`--input-format stream-json`)
     #: with Nox's tools over MCP; off = a fresh `claude -p` per turn, without tools.
     persistent: bool = True
@@ -82,7 +89,7 @@ class OllamaConfig(BaseModel):
 
     enabled: bool = True
     base_url: str = "http://127.0.0.1:11434"
-    model: str = "llama3.2:3b"
+    model: str = DEFAULT_OLLAMA_MODEL
     cpu_model: str = ""  # model when the GPU is not allowed; empty = same model
     embed_model: str = "nomic-embed-text"
     gpu_allowed_modes: list[str] = Field(

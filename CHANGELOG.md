@@ -426,6 +426,44 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `check-image.sh` and the QEMU boot test check all of it, including an SSH on/off round trip.
 
 ### Fixed
+- **A used-up Claude plan limit is handled instead of failing every turn.** Claude Code reports a
+  refused request in its stream (`rate_limit_event`) and in the error that ends it; Nox read the
+  event and ignored it, so each request ran into the same error and the provider was only kept out
+  for a minute. The limit - which window (five hours, a week) and when it resets - now keeps Claude
+  out of the chain until the reset (`ai.providers` shows `limited_until`; nothing is asked of it
+  meanwhile, neither a request nor a health probe; the lock lives in memory, so a restart finds the
+  limit again with the first request). The CLI words a refused request as a message of its own
+  (model `<synthetic>`, "You've hit your limit - resets 11pm"); that sentence is the error, never
+  an answer, and its reset time is read from it when no structured status came. Nox tells you
+  once per limit, in German or English, "Mein Claude-Kontingent ist bis 14:30 Uhr aufgebraucht
+  ...", says what answers meanwhile (the local model, or only the fixed offline answers), shows it
+  as a notification, and speaks it only where speaking is allowed (not while muted, in a privacy
+  zone or a quiet privacy mode, in quiet hours, in focus mode or while a game runs). A limit that
+  cuts an answer short ends it with a sentence instead of silence. New events
+  `ai.provider_limited` and `ai.turn_failed`.
+- **A failed turn is no longer silent.** A spoken turn that no model answered was only logged; a
+  typed one ended in a bare error. Both now get a short reason and the next step ("Das Modell
+  antwortet gerade nicht ...", "Kein Gehirn verfügbar: Claude ist nicht angemeldet ... und es
+  läuft kein lokales Modell", the limit, a privacy mode that forbids the cloud; "Etwas ist
+  schiefgegangen" when it was not the model that failed). The notice is the reply: shown in the
+  chat and, for a spoken turn, said aloud every time - also in a private privacy mode, which is
+  exactly when no local model leaves nothing else to say - except while muted or while a game
+  runs. It is not written into the conversation history as something Nox said. A notification
+  repeats the same failure at most once in five minutes. The reply to a turn whose tools never got
+  anywhere says what happened and what helps instead of "Das hat nicht funktioniert."
+- **Asking whether Claude is there no longer costs quota.** The health check sent a real 1-token
+  request every time its result expired (every 30 seconds from the health service, every minute
+  from the router). Health now comes from the answers Nox really gets plus two local checks that
+  call no model (`claude --version`, `claude auth status`, run once and again after a failure).
+  `ai.providers.claude_code.health_roundtrip: true` brings the old probe back.
+- The local model Nox asked Ollama for by default was `llama3.2:3b` in code and `qwen3:4b-instruct`
+  in the shipped configuration and the docs; the code now agrees (a test holds the three
+  together), and the README names the model that is pulled.
+- **The list of things Nox cannot do** still said it could not draw a chart (`view.render`) after
+  `view.show` shipped, and its notes on audio, devices and settings described a state from before
+  the settings page and the voice-device list. The table is corrected, a row now also counts as
+  stale when a tool with a longer name (`desktop.audio.volume`) exists, and a test checks the table
+  against the tools of a real core.
 - **Voice: interrupting Nox now silences the whole answer.** `tts.stop` and a barge-in only
   stopped the sentence that was playing; sentences the core had already handed over waited for it
   and started right afterwards, so Nox kept talking for seconds. An interruption now ends the

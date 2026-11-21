@@ -103,6 +103,28 @@ class AiRequestFailed(BaseModel):
     fallback_to: str | None = None
 
 
+class AiProviderLimited(BaseModel):
+    """A provider's plan limit is used up. Published once per limit, when the router first learns
+    of it; the provider is out of the chain until `until`."""
+
+    provider: str
+    kind: str  # five_hour | seven_day | seven_day_opus | seven_day_sonnet | overage | unknown
+    until: str  # ISO 8601, UTC
+    estimated: bool = False  # `until` is a default delay: the provider did not say when
+    #: What answers meanwhile: `local` (a local model), `rules` (fixed answers only) or `none`.
+    fallback: str = "rules"
+
+
+class AiTurnFailed(BaseModel):
+    """A turn got no answer from any model. `cause` is a `NoProviderCause`; `until` is set for a
+    limit (ISO 8601, UTC) and `estimated` says it is a default delay."""
+
+    cause: str
+    language: str = "de"
+    until: str = ""
+    estimated: bool = False
+
+
 class PetStateChanged(BaseModel):
     functional: str  # idle|listening|thinking|speaking|working|error|muted|privacy|unavailable
     mood: dict[str, float] = Field(default_factory=dict)

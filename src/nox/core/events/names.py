@@ -43,6 +43,10 @@ class E:
     AI_RESPONSE_READY = "ai.response_ready"
     AI_REQUEST_FAILED = "ai.request_failed"
     AI_PROVIDER_CHANGED = "ai.provider_changed"
+    #: A provider's usage limit ran out; it stays out of the chain until the reset.
+    AI_PROVIDER_LIMITED = "ai.provider_limited"
+    #: A turn ended with no answer from any model; the user is told why.
+    AI_TURN_FAILED = "ai.turn_failed"
 
     PET_STATE_CHANGED = "pet.state_changed"
     PET_INTERACTION = "pet.interaction"

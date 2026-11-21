@@ -7,6 +7,11 @@ it is exceeded, cloud providers are skipped for background requests (local ones 
 degraded) and the request is refused only if no local provider remains. Below
 ``budget_warmup_tokens`` cloud tokens the share is not enforced, so the first requests of the day
 are never blocked.
+
+A provider whose plan limit is used up (`ProviderLimitedError`) is not retried after a minute like
+any other failure: it stays out of the chain until the limit resets, `providers()` says so with
+`limited_until`, and ``ai.provider_limited`` is published once so the user is told - not on every
+request that is answered by the next provider in the chain.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -26,19 +31,29 @@ from nox.ai.config import RouterConfig
 from nox.ai.errors import (
     BudgetExceededError,
     NoProviderAvailableError,
+    NoProviderCause,
     ProviderError,
+    ProviderLimitedError,
     ProviderTimeoutError,
 )
+from nox.ai.limits import ProviderLimit, describe_limit
 from nox.core.events import E, Event, EventBus, HealthStatus
 from nox.util.aio import aclose
 
 CLOUD_BLOCKING_MODES = frozenset({"private", "offline"})
+#: The provider id of the always-available fixed answers (`nox.ai.providers.rules`): not a model.
+RULES_PROVIDER_ID = "rules"
 log = get_logger(__name__)
 
 
 @runtime_checkable
 class _HasLastResponse(Protocol):
     def last_response(self, request_id: str) -> AiResponse | None: ...
+
+
+@runtime_checkable
+class _HasActiveLimit(Protocol):
+    def active_limit(self) -> ProviderLimit | None: ...
 
 
 class Decision(BaseModel):
@@ -91,6 +106,7 @@ class DefaultRouter:
         cloud_allowed: Callable[[], bool] | None = None,
         clock: Callable[[], float] = time.monotonic,
         today: Callable[[], date] = date.today,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         max_decisions: int = 100,
     ) -> None:
         self._providers: dict[str, AiProvider] = {p.info.id: p for p in providers}
@@ -99,7 +115,13 @@ class DefaultRouter:
         self._cloud_allowed = cloud_allowed or (lambda: True)
         self._clock = clock
         self._today = today
+        self._wall_clock = wall_clock
         self._health: dict[str, tuple[float, ProviderInfo]] = {}
+        #: Providers whose plan limit is used up, until the reset.
+        self._limits: dict[str, ProviderLimit] = {}
+        #: Providers whose limit was announced and that have not answered since: a limit that
+        #: ends and is met again at once (a retry that fails) is the same limit, said once.
+        self._announced: set[str] = set()
         self._decisions: deque[Decision] = deque(maxlen=max_decisions)
         self._usage = _Usage(day=today())
 
@@ -116,6 +138,10 @@ class DefaultRouter:
 
     def decisions(self) -> list[Decision]:
         return list(self._decisions)
+
+    def limits(self) -> dict[str, ProviderLimit]:
+        """The providers whose plan limit is used up right now, by provider id."""
+        return {pid: limit for pid in list(self._limits) if (limit := self._active_limit(pid))}
 
     # -- Router contract ------------------------------------------------------------------------
 
@@ -144,18 +170,19 @@ class DefaultRouter:
                 raise
             except Exception as exc:  # noqa: BLE001 - every provider failure must fall through
                 last_error = self._as_error(exc, pid, timeout_s)
-                self._mark_unavailable(provider, str(last_error))
+                await self._note_failure(provider, last_error, candidates[index + 1 :])
                 await self._emit_failed(
                     request, pid, str(last_error), candidates[index + 1 :], decision
                 )
                 continue
             response = self._finalize(response, decision, index, candidates)
             self._account(request.role, provider, response)
+            await self._adopt_limit(provider, candidates[index + 1 :])
             await self._emit_ready(response)
             return response
         decision.notes.append("all candidates failed")
         self._decisions.append(decision)
-        raise NoProviderAvailableError(str(last_error) if last_error else "chain exhausted")
+        raise self._exhausted(last_error)
 
     async def stream(self, request: AiRequest) -> AsyncIterator[AiChunk]:
         candidates, decision = await self._select(request)
@@ -191,25 +218,26 @@ class DefaultRouter:
             except Exception as exc:  # noqa: BLE001 - see complete()
                 await _aclose(iterator)
                 last_error = self._as_error(exc, pid, request.timeout_s)
-                self._mark_unavailable(provider, str(last_error))
                 fallback_ok = not yielded
                 # The providers after this one - never the one that just failed, and none at all
                 # once chunks have already been delivered.
                 remaining_chain = candidates[index + 1 :] if fallback_ok else []
+                await self._note_failure(provider, last_error, candidates[index + 1 :])
                 await self._emit_failed(request, pid, str(last_error), remaining_chain, decision)
                 if not fallback_ok:
                     decision.notes.append(f"{pid}: failed after streaming started, no fallback")
                     self._decisions.append(decision)
-                    raise NoProviderAvailableError(str(last_error)) from exc
+                    raise self._exhausted(last_error) from exc
                 continue
             response = self._usage_after_stream(provider, request, parts, started)
             response = self._finalize(response, decision, index, candidates)
             self._account(request.role, provider, response)
+            await self._adopt_limit(provider, candidates[index + 1 :])
             await self._emit_ready(response)
             return
         decision.notes.append("all candidates failed")
         self._decisions.append(decision)
-        raise NoProviderAvailableError(str(last_error) if last_error else "chain exhausted")
+        raise self._exhausted(last_error)
 
     # -- selection ------------------------------------------------------------------------------
 
@@ -262,8 +290,34 @@ class DefaultRouter:
             )
             if budget_blocked and request.role is AiRole.BACKGROUND:
                 raise BudgetExceededError(budget_blocked)
-            raise NoProviderAvailableError(error)
+            raise self._none_selected(chain, error, cloud_blocked_reason, budget_blocked)
         return candidates, decision
+
+    def _none_selected(
+        self, chain: Sequence[str], error: str, cloud_blocked: str, budget_blocked: str
+    ) -> NoProviderAvailableError:
+        """The error for a request whose chain had no usable provider, with the reason a user
+        can act on: a limit that is used up, a privacy mode, a spent budget, or just nothing."""
+        if cloud_blocked:  # the privacy mode is the reason the user can act on first
+            return NoProviderAvailableError(error, cause=NoProviderCause.PRIVACY)
+        limit = next((lim for pid in chain if (lim := self._active_limit(pid))), None)
+        if limit is not None:
+            return NoProviderAvailableError(error, cause=NoProviderCause.LIMIT, limit=limit)
+        if budget_blocked:
+            return NoProviderAvailableError(error, cause=NoProviderCause.BUDGET)
+        return NoProviderAvailableError(error)
+
+    @staticmethod
+    def _exhausted(last_error: Exception | None) -> NoProviderAvailableError:
+        """The error once every candidate failed; `last_error` tells the user's reason."""
+        message = str(last_error) if last_error else "chain exhausted"
+        if isinstance(last_error, ProviderLimitedError):
+            return NoProviderAvailableError(
+                message, cause=NoProviderCause.LIMIT, limit=last_error.limit
+            )
+        if isinstance(last_error, ProviderTimeoutError):
+            return NoProviderAvailableError(message, cause=NoProviderCause.TIMEOUT)
+        return NoProviderAvailableError(message, cause=NoProviderCause.FAILED)
 
     def _cloud_block_reason(self, request: AiRequest) -> str:
         if request.privacy_mode in CLOUD_BLOCKING_MODES:
@@ -289,6 +343,16 @@ class DefaultRouter:
 
     async def _probe(self, provider: AiProvider) -> ProviderInfo:
         pid = provider.info.id
+        limit = self._active_limit(pid)
+        if limit is not None:
+            # Out until the reset: not asked again, which would cost a process or a request.
+            return provider.info.model_copy(
+                update={
+                    "status": HealthStatus.UNAVAILABLE,
+                    "reason": describe_limit(limit),
+                    "limited_until": limit.until,
+                }
+            )
         now = self._clock()
         cached = self._health.get(pid)
         if cached is not None and now - cached[0] < self._cfg.health_ttl_s:
@@ -306,6 +370,65 @@ class DefaultRouter:
         if previous is not None and previous != info.status:
             log.info("ai.provider_health", provider=pid, status=info.status, reason=info.reason)
         return info
+
+    def _active_limit(self, pid: str) -> ProviderLimit | None:
+        """The provider's limit if it still holds; one that has reset is forgotten, and the
+        provider's health is asked again at the next probe."""
+        limit = self._limits.get(pid)
+        if limit is None or limit.active(self._wall_clock()):
+            return limit
+        del self._limits[pid]
+        self._health.pop(pid, None)
+        log.info("ai.provider_limit_over", provider=pid, kind=limit.kind)
+        return None
+
+    async def _note_failure(
+        self, provider: AiProvider, error: Exception, remaining: Sequence[AiProvider]
+    ) -> None:
+        """Keep a failed provider out of the chain: for a minute, or until a plan limit resets."""
+        if isinstance(error, ProviderLimitedError):
+            await self._mark_limited(provider, error.limit, remaining)
+        else:
+            self._mark_unavailable(provider, str(error))
+
+    async def _adopt_limit(self, provider: AiProvider, remaining: Sequence[AiProvider]) -> None:
+        """A request that was answered can still have run into the limit on its way out (an answer
+        cut short by it): the provider knows, and the router keeps it out from now on. One that
+        answered cleanly has no limit any more, and a later one is announced again."""
+        pid = provider.info.id
+        limit = provider.active_limit() if isinstance(provider, _HasActiveLimit) else None
+        if limit is None:
+            self._announced.discard(pid)  # it answered: a later limit is a new one
+        elif pid not in self._limits:
+            await self._mark_limited(provider, limit, remaining)
+
+    async def _mark_limited(
+        self, provider: AiProvider, limit: ProviderLimit, remaining: Sequence[AiProvider]
+    ) -> None:
+        """Lock the provider until `limit.until` and say so once: a request that meets the same
+        limit again (a second turn already under way) does not announce it twice."""
+        pid = provider.info.id
+        self._limits[pid] = limit
+        self._health.pop(pid, None)
+        if pid in self._announced:
+            return
+        self._announced.add(pid)
+        log.warning(
+            "ai.provider_limited", provider=pid, kind=limit.kind, until=limit.until.isoformat()
+        )
+        await self._bus.publish(
+            Event(
+                name=E.AI_PROVIDER_LIMITED,
+                payload={
+                    "provider": pid,
+                    "kind": limit.kind,
+                    "until": limit.until.isoformat(),
+                    "estimated": limit.estimated,
+                    "fallback": _fallback_kind(remaining),
+                },
+                source="ai.router",
+            )
+        )
 
     def _mark_unavailable(self, provider: AiProvider, reason: str) -> None:
         pid = provider.info.id
@@ -452,6 +575,14 @@ class DefaultRouter:
                     source="ai.router",
                 )
             )
+
+
+def _fallback_kind(remaining: Sequence[AiProvider]) -> str:
+    """What answers while a provider is out: a local model, only the fixed rules, or nothing."""
+    infos = [provider.info for provider in remaining]
+    if any(info.local and info.id != RULES_PROVIDER_ID for info in infos):
+        return "local"
+    return "rules" if any(info.id == RULES_PROVIDER_ID for info in infos) else "none"
 
 
 async def _aclose(iterator: AsyncIterator[AiChunk]) -> None:

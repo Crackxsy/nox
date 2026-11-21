@@ -83,7 +83,7 @@ body:
         Windows 11 26100.x
         Python 3.13.x (python.org)
         Node 22.x
-        Ollama: yes (llama3.2:3b) / no
+        Ollama: yes (qwen3:4b-instruct) / no
         Claude Code CLI: logged in / not installed
     validations:
       required: true
