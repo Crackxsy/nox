@@ -16,11 +16,12 @@ from tests.unit.node.support_sessions import plain_node_home
 
 
 def test_allowing_a_folder_switches_files_on_in_one_question(tmp_path: Path) -> None:
-    from nox.node.device import cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import pairing as cli_pairing
     from nox.node.wire.manifest import load_manifest
 
     home = plain_node_home(tmp_path)
-    cli.confirm_defaults(home, None)
+    cli_pairing.confirm_defaults(home, None)
     folder = tmp_path / "Ablage"
     folder.mkdir()
     asked: list[str] = []
@@ -30,7 +31,7 @@ def test_allowing_a_folder_switches_files_on_in_one_question(tmp_path: Path) -> 
         asked.append(prompt)
         return True
 
-    cli.allow(
+    cli_allow.allow(
         home,
         "files",
         True,
@@ -45,12 +46,13 @@ def test_allowing_a_folder_switches_files_on_in_one_question(tmp_path: Path) -> 
 
 
 def test_allowing_files_without_a_folder_says_so(tmp_path: Path) -> None:
-    from nox.node.device import cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import pairing as cli_pairing
 
     home = plain_node_home(tmp_path)
-    cli.confirm_defaults(home, None)
+    cli_pairing.confirm_defaults(home, None)
     said: list[str] = []
-    cli.allow(
+    cli_allow.allow(
         home, "files", True, say=said.append, interactive=lambda: True, confirm=lambda _p: True
     )
     assert "no folder allowed yet" in said[-1] and "allow files --folder" in said[-1]
@@ -75,11 +77,12 @@ def test_what_exists_on_which_device(group: str, platform: str, reason: str | No
 
 
 def test_allow_refuses_a_group_that_cannot_work_here(tmp_path: Path) -> None:
-    from nox.node.device import cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
 
     home = plain_node_home(tmp_path)
-    with pytest.raises(cli.NodeCliError, match="not available on devices yet"):
-        cli.allow(
+    with pytest.raises(cli_runtime.NodeCliError, match="not available on devices yet"):
+        cli_allow.allow(
             home, "packages", True, say=print, interactive=lambda: True, confirm=lambda _p: True
         )
 
@@ -136,21 +139,22 @@ def test_german_words_and_labels_match_the_devices_page(monkeypatch: pytest.Monk
 
 
 def test_pair_again_only_when_the_pairing_cannot_work(tmp_path: Path) -> None:
-    from nox.node.device import cli
+    from nox.node.device.cli import pairing as cli_pairing
+    from nox.node.device.cli import runtime as cli_runtime
 
     home = plain_node_home(tmp_path)
     link = "nox-node://pair?h=192.168.1.20&p=47843&c=ABCDEFGH&fp=" + "ab" * 32
-    with pytest.raises(cli.NodeCliError, match="not paired"):
-        cli.pair(link, home=home, again=True)
+    with pytest.raises(cli_runtime.NodeCliError, match="not paired"):
+        cli_pairing.pair(link, home=home, again=True)
     identity = SimpleNamespace()
     home.load_identity = lambda: identity  # type: ignore[method-assign]
     home.pinned_ca_ok = lambda _i: True  # type: ignore[method-assign]
     home.read_status = lambda: {"state": "refused"}  # type: ignore[method-assign]
-    assert cli.again_reason(home) == "refused"
+    assert cli_pairing.again_reason(home) == "refused"
     home.read_status = lambda: {"state": "connected"}  # type: ignore[method-assign]
-    assert cli.again_reason(home) == "certificate_unreadable"  # no certificate file
+    assert cli_pairing.again_reason(home) == "certificate_unreadable"  # no certificate file
     home.pinned_ca_ok = lambda _i: False  # type: ignore[method-assign]
-    assert cli.again_reason(home) == "pin_mismatch"
+    assert cli_pairing.again_reason(home) == "pin_mismatch"
 
 
 def test_render_node_names_the_real_command() -> None:

@@ -1,37 +1,5 @@
-"""A node updates itself - only from a signed release, never from its core.
-
-About once a day the node fetches `release-manifest.json` and its signature from the project's
-latest GitHub release and decides, in this order. Any "no" stops it and changes nothing:
-
-1. **A release key is trusted** by the version that runs here (`nox.release.trusted_keys`).
-   None yet: "release signing is not configured", no update at all.
-2. **The signature** is valid Ed25519 by a trusted, unexpired key over the manifest's exact bytes
-   (`nox.release.verify.verify_release`: unknown key, bad signature, expired key are refusals).
-3. **The manifest** is well-formed and names this project.
-4. **No downgrade, no replay:** its version is not below the running one nor below the highest
-   version that ran here, and it was not created before the newest manifest this node has
-   already seen (an old, validly signed manifest cannot be replayed to freeze the node). Equal
-   version: up to date. A version that failed to start here is skipped for `BAD_FOR_DAYS`.
-5. **Policy:** only the `stable` channel installs by itself, only a patch, only when the release
-   changed no library (`deps_changed: false`), and only when the *paired core* accepts the
-   protocol the *new* node speaks (`node_speaks` in the manifest, within the range the core sent
-   at the last connection). Anything else waits for `nox node update` on the device - or, when
-   the libraries changed, for the installer.
-6. **The bundle** `nox-app-<tag>.zip` (from that tag's own release) is listed in the signed
-   manifest, downloaded with a size cap and matches the listed size and **SHA-256** - hashed and
-   unpacked from one open file.
-7. **Its contents** (`nox.node.device.bundle`): only listed, regular, bounded files under `nox/` and
-   `config/`, each with the SHA-256 from `BUNDLE.json`; the same version, the protocol the
-   manifest names, and the `uv.lock` of the running code.
-8. **A trial start:** the new code is imported with this Python, isolated, and reports its
-   version.
-
-Then one atomic replace of `state.json` (under a file lock shared with the launcher) makes the
-new version `pending`, and the node restarts through its launcher (`installer/start_node.pyw`),
-which checks the folder again against the signed manifest before it runs it. The new version
-becomes `current` once it connected to its core *and* the core accepted its protocol; a start
-that crashes `MAX_TRIALS` times, or a core that refuses its protocol, rolls it back.
-"""
+"""`NodeUpdater`: one check from the signed manifest to the pending version, in the order the
+package docstring lists, and the trial start of the new copy."""
 
 from __future__ import annotations
 
@@ -40,23 +8,29 @@ import datetime as dt
 import hashlib
 import json
 import os
-import re
 import shutil
-import ssl
 import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
 import zipfile
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any
 
 from nox import __version__
 from nox.node.device.bundle import ARCHIVE_NAME, BundleError, bundle_name, sha256_of, unpack
 from nox.node.device.cli_text import command
+from nox.node.device.update.fetch import Fetcher, HttpsFetcher
+from nox.node.device.update.state import (
+    _CREATED,
+    _VERSION_DIR,
+    BAD_FOR_DAYS,
+    Kind,
+    Status,
+    UpdateCheck,
+    UpdateState,
+    _now,
+    state_lock,
+)
 from nox.release import trusted_release_keys
 from nox.release.keys import TrustedKey
 from nox.release.manifest import MANIFEST_NAME, MAX_MANIFEST_BYTES, SIGNATURE_NAME, Version
@@ -68,226 +42,19 @@ from nox.release.verify import (
     verify_release,
 )
 
-__all__ = [
-    "BAD_FOR_DAYS",
-    "RESTART_EXIT_CODE",
-    "STALE_AFTER_DAYS",
-    "TRIAL_FAILED_EXIT_CODE",
-    "HttpsFetcher",
-    "NodeUpdater",
-    "UpdateCheck",
-    "UpdateState",
-    "bundle_name",
-    "python_env",
-    "state_lock",
-]
-
-RELEASES_URL = "https://github.com/Crackxsy/nox/releases/"
 #: `nox node run` ends with this when it should start again (a new version is in place).
 RESTART_EXIT_CODE = 75
+
+
 #: ... and with this when its core refused the protocol of a version on trial: roll it back.
 TRIAL_FAILED_EXIT_CODE = 76
+
+
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024
-#: A version that failed here is not tried again by itself for this long.
-BAD_FOR_DAYS = 7
+
+
 #: No newer signed manifest for this long: say so (a frozen mirror, or simply no releases).
 STALE_AFTER_DAYS = 30
-#: How long a state.lock is waited for (another launcher, node or CLI holds it).
-LOCK_WAIT_S = 120.0
-_VERSION_DIR = re.compile(
-    r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20})*)?$"
-)
-_CREATED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-_PATH = re.compile(r"^(?:latest/download|download/v[0-9A-Za-z.-]{1,60})/[A-Za-z0-9._+-]{1,200}$")
-
-Status = Literal[
-    "up_to_date",
-    "available",
-    "needs_confirmation",
-    "needs_installer",
-    "refused",
-    "not_configured",
-    "installed",
-]
-Kind = Literal["", "patch", "minor", "major"]
-
-
-def _now() -> dt.datetime:
-    return dt.datetime.now(dt.UTC)
-
-
-# ---- fetching -----------------------------------------------------------------------------------
-
-
-class Fetcher(Protocol):
-    def get(self, path: str, limit: int) -> bytes: ...
-    def download(self, path: str, dest: Path, limit: int) -> None: ...
-
-
-class _HttpsOnly(urllib.request.HTTPRedirectHandler):
-    """GitHub answers release downloads with a redirect to its file host; never to plain HTTP."""
-
-    def redirect_request(  # noqa: PLR0913 - the standard library's signature
-        self,
-        req: urllib.request.Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
-    ) -> urllib.request.Request | None:
-        if not newurl.startswith("https://"):
-            raise urllib.error.HTTPError(
-                newurl, code, "refused: redirect away from HTTPS", headers, fp
-            )
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-class HttpsFetcher:
-    """Release files over HTTPS with the system's certificate store, size-capped. Paths are
-    `latest/download/<file>` or `download/<tag>/<file>` below the project's releases."""
-
-    def __init__(self, base: str = RELEASES_URL, *, timeout_s: float = 60.0) -> None:
-        if not base.startswith("https://"):
-            raise ValueError("release files only come over HTTPS")
-        self._base = base
-        self._timeout = timeout_s
-        self._opener = urllib.request.build_opener(
-            urllib.request.HTTPSHandler(context=ssl.create_default_context()), _HttpsOnly()
-        )
-
-    def _open(self, path: str) -> Any:
-        if not _PATH.match(path):
-            raise ValueError(f"not a release file path: {path[:80]!r}")
-        return self._opener.open(self._base + path, timeout=self._timeout)
-
-    def get(self, path: str, limit: int) -> bytes:
-        with self._open(path) as response:
-            data: bytes = response.read(limit + 1)
-        if len(data) > limit:
-            raise ReleaseVerificationError("too_large", f"{path} is larger than expected")
-        return data
-
-    def download(self, path: str, dest: Path, limit: int) -> None:
-        written = 0
-        with self._open(path) as response, dest.open("wb") as out:
-            while chunk := response.read(1024 * 1024):
-                written += len(chunk)
-                if written > limit:
-                    raise ReleaseVerificationError("too_large", f"{path} is larger than listed")
-                out.write(chunk)
-
-
-# ---- state.json (shared with the launcher) ------------------------------------------------------
-
-
-@contextlib.contextmanager
-def state_lock(root: Path) -> Iterator[None]:
-    """An exclusive lock on `<root>/state.lock` for one read-modify-write of `state.json`. The
-    launcher, the running node and `nox node update` all take it."""
-    root.mkdir(parents=True, exist_ok=True)
-    with (root / "state.lock").open("a+b") as handle:
-        if sys.platform == "win32":
-            import msvcrt  # noqa: PLC0415
-
-            handle.seek(0)
-            pause, waited = 0.05, 0.0
-            while True:  # LK_LOCK gives up after ~10 s: retry without a limit that short
-                try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError:
-                    if waited >= LOCK_WAIT_S:
-                        raise
-                    time.sleep(pause)
-                    waited += pause
-                    pause = min(pause * 2, 1.0)
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl  # noqa: PLC0415
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-
-def _version_or_none(value: object) -> str | None:
-    return value if isinstance(value, str) and _VERSION_DIR.match(value) else None
-
-
-@dataclass
-class UpdateState:
-    """`<node home>/app/state.json`."""
-
-    current: str | None = None
-    previous: str | None = None
-    pending: str | None = None
-    #: Crashes of the pending version so far (the launcher counts them).
-    failures: int = 0
-    floor: str | None = None
-    #: Version -> when it failed (UTC ISO); skipped for `BAD_FOR_DAYS`.
-    bad: dict[str, str] = field(default_factory=dict)
-    #: The `created` stamp of the newest signed manifest seen, and when it was first seen.
-    newest_created: str | None = None
-    newest_seen_at: str | None = None
-
-    @classmethod
-    def load(cls, path: Path) -> UpdateState:
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return cls()
-        if not isinstance(raw, dict):
-            return cls()
-        state = cls()
-        for name in ("current", "previous", "pending", "floor"):
-            setattr(state, name, _version_or_none(raw.get(name)))
-        failures = raw.get("failures")
-        state.failures = failures if isinstance(failures, int) and failures >= 0 else 0
-        bad = raw.get("bad")
-        if isinstance(bad, dict):
-            state.bad = {k: v for k, v in bad.items() if _version_or_none(k) and isinstance(v, str)}
-        for name in ("newest_created", "newest_seen_at"):
-            value = raw.get(name)
-            setattr(state, name, value if isinstance(value, str) and len(value) <= 40 else None)
-        return state
-
-    def save(self, path: Path) -> None:
-        """Atomic: a reader sees the old or the new state, never half of one."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(path.name + ".new")
-        with temporary.open("w", encoding="utf-8") as handle:
-            json.dump(asdict(self), handle, indent=2)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-
-    def is_bad(self, version: str, now: dt.datetime | None = None) -> bool:
-        when = self.bad.get(version)
-        if when is None:
-            return False
-        try:
-            failed = dt.datetime.fromisoformat(when)
-        except ValueError:
-            return True
-        return (now or _now()) - failed < dt.timedelta(days=BAD_FOR_DAYS)
-
-
-@dataclass(frozen=True)
-class UpdateCheck:
-    status: Status
-    message: str
-    version: str = ""
-    kind: Kind = ""
-    release: VerifiedRelease | None = None
-    manifest: bytes = b""
-    signature: bytes = b""
 
 
 def python_env(**extra: str) -> dict[str, str]:
@@ -322,7 +89,8 @@ def _default_smoke(app: Path, python: str) -> str:
     """Import the new code with this Python, isolated, in a process of its own; its version."""
     code = (
         "import os, sys; sys.path.insert(0, os.environ['NOX_NODE_APP']); "
-        "import nox, nox.cli, nox.node.device.agent, nox.node.device.update; print(nox.__version__)"
+        "import nox, nox.cli, nox.node.device.agent.node_agent, nox.node.device.update.updater;"
+        " print(nox.__version__)"
     )
     result = subprocess.run(  # noqa: S603 - this interpreter, fixed code; the folder is data
         [python, "-I", "-B", "-c", code],

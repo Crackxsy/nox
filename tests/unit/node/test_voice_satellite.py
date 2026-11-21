@@ -13,7 +13,8 @@ import pytest
 
 from nox.core.events.names import E
 from nox.lan.tls import TlsMaterial
-from nox.node.device.voice import MUTE_FILE, PTT_FILE, VoiceSettings, voice_config, voice_tools
+from nox.node.device.voice.satellite import voice_tools
+from nox.node.device.voice.settings import MUTE_FILE, PTT_FILE, VoiceSettings, voice_config
 from nox.node.hub.listener import NodeListener
 from nox.node.hub.pairing import NodePairing
 from nox.node.hub.policy import relevant_groups
@@ -45,13 +46,13 @@ def test_voice_and_obs_are_off_by_default_and_routable() -> None:
 
 
 def test_a_pi_gets_the_small_speech_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.node.device import voice as voice_module
+    from nox.node.device.voice import settings as settings_module
 
-    monkeypatch.setattr(voice_module.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(settings_module.platform, "machine", lambda: "aarch64")
     cfg = voice_config(VoiceSettings(), tmp_path)
     assert cfg.stt.model == "tiny" and cfg.tts.engine == "supertonic"
     assert cfg.stt.listening_mode == "ptt_only"  # push-to-talk unless the device says otherwise
-    monkeypatch.setattr(voice_module.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(settings_module.platform, "machine", lambda: "AMD64")
     assert voice_config(VoiceSettings(mode="wake_word"), tmp_path).stt.model == "base"
     assert voice_config(VoiceSettings(stt_model="small"), tmp_path).stt.model == "small"
 
@@ -61,7 +62,7 @@ def test_a_headless_device_listens_for_the_wake_word(
 ) -> None:
     """Push-to-talk needs a key to hold - a tray or a terminal. A
     device without a screen listens for the wake word unless its settings say otherwise."""
-    from nox.node.device.voice import listening_mode
+    from nox.node.device.voice.settings import listening_mode
 
     assert VoiceSettings().mode == "auto"
     assert listening_mode(VoiceSettings(), screen=lambda: False) == "wake_word"
@@ -74,7 +75,7 @@ def test_a_headless_device_listens_for_the_wake_word(
 
 
 def test_voice_say_is_offered_only_where_the_voice_libraries_are(tmp_path: Path) -> None:
-    from nox.node.device.voice import voice_support
+    from nox.node.device.voice.settings import voice_support
 
     satellite, _seen = make_satellite(tmp_path)
     assert voice_tools(satellite, support=lambda: "the extra voice is missing") == {}
@@ -90,10 +91,11 @@ def test_voice_setup_asks_first_and_downloads_into_the_node_folder(
 ) -> None:
     """The models only after a yes, into the node's own folder - and
     the node's speech recognition never downloads by itself (`local_files_only`)."""
-    from nox.node.device import voice as voice_module
+    from nox.node.device.voice import settings as settings_module
+    from nox.node.device.voice import setup as setup_module
     from nox.voice.stt.faster_whisper_engine import FasterWhisperStt
 
-    monkeypatch.setattr(voice_module, "voice_support", lambda: None)
+    monkeypatch.setattr(setup_module, "voice_support", lambda: None)
     fetched: list[tuple[str, Path]] = []
     said: list[str] = []
 
@@ -105,15 +107,15 @@ def test_voice_setup_asks_first_and_downloads_into_the_node_folder(
         return 0
 
     kw: dict[str, Any] = {"echo": said.append, "download_whisper": whisper, "download_tts": tts}
-    refused = voice_module.voice_setup(tmp_path, VoiceSettings(), confirm=lambda _q: False, **kw)
+    refused = setup_module.voice_setup(tmp_path, VoiceSettings(), confirm=lambda _q: False, **kw)
     assert refused == 1 and fetched == [] and "Nothing was downloaded." in said
     questions: list[str] = []
-    done = voice_module.voice_setup(
+    done = setup_module.voice_setup(
         tmp_path, VoiceSettings(), confirm=lambda q: questions.append(q) or True, **kw
     )
     assert done == 0 and "Hugging Face" in questions[0]
     assert [name for name, _ in fetched] == [
-        "base" if not voice_module.small_device() else "tiny",
+        "base" if not settings_module.small_device() else "tiny",
         "supertonic",
     ]
     assert all(str(target).startswith(str(tmp_path / "models")) for _, target in fetched)
@@ -237,7 +239,8 @@ async def test_a_refusal_is_remembered_in_words_and_sounds_once(tmp_path: Path) 
     import json
 
     from nox.node.device.satellite_cli import voice_status
-    from nox.node.device.voice import REFUSAL_SOUND_EVERY_S, STATE_FILE
+    from nox.node.device.voice.satellite import REFUSAL_SOUND_EVERY_S
+    from nox.node.device.voice.settings import STATE_FILE
 
     satellite, seen = await running_satellite(
         tmp_path, answer={"result": {"accepted": False, "reason": "voice_not_switched_on_here"}}
@@ -300,7 +303,7 @@ def test_every_refusal_the_core_gives_has_words() -> None:
 
 
 def test_whisper_is_fetched_by_pinned_revision() -> None:
-    from nox.node.device.voice import WHISPER_REVISIONS
+    from nox.node.device.voice.setup import WHISPER_REVISIONS
 
     assert set(WHISPER_REVISIONS) == {"tiny", "base", "small"}
     assert all(

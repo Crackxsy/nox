@@ -11,7 +11,8 @@ import pytest
 
 from nox.node.device.gate import NodeGate
 from nox.node.device.tools import NodeRefusal
-from nox.node.device.world import PlatformMedia, world_tools
+from nox.node.device.world.catalogue import world_tools
+from nox.node.device.world.media import PlatformMedia
 from nox.node.hub.policy import relevant_groups
 from nox.node.hub.registry import ROUTABLE, NodeRegistry
 from nox.node.wire.manifest import NodeManifest
@@ -81,24 +82,27 @@ async def test_desktop_and_computer_are_windows_only() -> None:
 def test_enabling_computer_needs_windows_and_a_second_yes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.device.home import NodeHome
 
     home = NodeHome(tmp_path / "node")
-    monkeypatch.setattr(cli, "computer_supported", lambda: False)
-    with pytest.raises(cli.NodeCliError, match="not available on this device"):
-        cli.allow(
+    monkeypatch.setattr(cli_allow, "computer_supported", lambda: False)
+    with pytest.raises(cli_runtime.NodeCliError, match="not available on this device"):
+        cli_allow.allow(
             home, "computer", True, say=print, interactive=lambda: True, confirm=lambda _p: True
         )
-    monkeypatch.setattr(cli, "computer_supported", lambda: True)
+    monkeypatch.setattr(cli_allow, "computer_supported", lambda: True)
     asked: list[str] = []
 
     def first_only(prompt: str) -> bool:
         asked.append(prompt)
         return len(asked) == 1
 
-    with pytest.raises(cli.NodeCliError, match="Not allowed"):
-        cli.allow(home, "computer", True, say=print, interactive=lambda: True, confirm=first_only)
+    with pytest.raises(cli_runtime.NodeCliError, match="Not allowed"):
+        cli_allow.allow(
+            home, "computer", True, say=print, interactive=lambda: True, confirm=first_only
+        )
     assert len(asked) == 2 and "mouse" in asked[1]
 
 
@@ -122,7 +126,7 @@ def test_building_the_tools_touches_no_window_api() -> None:
 def test_a_tool_whose_library_or_os_is_missing_is_not_offered() -> None:
     """The node never lists what cannot work here, so the core's
     status and the dashboard never claim it."""
-    from nox.node.device.world import withheld
+    from nox.node.device.world.catalogue import withheld
 
     world, _ = device_world()
     world.screen = world.camera = None

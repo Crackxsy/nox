@@ -9,7 +9,7 @@ from typing import Any
 from kann_alles.confirm import decide
 from kann_alles.nodes import PI_ID, PI_NAME, WorldNodes
 from kann_alles.tasks import load_tasks
-from nox.node.device.hands import ShellArgs
+from nox.node.device.hands.args import ShellArgs
 from nox.node.hub.install.routes import shell_target
 from nox.node.hub.router import routed_spec
 from nox.node.wire.arguments import NoArgs

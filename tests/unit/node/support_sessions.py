@@ -15,7 +15,10 @@ from nox.desktop.computer_use import DryRunSender
 from nox.desktop.win32 import WindowInfo
 from nox.node.device.gate import NodeGate
 from nox.node.device.home import NodeHome
-from nox.node.device.world import GameLock, PlatformMedia, World, world_tools
+from nox.node.device.world.catalogue import world_tools
+from nox.node.device.world.game_lock import GameLock
+from nox.node.device.world.media import PlatformMedia
+from nox.node.device.world.node_world import World
 from nox.node.hub.registry import ROUTABLE
 from nox.node.hub.world_routes import NodeActions, NodeControl, NodeLookups, world_specs
 from nox.node.wire.manifest import GROUPS, NodeManifest
