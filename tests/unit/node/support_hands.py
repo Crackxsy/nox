@@ -20,7 +20,9 @@ from nox.node.device.gate import NodeGate
 from nox.node.device.hands import NodeHands, WriteArgs, hand_tools
 from nox.node.device.home import NodeHome, NodeIdentity
 from nox.node.device.keystore import NodeKeyStore
-from nox.node.device.safe_fs import Folders, OutsideFolders, open_existing
+from nox.node.device.safe_fs.core import OutsideFolders
+from nox.node.device.safe_fs.folders import Folders
+from nox.node.device.safe_fs.opening import open_existing
 from nox.node.device.tools import NodeRefusal
 from nox.node.hub.listener import NodeListener
 from nox.node.hub.pairing import NodePairing

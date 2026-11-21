@@ -47,7 +47,9 @@ from nox.node.device.gate import NodeGate
 from nox.node.device.hands import NodeHands, default_sandbox, hand_tools
 from nox.node.device.home import NodeHome, restrict_dir_to_owner
 from nox.node.device.keystore import NodeKeyStore
-from nox.node.device.safe_fs import broad_folder, marked_above, secret_locations
+from nox.node.device.safe_fs.folders import broad_folder
+from nox.node.device.safe_fs.secret_places import secret_locations
+from nox.node.device.safe_fs.workspace import marked_above
 from nox.node.device.satellite_node import NodeSatellites, build_satellites
 from nox.node.device.tools import PlatformNotifier, default_tools
 from nox.node.device.update import NodeUpdater, UpdateCheck

@@ -123,7 +123,7 @@ async def _refused_existing(world: dict[str, Path], path: str) -> str:
 
 
 def test_the_markdown_check_is_position_independent() -> None:
-    from nox.node.device.safe_fs import markdown_runs_code
+    from nox.node.device.safe_fs.text_checks import markdown_runs_code
 
     # Wherever the token stands - quoted, listed, indented, after a broken fence - it counts.
     for prefix in ("", "> ", "- ", "1. ", "        ", "> - ", "\t"):

@@ -299,13 +299,13 @@ def test_spaces_around_a_path_or_a_name_are_refused_not_cut(
 async def test_a_refused_name_is_never_created_even_for_a_moment(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import safe_fs
+    from nox.node.device.safe_fs import opening
 
     def never(*_a: Any, **_k: Any) -> int:
         raise AssertionError("the file system was touched for a refused name")
 
-    monkeypatch.setattr(safe_fs, "_posix_open", never)
-    monkeypatch.setattr(safe_fs, "_win_open", never)
+    monkeypatch.setattr(opening, "_posix_open", never)
+    monkeypatch.setattr(opening, "_win_open", never)
     for target in ("notes/run.ps1", "notes/.hidden.txt", "notes/settings.json", "notes/tool"):
         with pytest.raises(NodeRefusal):
             await hand_tools_for(fs_world)["file.write"].handler(WriteArgs(path=target, text="x"))

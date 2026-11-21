@@ -15,9 +15,10 @@ import nox.node
 
 NODE_DIR = Path(nox.node.__file__).resolve().parent
 LAYERS = ("wire", "device", "hub")
-#: The one sub-package of a layer: the core's extension loader names `nox.node.hub.install`
-#: (`MODULE_OF`), and the wiring is cut into modules inside it.
-SUBPACKAGES = {"hub": ("install",)}
+#: The sub-packages of a layer. The core's extension loader names `nox.node.hub.install`
+#: (`MODULE_OF`), and the wiring is cut into modules inside it. On the device, a module that grew
+#: past the size rule (docs/CODE_STANDARDS.md) became a package of modules, one per responsibility.
+SUBPACKAGES = {"hub": ("install",), "device": ("safe_fs",)}
 
 
 def _sources() -> list[Path]:

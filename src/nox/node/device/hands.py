@@ -51,24 +51,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from nox.core.logging import get_logger
 from nox.hands.shell import ProgramResolver, classify
-from nox.node.device.safe_fs import (
-    MAX_TEXT_BYTES,
-    Folders,
-    OutsideFolders,
-    content_refusal,
-    extension_class,
-    extension_of,
-    list_folder,
-    markdown_finding,
-    move_file,
-    open_existing,
-    open_new,
-    secret_locations,
-    structured,
-    trash_file,
-    trash_support,
-    write_refusal,
-)
+from nox.node.device.safe_fs.core import OutsideFolders
+from nox.node.device.safe_fs.folders import Folders
+from nox.node.device.safe_fs.formats import extension_class, extension_of, structured, write_refusal
+from nox.node.device.safe_fs.move_delete import move_file, trash_file, trash_support
+from nox.node.device.safe_fs.opening import list_folder, open_existing, open_new
+from nox.node.device.safe_fs.secret_places import secret_locations
+from nox.node.device.safe_fs.text_checks import MAX_TEXT_BYTES, content_refusal, markdown_finding
 from nox.node.device.tools import NodeRefusal, NodeTool
 from nox.sandbox import EgressDecl, Limits, Sandbox, SandboxUnavailable
 

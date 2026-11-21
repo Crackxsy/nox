@@ -14,14 +14,10 @@ import pytest
 
 from nox.node.device.hands import NodeHands, PathArgs, WriteArgs
 from nox.node.device.home import NodeHome
-from nox.node.device.safe_fs import (
-    Folders,
-    OutsideFolders,
-    list_folder,
-    open_existing,
-    open_new,
-    secret_locations,
-)
+from nox.node.device.safe_fs.core import OutsideFolders
+from nox.node.device.safe_fs.folders import Folders
+from nox.node.device.safe_fs.opening import list_folder, open_existing, open_new
+from nox.node.device.safe_fs.secret_places import secret_locations
 from nox.node.device.tools import NodeRefusal
 from tests.unit.node.support_hands import (
     WINDOWS,
@@ -74,7 +70,7 @@ def test_windows_streams_devices_and_ambiguous_names_are_refused(
 def test_a_resolved_long_path_is_compared_without_its_prefix(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device.safe_fs import _plain
+    from nox.node.device.safe_fs.core import _plain
 
     assert _plain("\\\\?\\C:\\data") == "C:\\data"
     assert _plain("\\\\?\\UNC\\fileserver\\share") == "\\\\?\\UNC\\fileserver\\share"
@@ -270,7 +266,7 @@ def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
 
 def test_broad_folders_are_never_allowed(fs_world: dict[str, Path], tmp_path: Path) -> None:
     from nox.node.device import cli as node_cli
-    from nox.node.device.safe_fs import broad_folder
+    from nox.node.device.safe_fs.folders import broad_folder
 
     system = [os.environ["SystemRoot"], os.environ["ProgramFiles"]] if WINDOWS else ["/etc", "/usr"]
     for place in [Path.home().anchor, str(Path.home()), str(Path.home().parent), *system]:
@@ -316,9 +312,9 @@ def test_a_fifo_is_refused_without_blocking(fs_world: dict[str, Path]) -> None:
 def test_a_windows_listing_whose_folder_changed_is_refused(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import safe_fs
+    from nox.node.device.safe_fs import opening
 
-    monkeypatch.setattr(safe_fs, "_win_final", lambda _fd: str(fs_world["outside"]))
+    monkeypatch.setattr(opening, "_win_final", lambda _fd: str(fs_world["outside"]))
     with pytest.raises(OutsideFolders) as caught:
         with list_folder(folders(fs_world), "notes"):
             pass
@@ -379,17 +375,17 @@ def test_the_owner_only_acl_is_put_back_on_every_start(
 def test_the_protected_identities_are_reused_for_a_while(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import safe_fs
+    from nox.node.device.safe_fs import secret_places
 
     secret = tmp_path / "geheim"
     secret.mkdir()
     walked: list[Path] = []
-    real = safe_fs._identities
-    monkeypatch.setattr(safe_fs, "_identities", lambda f: walked.append(f) or real(f))
+    real = secret_places._identities
+    monkeypatch.setattr(secret_places, "_identities", lambda f: walked.append(f) or real(f))
     for _ in range(3):
         Folders.build([], [secret])
     assert walked == [secret]
-    monkeypatch.setattr(safe_fs, "PROTECTED_TTL_S", 0.0)
+    monkeypatch.setattr(secret_places, "PROTECTED_TTL_S", 0.0)
     Folders.build([], [secret])
     assert len(walked) == 2
 
