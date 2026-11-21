@@ -129,6 +129,7 @@ ADMINISTRATION = (
     "ai.setup.start",
     "voice.model.status",
     "voice.model.download",
+    "voice.latency",  # the user's own usage timings: this machine only
     "mode.set",
     "presets.activate",
     "presets.test_action",
@@ -805,6 +806,7 @@ LOCKED_SNAPSHOT = frozenset(
         "twitch.auth.disconnect",
         "twitch.auth.start",
         "views.clear",
+        "voice.latency",
         "voice.model.download",
         "voice.ptt",
         "watch.delete",
