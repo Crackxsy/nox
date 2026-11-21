@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from nox.ai.base import AiRole
-from nox.ai.config import AiConfig, RouterConfig, load_ai_config
+from nox.ai.config import AiConfig, ClaudeCodeConfig, OllamaConfig, RouterConfig, load_ai_config
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -37,3 +37,24 @@ def test_chain_for_roles() -> None:
     assert cfg.chain_for(AiRole.BACKGROUND) == ["ollama", "claude_code", "rules"]
     cfg2 = RouterConfig(roles={"classify": ["ollama", "rules"]})
     assert cfg2.chain_for(AiRole.CLASSIFY) == ["ollama", "rules"]
+
+
+def test_the_default_local_model_is_one_name_in_the_code_and_the_defaults_file() -> None:
+    """Three places spell the model Nox asks Ollama for; a drift between them once shipped a
+    default that the docs and the shipped file said was something else."""
+    from nox.ai.config import DEFAULT_OLLAMA_MODEL
+    from nox.core.config import OllamaProviderConfig
+
+    shipped = load_ai_config(REPO / "config" / "defaults.yaml").providers.ollama.model
+    assert shipped == DEFAULT_OLLAMA_MODEL
+    assert OllamaConfig().model == DEFAULT_OLLAMA_MODEL
+    assert OllamaProviderConfig().model == DEFAULT_OLLAMA_MODEL
+
+
+def test_the_health_probe_that_costs_quota_is_off_everywhere_by_default() -> None:
+    from nox.core.config import ClaudeCodeProviderConfig
+
+    shipped = load_ai_config(REPO / "config" / "defaults.yaml").providers.claude_code
+    assert shipped.health_roundtrip is False
+    assert ClaudeCodeConfig().health_roundtrip is False
+    assert ClaudeCodeProviderConfig().health_roundtrip is False

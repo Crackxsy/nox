@@ -165,7 +165,10 @@ ai:
       command: "claude"
       timeout_s: 120
       model: "sonnet"              # same first-token latency as the CLI default, lower cost
-      health_roundtrip: true       # 1-token probe at startup/health check (set false to save quota)
+      health_roundtrip: false      # true = every health check also sends a real 1-token request
+                                   # (costs quota and a process start each time). Off: health comes
+                                   # from the answers Nox really gets plus local checks
+                                   # (`claude --version`, `claude auth status`, no model call)
       persistent: true             # one warm Claude Code process for the conversation, with Nox's
                                    # tools over MCP (measured: first token ~1 s instead of 4-7 s)
       prewarm: true                # start that process at boot, not at the first turn

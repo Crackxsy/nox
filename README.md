@@ -248,10 +248,17 @@ Install the [Claude Code CLI](https://claude.com/claude-code) and run `claude lo
 shells out to the CLI and uses its login — it never stores an API key of its own. If you are not
 logged in, `nox doctor` says so and the router falls back to Ollama.
 
+When your plan's usage limit (the five-hour or weekly window) is used up, Nox says so once, in plain
+words and with the time it resets, keeps Claude out of the chain until then and answers with the
+local model (or, without one, with the fixed offline answers). Health is read from the answers Nox
+really gets plus two local checks (`claude --version`, `claude auth status`), so asking "is Claude
+there?" costs no quota. `ai.providers.claude_code.health_roundtrip: true` restores the old probe
+that sends a real 1-token request with every health check.
+
 ### Ollama (local models)
 
 ```powershell
-ollama pull llama3.2:3b        # chat / reasoning
+ollama pull qwen3:4b-instruct   # chat / reasoning (the default model)
 ollama pull nomic-embed-text   # embeddings for memory search
 ```
 
