@@ -12,16 +12,13 @@ from typing import Any
 
 import pytest
 
-from nox.node.device.hands import NodeHands, PathArgs, WriteArgs
+from nox.node.device.hands.args import PathArgs, WriteArgs
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.home import NodeHome
-from nox.node.device.safe_fs import (
-    Folders,
-    OutsideFolders,
-    list_folder,
-    open_existing,
-    open_new,
-    secret_locations,
-)
+from nox.node.device.safe_fs.core import OutsideFolders
+from nox.node.device.safe_fs.folders import Folders
+from nox.node.device.safe_fs.opening import list_folder, open_existing, open_new
+from nox.node.device.safe_fs.secret_places import secret_locations
 from nox.node.device.tools import NodeRefusal
 from tests.unit.node.support_hands import (
     WINDOWS,
@@ -74,7 +71,7 @@ def test_windows_streams_devices_and_ambiguous_names_are_refused(
 def test_a_resolved_long_path_is_compared_without_its_prefix(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device.safe_fs import _plain
+    from nox.node.device.safe_fs.core import _plain
 
     assert _plain("\\\\?\\C:\\data") == "C:\\data"
     assert _plain("\\\\?\\UNC\\fileserver\\share") == "\\\\?\\UNC\\fileserver\\share"
@@ -247,7 +244,8 @@ async def test_read_and_list_answer_as_data(fs_world: dict[str, Path]) -> None:
 def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
     tmp_path: Path,
 ) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
     from nox.node.wire.manifest import load_manifest
 
     home = NodeHome(tmp_path / "h")
@@ -255,22 +253,23 @@ def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
     docs.mkdir()
     said: list[str] = []
     yes = {"interactive": lambda: True, "confirm": lambda _p: True}
-    with pytest.raises(node_cli.NodeCliError):  # not from a non-interactive caller (the core)
-        node_cli.allow(home, "files", True, say=said.append, folder=str(docs))
-    node_cli.allow(home, "files", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
+    with pytest.raises(cli_runtime.NodeCliError):  # not from a non-interactive caller (the core)
+        cli_allow.allow(home, "files", True, say=said.append, folder=str(docs))
+    cli_allow.allow(home, "files", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
     assert load_manifest(home.manifest_file).folders == [os.path.realpath(docs)]
     for bad in (str(home.path), str(home.path / "sub"), "relative", r"\\fileserver\share"):
-        with pytest.raises(node_cli.NodeCliError):
-            node_cli.allow(home, "files", True, say=said.append, folder=bad, **yes)  # type: ignore[arg-type]
-    with pytest.raises(node_cli.NodeCliError):
-        node_cli.allow(home, "shell", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
-    node_cli.allow(home, "files", False, say=said.append, folder=str(docs))
+        with pytest.raises(cli_runtime.NodeCliError):
+            cli_allow.allow(home, "files", True, say=said.append, folder=bad, **yes)  # type: ignore[arg-type]
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_allow.allow(home, "shell", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
+    cli_allow.allow(home, "files", False, say=said.append, folder=str(docs))
     assert load_manifest(home.manifest_file).folders == []
 
 
 def test_broad_folders_are_never_allowed(fs_world: dict[str, Path], tmp_path: Path) -> None:
-    from nox.node.device import cli as node_cli
-    from nox.node.device.safe_fs import broad_folder
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import runtime as cli_runtime
+    from nox.node.device.safe_fs.folders import broad_folder
 
     system = [os.environ["SystemRoot"], os.environ["ProgramFiles"]] if WINDOWS else ["/etc", "/usr"]
     for place in [Path.home().anchor, str(Path.home()), str(Path.home().parent), *system]:
@@ -278,8 +277,8 @@ def test_broad_folders_are_never_allowed(fs_world: dict[str, Path], tmp_path: Pa
         assert Folders.build([place], [fs_world["node"]]).roots == ()
     assert not broad_folder(str(fs_world["root"]))
     yes = {"interactive": lambda: True, "confirm": lambda _p: True}
-    with pytest.raises(node_cli.NodeCliError):
-        node_cli.allow(  # type: ignore[arg-type]
+    with pytest.raises(cli_runtime.NodeCliError):
+        cli_allow.allow(  # type: ignore[arg-type]
             NodeHome(tmp_path / "h"),
             "files",
             True,
@@ -316,9 +315,9 @@ def test_a_fifo_is_refused_without_blocking(fs_world: dict[str, Path]) -> None:
 def test_a_windows_listing_whose_folder_changed_is_refused(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import safe_fs
+    from nox.node.device.safe_fs import opening
 
-    monkeypatch.setattr(safe_fs, "_win_final", lambda _fd: str(fs_world["outside"]))
+    monkeypatch.setattr(opening, "_win_final", lambda _fd: str(fs_world["outside"]))
     with pytest.raises(OutsideFolders) as caught:
         with list_folder(folders(fs_world), "notes"):
             pass
@@ -328,9 +327,9 @@ def test_a_windows_listing_whose_folder_changed_is_refused(
 async def test_a_huge_listing_stops_counting(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import hands as hands_module
+    from nox.node.device.hands import files as files_module
 
-    monkeypatch.setattr(hands_module, "MAX_SCAN", 3)
+    monkeypatch.setattr(files_module, "MAX_SCAN", 3)
     for i in range(6):
         (fs_world["root"] / "notes" / f"f{i}.txt").write_text("x", encoding="utf-8")
     listing = await hand_tools_for(fs_world)["file.list"].handler(PathArgs(path="notes"))
@@ -338,7 +337,7 @@ async def test_a_huge_listing_stops_counting(
 
 
 def test_utf8_cut_by_the_limit_stays_utf8() -> None:
-    from nox.node.device.hands import _decode
+    from nox.node.device.hands.files import _decode
 
     cut = ("aaa" + "é").encode("utf-8")[:-1]
     assert _decode(cut, True) == ("aaa", "utf-8")
@@ -365,31 +364,31 @@ async def test_a_node_folder_under_a_system_bind_fails_closed(
 def test_the_owner_only_acl_is_put_back_on_every_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import runtime as cli_runtime
 
     calls: list[Path] = []
-    monkeypatch.setattr(node_cli, "restrict_dir_to_owner", lambda p: calls.append(p) or True)
+    monkeypatch.setattr(cli_runtime, "restrict_dir_to_owner", lambda p: calls.append(p) or True)
     home = NodeHome(tmp_path / "h")
     home.ensure()
     for _ in range(2):
-        node_cli.build(home, sandbox=lambda: None).audit._conn.close()  # type: ignore[attr-defined]
+        cli_runtime.build(home, sandbox=lambda: None).audit._conn.close()  # type: ignore[attr-defined]
     assert calls == [home.path, home.path]
 
 
 def test_the_protected_identities_are_reused_for_a_while(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import safe_fs
+    from nox.node.device.safe_fs import secret_places
 
     secret = tmp_path / "geheim"
     secret.mkdir()
     walked: list[Path] = []
-    real = safe_fs._identities
-    monkeypatch.setattr(safe_fs, "_identities", lambda f: walked.append(f) or real(f))
+    real = secret_places._identities
+    monkeypatch.setattr(secret_places, "_identities", lambda f: walked.append(f) or real(f))
     for _ in range(3):
         Folders.build([], [secret])
     assert walked == [secret]
-    monkeypatch.setattr(safe_fs, "PROTECTED_TTL_S", 0.0)
+    monkeypatch.setattr(secret_places, "PROTECTED_TTL_S", 0.0)
     Folders.build([], [secret])
     assert len(walked) == 2
 

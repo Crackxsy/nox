@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from nox.core.logging import get_logger
 from nox.node.device.obs import ObsSettings
 from nox.node.device.overlay import OverlaySettings
-from nox.node.device.voice import VoiceSettings
+from nox.node.device.voice.settings import VoiceSettings
 
 log = get_logger(__name__)
 

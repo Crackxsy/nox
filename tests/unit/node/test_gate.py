@@ -13,7 +13,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from nox.lan.tls import TlsMaterial
-from nox.node.device import agent as agent_module
+from nox.node.device.agent import node_agent as agent_module
 from nox.node.device.gate import NodeGate
 from nox.node.device.tools import NodeTool
 from nox.node.hub.listener import NodeListener

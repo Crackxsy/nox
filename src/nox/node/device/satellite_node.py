@@ -20,7 +20,7 @@ from nox.node.device.obs import OBS_PANIC_FILE, OBS_SECRET, NodeObs, obs_tools
 from nox.node.device.overlay import OverlayRelay
 from nox.node.device.satellite_settings import SATELLITES_FILE, SettingsFile
 from nox.node.device.tools import NodeTool
-from nox.node.device.voice import VoiceSatellite, voice_tools
+from nox.node.device.voice.satellite import VoiceSatellite, voice_tools
 from nox.node.wire import protocol as p
 from nox.security.model import AuditLog, SecretStore
 

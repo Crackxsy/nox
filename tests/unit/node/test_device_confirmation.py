@@ -13,8 +13,8 @@ import pytest
 from pydantic import BaseModel
 
 from nox.lan.tls import TlsMaterial
-from nox.node.device import agent as agent_module
-from nox.node.device.agent import confirmation_text
+from nox.node.device.agent import calls as agent_calls
+from nox.node.device.agent.dialog_text import confirmation_text
 from nox.node.device.home import NodeHome
 from nox.node.device.tools import NodeTool
 from nox.node.hub.listener import NodeListener
@@ -194,7 +194,7 @@ async def test_a_yes_faster_than_reading_is_a_no(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(agent_module, "MIN_DECISION_S", 1.5)
+    monkeypatch.setattr(agent_calls, "MIN_DECISION_S", 1.5)
     node = await start_node(listener, pairing, tls, tmp_path, confirmer=Confirmer("allow"))
     try:
         session = await session_of(listener, node.node_id)
@@ -207,12 +207,14 @@ async def test_a_yes_faster_than_reading_is_a_no(
 
 def test_trust_core_for_high_is_set_with_nox_node_allow(tmp_path: Path) -> None:
     """Reachable through the confirmed path, not only by editing the file."""
-    from nox.node.device import cli as node_cli
+    from nox.node.device.cli import allow as cli_allow
+    from nox.node.device.cli import pairing as cli_pairing
+    from nox.node.device.cli import runtime as cli_runtime
 
     home = NodeHome(tmp_path / "h")
     home.ensure()
-    node_cli.confirm_defaults(home, None)
-    node_cli.allow(
+    cli_pairing.confirm_defaults(home, None)
+    cli_allow.allow(
         home,
         "trust_core_for_high",
         True,
@@ -220,9 +222,9 @@ def test_trust_core_for_high_is_set_with_nox_node_allow(tmp_path: Path) -> None:
         interactive=lambda: True,
         confirm=lambda _p: True,
     )
-    assert node_cli.build(home).gate.manifest.trust_core_for_high is True
-    node_cli.allow(home, "trust_core_for_high", False, say=lambda _t: None)
-    assert node_cli.build(home).gate.manifest.trust_core_for_high is False
+    assert cli_runtime.build(home).gate.manifest.trust_core_for_high is True
+    cli_allow.allow(home, "trust_core_for_high", False, say=lambda _t: None)
+    assert cli_runtime.build(home).gate.manifest.trust_core_for_high is False
 
 
 def test_the_dialog_says_when_foreign_content_was_involved() -> None:
@@ -302,7 +304,7 @@ async def test_every_running_side_effect_stops_before_a_question(
 def test_the_dialog_opens_with_one_plain_sentence(
     tool: str, args: dict[str, Any], de: str, en: str
 ) -> None:
-    from nox.node.device.agent import confirmation_text
+    from nox.node.device.agent.dialog_text import confirmation_text
 
     german = confirmation_text(tool, args, lang="de")
     english = confirmation_text(tool, args, lang="en")
@@ -312,7 +314,7 @@ def test_the_dialog_opens_with_one_plain_sentence(
 
 
 def test_the_session_dialog_says_what_a_session_means() -> None:
-    from nox.node.device.agent import confirmation_text
+    from nox.node.device.agent.dialog_text import confirmation_text
 
     text = confirmation_text("computer.session_start", {"purpose": "Fenster ordnen"}, lang="de")
     assert text is not None and text.startswith(

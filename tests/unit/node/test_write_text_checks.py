@@ -10,7 +10,9 @@ from typing import Any
 import pytest
 
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, WriteArgs, hand_tools
+from nox.node.device.hands.args import WriteArgs
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.node.wire.protocol import NoxCallMeta
 from nox.security.model import Risk
@@ -114,7 +116,7 @@ ADVERSARIAL = {
 def test_the_markdown_scan_is_linear(name: str) -> None:
     import time
 
-    from nox.node.device.safe_fs import markdown_runs_code
+    from nox.node.device.safe_fs.text_checks import markdown_runs_code
 
     started = time.perf_counter()
     markdown_runs_code(ADVERSARIAL[name])
@@ -123,7 +125,7 @@ def test_the_markdown_scan_is_linear(name: str) -> None:
 
 @pytest.mark.parametrize("path", ["notes/lang.md", "notes/lang.txt", "notes/lang.csv"])
 async def test_text_over_the_cap_is_refused(empty_fs_world: dict[str, Path], path: str) -> None:
-    from nox.node.device.safe_fs import MAX_TEXT_BYTES
+    from nox.node.device.safe_fs.text_checks import MAX_TEXT_BYTES
 
     assert await write_refusal(empty_fs_world, path, "a" * (MAX_TEXT_BYTES + 1)) == "too_large"
     assert (await write_file(empty_fs_world, path, "a" * 1000))["ok"] is True
@@ -209,13 +211,15 @@ async def test_a_slow_text_check_never_holds_up_the_stop(
     import asyncio
     import time
 
-    from nox.node.device import hands as hands_module
+    from nox.node.device.hands import catalogue as catalogue_module
+    from nox.node.device.hands import files as files_module
 
     def slow(path: str, text: str, *, append: bool) -> str | None:
         time.sleep(1.0)  # a worker thread: the event loop goes on
         return None
 
-    monkeypatch.setattr(hands_module, "write_text_refusal", slow)
+    monkeypatch.setattr(catalogue_module, "write_text_refusal", slow)
+    monkeypatch.setattr(files_module, "write_text_refusal", slow)
     agent, task, stop, _audit = await start_hands_node(
         listener, pairing, tls, tmp_path, empty_fs_world, FakeSandbox(), Confirmer("allow")
     )
@@ -252,14 +256,16 @@ async def test_a_check_that_runs_out_of_time_spends_nothing_and_allows_nothing(
     import asyncio
     import time
 
-    from nox.node.device import hands as hands_module
+    from nox.node.device.hands import catalogue as catalogue_module
+    from nox.node.device.hands import files as files_module
     from nox.node.wire import offload as offload_module
 
     def slow(path: str, text: str, *, append: bool) -> str | None:
         time.sleep(0.4)
         return None
 
-    monkeypatch.setattr(hands_module, "write_text_refusal", slow)
+    monkeypatch.setattr(catalogue_module, "write_text_refusal", slow)
+    monkeypatch.setattr(files_module, "write_text_refusal", slow)
     monkeypatch.setattr(offload_module, "CHECK_TIMEOUT_S", 0.1)
     agent, task, stop, audit = await start_hands_node(
         listener, pairing, tls, tmp_path, empty_fs_world, FakeSandbox(), Confirmer("allow")
@@ -290,7 +296,7 @@ async def test_a_check_that_runs_out_of_time_spends_nothing_and_allows_nothing(
 async def test_structured_text_is_capped_lower_than_plain_text(
     empty_fs_world: dict[str, Path],
 ) -> None:
-    from nox.node.device.safe_fs import MAX_STRUCTURED_BYTES
+    from nox.node.device.safe_fs.formats import MAX_STRUCTURED_BYTES
 
     big = '{"a": "' + "x" * MAX_STRUCTURED_BYTES + '"}'
     assert await write_refusal(empty_fs_world, "notes/gross.json", big) == "too_large"

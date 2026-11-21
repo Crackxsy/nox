@@ -75,7 +75,7 @@ class TrayView:
 
 
 def _voice(home: NodeHome) -> dict[str, object]:
-    from nox.node.device.voice import STATE_FILE  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
+    from nox.node.device.voice.settings import STATE_FILE  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
 
     try:
         data = json.loads((home.path / STATE_FILE).read_text(encoding="utf-8"))
@@ -123,7 +123,7 @@ def has_voice(home: NodeHome) -> bool:
 def toggle_mute(home: NodeHome) -> bool:
     """The mute switch of the voice satellite, here (only this device unmutes). True: muted."""
     from nox.node.device.satellite_cli import voice_mute  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
-    from nox.node.device.voice import MUTE_FILE  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
+    from nox.node.device.voice.settings import MUTE_FILE  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
 
     muted = not (home.path / MUTE_FILE).exists()
     voice_mute(home, muted)
@@ -134,7 +134,7 @@ def ptt(home: NodeHome, pressed: bool) -> None:
     """Push-to-talk held or released (a file write: safe from the key hook's own thread)."""
     import time  # noqa: PLC0415
 
-    from nox.node.device.voice import PTT_FILE  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
+    from nox.node.device.voice.settings import PTT_FILE  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
 
     marker = home.path / PTT_FILE
     if pressed:
@@ -187,7 +187,7 @@ def spawn_tray() -> subprocess.Popen[bytes] | None:
         "import os, sys; sys.path.insert(0, os.environ['NOX_NODE_APP']); "
         "from nox.node.device.tray import main; main()"
     )
-    from nox.node.device.update import python_env  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
+    from nox.node.device.update.updater import python_env  # noqa: PLC0415 - the tray stays a small process: this loads only when the entry is shown
 
     # -I: isolated - no current folder on sys.path, no PYTHON* variables, no user site; and the
     # working folder is the app folder itself, never wherever the node was started from.

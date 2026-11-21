@@ -45,7 +45,8 @@ from typing import Any
 from pydantic import BaseModel
 
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, hand_tools
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.tools import NodeRefusal, NodeTool, default_tools
 from nox.node.hub.registry import NodeEntry, NodeRegistry
 from nox.node.wire.arguments import NoArgs
@@ -382,7 +383,9 @@ class SimulatedNode:
         """The screen, desktop and media tools with fakes behind them (none on an old checkout)."""
         try:
             from nox.desktop.computer_use import DryRunSender  # noqa: PLC0415
-            from nox.node.device.world import GameLock, World, default_games, world_tools  # noqa: PLC0415
+            from nox.node.device.world.catalogue import world_tools  # noqa: PLC0415
+            from nox.node.device.world.game_lock import GameLock, default_games  # noqa: PLC0415
+            from nox.node.device.world.node_world import World  # noqa: PLC0415
         except ImportError:
             return {}
         profile = self.profile

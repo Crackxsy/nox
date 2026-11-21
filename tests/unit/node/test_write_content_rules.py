@@ -11,7 +11,9 @@ from typing import Any
 import pytest
 
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, WriteArgs, hand_tools
+from nox.node.device.hands.args import WriteArgs
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.tools import NodeRefusal
 from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.node.wire.protocol import NoxCallMeta
@@ -152,7 +154,7 @@ async def test_a_link_cannot_turn_a_data_name_into_a_hidden_folder(
 
 
 def test_structured_formats_are_always_high_and_passive_ones_medium_when_new() -> None:
-    from nox.node.device.hands import write_risk
+    from nox.node.device.hands.args import write_risk
     from nox.node.hub.install.routes import write_risk_of
 
     for name in ("a.json", "a.YAML", "a.yml"):
@@ -299,13 +301,13 @@ def test_spaces_around_a_path_or_a_name_are_refused_not_cut(
 async def test_a_refused_name_is_never_created_even_for_a_moment(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import safe_fs
+    from nox.node.device.safe_fs import opening
 
     def never(*_a: Any, **_k: Any) -> int:
         raise AssertionError("the file system was touched for a refused name")
 
-    monkeypatch.setattr(safe_fs, "_posix_open", never)
-    monkeypatch.setattr(safe_fs, "_win_open", never)
+    monkeypatch.setattr(opening, "_posix_open", never)
+    monkeypatch.setattr(opening, "_win_open", never)
     for target in ("notes/run.ps1", "notes/.hidden.txt", "notes/settings.json", "notes/tool"):
         with pytest.raises(NodeRefusal):
             await hand_tools_for(fs_world)["file.write"].handler(WriteArgs(path=target, text="x"))
