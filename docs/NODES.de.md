@@ -50,6 +50,13 @@ Gruppe und der eigene Dialog des Geräts für Hohes Risiko gelten also auch gege
 | Linux ohne Bildschirm (ein Pi) | dasselbe mit `sudo bash -s -- --node --headless` | Eine gehärtete System-Unit für den eigenen Systembenutzer `nox-node`; Daten in `/var/lib/nox-node`. Befehl: `sudo nox-node ...`. |
 | macOS (**Beta**) | `bash scripts/install-macos.sh --node` in einer Kopie dieses Repositorys | Ein LaunchAgent bei der Anmeldung, als du. **Dieses Skript prüft Release-Signaturen noch nicht:** sobald Signaturen eingerichtet sind, installiert es nichts aus dem Netz (keinen Tag, Branch oder Commit), nur eine Kopie, die du selbst geprüft hast (`NOX_SOURCE=<Ordner>`). |
 
+> **Noch kein Download:** Kein veröffentlichtes Release enthält `Nox-Setup-<Version>.exe` oder
+> `install-linux.sh` (das neueste, 0.5.0, hat keine Dateien); die Befehle oben funktionieren also
+> erst, wenn ein Release damit erstellt wird. Bis dahin: unter Windows den Installer aus dem
+> Repository bauen (`installer/README.md`); unter Linux das Skript aus einer Kopie ausführen, der du
+> vertraust, `NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node` (für `--headless` mit
+> `sudo env` davor), so wie die CI es tut.
+
 **Was ein Node anbietet, wird mitinstalliert** (Python-Extras): Bildschirm und Kamera
 (`senses`, auf dem Desktop), die Browser-Bibliothek (`browser`), der Sprach-Satellit (`voice`)
 und auf dem Desktop das Tray (`shell`). Ein Werkzeug, dem seine Bibliothek fehlt, bietet der Node

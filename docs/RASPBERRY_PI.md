@@ -26,8 +26,13 @@ On the Pi, in a terminal (or over SSH):
 curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh | sudo bash
 ```
 
+> **Not available yet:** no published release carries `install-linux.sh` (the latest, 0.5.0, has no
+> assets), so this command works only once a release is cut with it. Until then, from a checkout of
+> this repository that you trust: `sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh` (how CI
+> installs it; the header of the script explains the options).
+
 Prefer to read it first? `curl -fsSLO <same address>`, `less install-linux.sh`, then
-`sudo bash install-linux.sh`. Each release also carries `install-linux.sh.sha256`, which only
+`sudo bash install-linux.sh`. Each release made with the release workflow carries `install-linux.sh.sha256`, which only
 catches a damaged download, and - once the project's release key is set up - a signed
 `release-manifest.json` that lists every file of the release. With it the installer and
 `nox update` refuse a release that was altered or not signed by the release key, and an older
