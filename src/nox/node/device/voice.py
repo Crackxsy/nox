@@ -161,7 +161,7 @@ def voice_support(has_module: Callable[[str], bool] | None = None) -> str | None
 def installed_module() -> Callable[[str], bool]:
     # Loaded here: `world` pulls in the agent and with it the TLS and token stack, which the
     # speech setup commands and the tray's state reads never need (start time on a small device).
-    from nox.node.device.world import installed  # noqa: PLC0415
+    from nox.node.device.world.node_world import installed  # noqa: PLC0415
 
     return installed
 

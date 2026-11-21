@@ -14,7 +14,8 @@ from nox.node.device import cli as node_cli
 from nox.node.device.confirmed import effective_manifest
 from nox.node.device.gate import NodeGate
 from nox.node.device.home import NodeHome
-from nox.node.device.world import GameLock, world_tools
+from nox.node.device.world.catalogue import world_tools
+from nox.node.device.world.game_lock import GameLock
 from nox.node.wire.manifest import NodeManifest
 from tests.unit.node.support_sessions import LAPTOP, device_world, world_gate, world_meta
 

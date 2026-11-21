@@ -11,7 +11,7 @@ import pytest
 from nox.node.device import cli as node_cli
 from nox.node.device.home import NodeHome
 from nox.node.device.tools import NodeRefusal
-from nox.node.device.world import PlatformMedia
+from nox.node.device.world.media import PlatformMedia
 from nox.node.wire.arguments import MediaArgs
 from tests.unit.node.support_sessions import device_world, world_gate, world_meta
 

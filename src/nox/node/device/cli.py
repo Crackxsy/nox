@@ -55,15 +55,10 @@ from nox.node.device.satellite_node import NodeSatellites, build_satellites
 from nox.node.device.tools import PlatformNotifier, default_tools
 from nox.node.device.update.state import UpdateCheck
 from nox.node.device.update.updater import NodeUpdater
-from nox.node.device.world import (
-    SESSION_MARKER,
-    GameLock,
-    World,
-    clear_session_marker,
-    default_games,
-    session_marker_state,
-    world_tools,
-)
+from nox.node.device.world.catalogue import world_tools
+from nox.node.device.world.game_lock import GameLock, default_games
+from nox.node.device.world.node_world import World
+from nox.node.device.world.notices import SESSION_MARKER, clear_session_marker, session_marker_state
 from nox.node.wire.manifest import GAME_NAME, GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.wire.paths import is_remote_or_device_path
 from nox.node.wire.protocol import PairLink, PairLinkError, escape_controls

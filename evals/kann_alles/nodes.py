@@ -383,7 +383,9 @@ class SimulatedNode:
         """The screen, desktop and media tools with fakes behind them (none on an old checkout)."""
         try:
             from nox.desktop.computer_use import DryRunSender  # noqa: PLC0415
-            from nox.node.device.world import GameLock, World, default_games, world_tools  # noqa: PLC0415
+            from nox.node.device.world.catalogue import world_tools  # noqa: PLC0415
+            from nox.node.device.world.game_lock import GameLock, default_games  # noqa: PLC0415
+            from nox.node.device.world.node_world import World  # noqa: PLC0415
         except ImportError:
             return {}
         profile = self.profile

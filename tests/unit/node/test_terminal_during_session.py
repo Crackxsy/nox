@@ -16,7 +16,7 @@ from tests.unit.node.support_sessions import plain_node_home
 
 
 def _session(home: Any, *, until: float | None = None, raw: str | None = None) -> None:
-    from nox.node.device.world import SESSION_MARKER
+    from nox.node.device.world.notices import SESSION_MARKER
 
     marker = home.path / SESSION_MARKER
     if raw is not None:
@@ -90,7 +90,7 @@ def test_update_refuses_to_install_during_a_session(
 
 def test_a_marker_whose_time_is_over_refuses_nothing(tmp_path: Path) -> None:
     from nox.node.device import cli
-    from nox.node.device.world import clear_session_marker, session_marker_state
+    from nox.node.device.world.notices import clear_session_marker, session_marker_state
 
     home = plain_node_home(tmp_path)
     _session(home, until=time.time() - 1)
@@ -102,7 +102,8 @@ def test_a_marker_whose_time_is_over_refuses_nothing(tmp_path: Path) -> None:
 
 
 def test_the_world_keeps_the_marker_while_a_session_runs(tmp_path: Path) -> None:
-    from nox.node.device.world import SESSION_MARKER, World, session_marker_state
+    from nox.node.device.world.node_world import World
+    from nox.node.device.world.notices import SESSION_MARKER, session_marker_state
 
     async def notice(_text: str) -> None:
         return None
