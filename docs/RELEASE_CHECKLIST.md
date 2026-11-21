@@ -1,97 +1,244 @@
 # v1.0 public release checklist
 
-Checkable form of the v1.0 public-release acceptance criteria. Check an item only once its
-"Evidence" actually exists and has been looked at — not because the related code merged. The
-license decision itself was a maintainer call and is now closed; everything else here is process
-this repository's tooling can verify.
+Checkable form of the v1.0 public-release acceptance criteria. An item is checked only once its
+"Evidence" exists and has been looked at - not because the related code merged. Each item says
+where its evidence is: a file in this repository, a CI job, or a setting of the GitHub repository.
+Items that only the maintainer can do are marked **Owner action**.
 
-- [x] **1. License decided and applied** — **Closed 2026-09-16: Apache-2.0 for the code; the
-      voice extra carries a GPL notice; a Kokoro/ONNX replacement for Piper is tracked for a later
-      release.** `LICENSE` (full Apache-2.0 text) and `NOTICE` present at repo root,
-      `pyproject.toml` and both `ui/*/package.json` declare `Apache-2.0`, `README.md`'s license
-      section matches.
-      _Evidence: `LICENSE`, `NOTICE`, README license section._
-- [x] **2. `LICENSE-PENDING.md` removed or superseded** — deleted 2026-09-16; no remaining
-      "pending" license reference anywhere in the repo.
-      _Evidence: diff/commit, `grep -ri "license.pending" .` empty._
-- [ ] **3. Third-party license audit complete** — `docs/THIRD_PARTY_LICENSES.md` present, generated
-      by `scripts/license_audit.py` against the actual venv and both `ui/*/package-lock.json`
-      files, not hand-written. _Evidence: the file itself, `python scripts/license_audit.py`
-      output._
-- [ ] **4. No dependency/model license blocks the chosen project license or redistribution** —
-      `python scripts/license_audit.py --check` exits 0 against `docs/license_policy.yaml`.
-      **Resolved 2026-09-16** by a documented exception in `docs/license_policy.yaml`: `piper-tts`
-      (the `voice` extra) declares `GPL-3.0-or-later`; Apache-2.0 is one-way compatible with
-      GPL-3.0, so a build bundling the voice extra ships under GPL-3.0 terms as a combined work
-      (stated in `NOTICE`), while the source distribution stays Apache-2.0. A permissively licensed
-      TTS engine (Kokoro/ONNX) is tracked for a later release.
-      _Evidence: `docs/THIRD_PARTY_LICENSES.md` "DENIED" section is empty; policy sign-off note._
-- [ ] **5. Onboarding wizard covers every required setup item, skippable/re-runnable** — name,
-      language, data/vault paths, optional Twitch, mic/camera consent, AI backend, each declinable
-      with a safe default and re-runnable via `nox onboard`. _Evidence: manual walkthrough,
-      `tests/unit/onboarding` green._
-- [ ] **6. Onboarding wizard writes only to the User config layer** —
-      `tests/unit/onboarding/test_wizard.py::test_defaults_yaml_is_never_touched_by_any_helper`
-      (and the CLI-level equivalents) green. _Evidence: that test run._
-- [ ] **7. Clean install + onboarding on a machine that is not the dev machine** — not yet
-      performed as of this writing; needs a non-dev Windows 11 machine or VM.
-      _Evidence: test log, screenshots._
-- [ ] **8. Update, smoke test, rollback proven under injected failure** — not yet performed.
-      _Evidence: integration test log._
-- [ ] **9. Uninstall separates program/data; vault never deleted silently** — not yet performed.
-      _Evidence: manual test log._
-- [ ] **10. Documentation set published** — `docs/USER_GUIDE.md`, `docs/PRIVACY.md`,
-      `docs/SECURITY.md`, `docs/PLUGIN_AUTHORING.md` all present and linked from `README.md`
-      (links added 2026-09-16, verified by `scripts/check_links.py`).
-      _Evidence: doc links, `python scripts/check_links.py`._
-- [ ] **11. External security review scope delivered; findings triaged** — needs a reviewer
-      identified first (open point, see `docs/EXTERNAL_SECURITY_REVIEW.md`). _Evidence: review
-      report + triage log._
-- [ ] **12. Security negative-test suite green** (`docs/SECURITY.md` "Security test obligations") — run as part of release CI, not just ad
-      hoc. _Evidence: CI run link._
-- [ ] **13. Secrets scan clean on tree and full history** —
-      `python scripts/secrets_scan.py --check` exits 0. **Verified 2026-09-14: 0 open findings**
-      (13 findings, all reviewed test fixtures/constants, documented in
-      `docs/scan_policy_secrets.yaml`). _Evidence: scan output, CI `release-hygiene` job._
-- [ ] **14. Dependency vulnerability scan: no unaddressed critical/high** — not yet wired in (only
-      the license audit and secrets scan are CI gates as of this pass); add `pip-audit`/`npm audit`
-      as a follow-up. _Evidence: scan report._
-- [ ] **15. CI green on the public repo configuration, no secret leakage via logs** — the
-      `release-hygiene` job (license audit + secrets scan) is wired into
-      `.github/workflows/ci.yml`; confirm it is green (see item 4's known red state) and that no
-      step echoes a secret value. _Evidence: CI run, log review._
-- [ ] **16. `CHANGELOG.md` present, versioning process documented** — done this pass
-      (`CHANGELOG.md` at repo root, Keep-a-Changelog style, v0.1.0/v0.2.0 backfilled from git log).
-      Its compare links now use the tag-based form (`.../compare/vX...vY`,
-      `.../releases/tag/vX`) the publication runbook (item 20) is expected to create tags for,
-      not commit hashes from this pre-publication history, which would 404 on the public
-      repository (#29) — confirm `v0.1.0`/`v0.2.0` are actually tagged as part of item 20 before
-      the repo goes public, so those links resolve. _Evidence: the file itself; the tags existing
-      on the published repository once item 20 runs._
-- [x] **17. Support policy published** — see `README.md` "Support" section and the note below.
-      _Evidence: doc link._
-- [ ] **18. No known critical security vulnerability remains** — ties to items 11/12; cannot be
-      checked until the external review (or an explicitly accepted deferral of it) lands.
-- [ ] **19. No secrets, personal data, or vault contents in the published repo or its history** —
-      ties to item 13; **verified 2026-09-14 for the current history** (0 open findings) and the
-      working tree was scrubbed of personal data on 2026-09-16. The published *history* is handled
-      by the squashed-snapshot route in `PUBLISHING.md`; re-run both checks immediately before the
-      repo actually goes public, since new commits land between now and then.
-- [ ] **20. Publication runbook executed** — `docs/PUBLISHING.md` end to end: archive rename, new
-      public repository, squashed snapshot with a noreply author, repository security settings,
-      branch protection via `scripts/github_branch_protection.ps1`, CI green, archive deleted.
-      _Evidence: the new repository, a green CI run, `gh repo list` without the archive._
+**Last reviewed:** 2026-11-21, against `develop` after the node refactor (#223). CI on that commit
+was green: every job of `ci.yml`, the `Docs` workflow, `Installer (Windows)` and `Nox-OS image`. The
+latest published release is 0.5.0; it carries no assets (no installer, no signed manifest).
+
+Status words: **done** (checked), **partly** (some of the evidence exists, the rest is named),
+**open** (nothing to show yet).
+
+## At a glance
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | License decided and applied | done |
+| 2 | `LICENSE-PENDING.md` removed | done |
+| 3 | Third-party license audit | done |
+| 4 | No dependency license blocks redistribution | done |
+| 5 | Onboarding wizard covers every required item | partly |
+| 6 | Wizard writes only to the user config layer | done |
+| 7 | Clean install on a machine that is not the dev machine | partly |
+| 8 | Update, smoke test, rollback proven under failure | partly |
+| 9 | Uninstall separates program and data | partly |
+| 10 | Documentation set published | done |
+| 11 | External security review delivered, findings triaged | open (owner) |
+| 12 | Security negative-test suite green in CI | partly |
+| 13 | Secrets scan clean on tree and history | done |
+| 14 | Dependency vulnerability scan | open |
+| 15 | CI green, no secret leakage via logs | partly |
+| 16 | `CHANGELOG.md` and versioning | partly |
+| 17 | Support policy published | done |
+| 18 | No known critical security vulnerability | open |
+| 19 | No secrets or personal data in the repository or its history | done |
+| 20 | Publication runbook executed | partly (owner) |
+| 21 | Release signing key and the `release-signing` environment | open (owner) |
+| 22 | Windows Authenticode signing of the installer | open (owner) |
+| 23 | Windows installer built and attached by the release workflow | open |
+| 24 | Software bill of materials (SBOM) for a release | open |
+| 25 | A release that carries the Linux installer | open (owner) |
+| 26 | Decision on encrypting stored data at rest | open (owner) |
+
+## The items
+
+- [x] **1. License decided and applied** - Apache-2.0 for the code; the voice extra carries a GPL
+      notice (see item 4). `LICENSE` (full text), `NOTICE` and `COPYING` are at the repository
+      root, `pyproject.toml` and both `ui/*/package.json` declare `Apache-2.0`, and the README's
+      license section matches.
+      _Evidence: `LICENSE`, `NOTICE`, README "License"._
+- [x] **2. `LICENSE-PENDING.md` removed or superseded** - the file is gone; no "pending" license
+      reference is left.
+      _Evidence: the file does not exist; `grep -ri "license.pending" .` is empty._
+- [x] **3. Third-party license audit complete** - `docs/THIRD_PARTY_LICENSES.md` is generated by
+      `scripts/license_audit.py` from the installed Python packages and both `ui/*/package-lock.json`
+      files, not written by hand. The CI job regenerates it and uploads the report. (CI does not
+      fail when the committed copy is out of date - regenerate it with the script before a
+      release.)
+      _Evidence: the file; CI job "Release hygiene (third-party license audit, secrets scan)",
+      artifact `third-party-licenses`._
+- [x] **4. No dependency or model license blocks the chosen license or redistribution** -
+      `python scripts/license_audit.py --check` exits 0 against `docs/license_policy.yaml`, and the
+      CI job is green. The one documented exception is `piper-tts` (the `voice` extra,
+      GPL-3.0-or-later): Apache-2.0 is one-way compatible with GPL-3.0, so a build that bundles the
+      voice extra - the Windows installer does - is distributed under GPL-3.0 terms as a combined
+      work, as `NOTICE` states, while the source stays Apache-2.0. Replacing Piper with a
+      permissively licensed engine is tracked in [#21](https://github.com/Crackxsy/nox/issues/21);
+      Supertonic 3 is already the default voice.
+      _Evidence: `docs/license_policy.yaml`, `NOTICE`, the same CI job (a required check on
+      `develop` and `main`)._
+- [ ] **5. Onboarding wizard covers every required setup item, skippable and re-runnable** -
+      **partly.** The wizard asks for name, language, data and vault folders, the optional
+      integrations, microphone and camera consent, the AI backend and the voice download; each step
+      has a safe default and `nox onboard` can be re-run. Tests exist and pass in CI. Missing: a
+      recorded manual walkthrough on a clean machine (see item 7).
+      _Evidence so far: `tests/unit/onboarding/test_wizard.py` in the CI job "Python (ruff, mypy,
+      unit + integration tests)". Still needed: the walkthrough log._
+- [x] **6. Onboarding wizard writes only to the user config layer** - done.
+      _Evidence: `tests/unit/onboarding/test_wizard.py::test_defaults_yaml_is_never_touched_by_any_helper`,
+      run by the same CI job._
+- [ ] **7. Clean install and onboarding on a machine that is not the dev machine** - **partly.**
+      CI builds the Windows installer and, on a clean hosted runner, installs it silently, runs
+      `nox doctor` from the installed copy, installs over itself and uninstalls, then checks that the
+      program files, firewall filters and helper folder are gone. The Linux installer is installed,
+      updated and rolled back on clean Ubuntu runners (x86-64 and ARM64), and its node variants are
+      checked. What nobody has done is a hand run on a fresh Windows 11 machine or VM, with the
+      wizard, and on a real Raspberry Pi. **Owner action:** a non-development Windows 11 machine or
+      VM; tracked in [#30](https://github.com/Crackxsy/nox/issues/30).
+      _Evidence so far: workflow `Installer (Windows)` (`installer/ci_smoke.py`), CI jobs
+      "Installer on Linux" and "Node installer on Linux". Still needed: test log and screenshots of
+      the hand run._
+- [ ] **8. Update, smoke test and rollback proven under injected failure** - **partly.** On Linux
+      the CI job "Installer on Linux" updates to a new version, checks that the same version again
+      changes nothing, rolls back (`nox rollback`), restores a snapshot, and lets a deliberately
+      broken version roll itself back. Nodes roll back a version that does not start (unit tests).
+      Not proven: the Windows desktop has no updater at all - an update is a newer installer run
+      over the old one, which CI exercises only as "install over itself" and without an injected
+      failure.
+      _Evidence so far: the CI job "Installer on Linux (ubuntu-24.04 / ubuntu-24.04-arm)" and
+      `installer/ci_smoke.py`. Still needed: the Windows case, or an explicit decision that v1.0
+      ships without a Windows updater._
+- [ ] **9. Uninstall separates program and data; the vault is never deleted silently** - **partly.**
+      By design the Windows uninstaller removes only `runtime\`, `app\`, `sandbox\` and a node's
+      self-installed versions (`installer/nox.iss`), and the Linux uninstall steps list data
+      deletion on separate lines. CI checks that the program files and the firewall rules are gone
+      after an uninstall; it does not check that data and vault survive, and nobody has verified it
+      by hand. Note that the default vault lies inside the data folder, so deleting the data folder
+      by hand deletes it ([`PRIVACY.md`](PRIVACY.md)).
+      _Evidence so far: `installer/nox.iss` `[UninstallDelete]`, `installer/ci_smoke.py`. Still
+      needed: a manual test log, or a CI step that plants a data folder and a vault before the
+      uninstall and finds them afterwards._
+- [x] **10. Documentation set published** - `docs/USER_GUIDE.md`, `docs/PRIVACY.md`,
+      `docs/SECURITY.md` and `docs/PLUGIN_AUTHORING.md` exist and are linked from `README.md`; the
+      link check runs on every pull request and is a required check on both branches.
+      _Evidence: README, workflow `Docs`, job "Docs (relative links)" (`scripts/check_links.py`)._
+- [ ] **11. External security review scope delivered; findings triaged** - **open.** The scope
+      document is ready; nobody has been chosen to do the review. **Owner action:** decide who
+      reviews (person, service or volunteer) and when.
+      _Evidence needed: the review report and a triage log (each finding fixed with a linked pull
+      request, or accepted in writing). Package for the reviewer:
+      [`EXTERNAL_SECURITY_REVIEW.md`](EXTERNAL_SECURITY_REVIEW.md)._
+- [ ] **12. Security negative-test suite green** (`docs/SECURITY.md`, "Security test obligations")
+      - **partly.** The tests (`tests/unit/security/`, plus the kill-switch, audit and IPC-role tests
+      elsewhere in `tests/unit` and `tests/integration`) run in the required CI job on every pull
+      request and push, not ad hoc. Missing: a published list that maps each of the nine
+      obligations to the tests that cover it, which the external review package asks for.
+      _Evidence so far: CI job "Python (ruff, mypy, unit + integration tests)". Still needed: the
+      mapping, with a run attached._
+- [x] **13. Secrets scan clean on tree and full history** - `python scripts/secrets_scan.py --check`
+      exits 0: 40 findings, all reviewed (test fixtures and placeholder literals, documented in
+      `docs/scan_policy_secrets.yaml`), 0 open (run on 2026-11-21). GitHub secret scanning and push
+      protection are enabled on the repository.
+      _Evidence: CI job "Release hygiene" (a required check; for a pull request it scans the commits
+      it adds, for a push the pushed branch), `docs/scan_policy_secrets.yaml`._
+- [ ] **14. Dependency vulnerability scan: no unaddressed critical or high finding** - **open.**
+      There is no `pip-audit` or `npm audit` step in CI; only the license audit and the secrets scan
+      are gates. What exists: Dependabot version updates for pip and npm
+      (`.github/dependabot.yml`) and Dependabot security updates on the repository. A manual
+      `npm audit` currently reports one high finding in a development-only tool of the dashboard
+      ([#221](https://github.com/Crackxsy/nox/issues/221)); nothing comparable has been run for the
+      Python dependencies. Add a CI step (or document why Dependabot alone is enough) and attach a
+      clean report.
+      _Evidence needed: a scan report from a CI run for both ecosystems._
+- [ ] **15. CI green on the public repository configuration, no secret leakage via logs** -
+      **partly.** CI is green on `develop` (all jobs, `Docs`, `Installer (Windows)`, `Nox-OS
+      image`), and the license audit is no longer red: the earlier failure over `piper-tts` ended
+      with the documented exception (item 4). `develop` requires seven checks (six jobs of
+      `ci.yml`, plus `Docs`); `main` additionally requires "Branch policy"; both need a linear history and forbid
+      force-pushes. Not done: a log review of the release workflows (`release-assets.yml`,
+      `os-image.yml`) once a real signing key exists, to confirm that no step echoes it; the key is
+      only ever handled there.
+      _Evidence so far: the CI runs on `develop`; the branch protection settings of the repository.
+      Still needed: that log review, after item 21._
+- [ ] **16. `CHANGELOG.md` present, versioning process documented** - **partly.** `CHANGELOG.md`
+      follows Keep a Changelog and Semantic Versioning, and tags `v0.3.0`, `v0.4.0` and `v0.5.0`
+      exist with a release each. The entries for `v0.0.0`, `v0.1.0` and `v0.2.0` link to tags that
+      were never created in this repository, so those three links do not resolve. Releases are cut
+      by hand; how a release is assembled and signed is written down in
+      [`RELEASES.md`](RELEASES.md), but there is no step-by-step "cut a release" document yet.
+      **Owner action:** create or drop those tags, and say which procedure cuts a release.
+      _Evidence so far: `CHANGELOG.md`, `git tag`, `RELEASES.md`._
+- [x] **17. Support policy published** - see "Support policy" below and the README's "Support".
+      _Evidence: this document, README._
+- [ ] **18. No known critical security vulnerability remains** - **open.** It cannot be checked
+      before the external review (item 11) or a written, accepted deferral of it, and the
+      dependency scan (item 14). Open security findings are tracked as issues with the label
+      `security`.
+- [x] **19. No secrets, personal data or vault contents in the published repository or its
+      history** - the public history starts with a squashed snapshot authored with a noreply
+      address (2026-09-16); the secrets scan (item 13) and `scripts/check_planning_ids.py` (no
+      private planning or review ids; CI job "Release hygiene") are clean today, and the contribution
+      rules forbid personal data and machine paths. Both scans run on every pull request; re-run
+      them before each release.
+      _Evidence: `scripts/secrets_scan.py`, `scripts/check_planning_ids.py`, `CONTRIBUTING.md`
+      "This is a public repository"._
+- [ ] **20. Publication runbook executed** - **partly.** The repository is public with a squashed
+      history, `develop` is the default branch, both branches are protected with the required
+      checks above, and releases 0.3.0 to 0.5.0 exist. Whether every step of
+      [`PUBLISHING.md`](PUBLISHING.md) was completed (the private archive deleted, the repository
+      security settings) cannot be seen from the repository. **Owner action:** confirm each step of
+      the runbook, or write down which ones were skipped and why.
+      _Evidence needed: the owner's confirmation, `gh repo list` without the archive._
+- [ ] **21. Release signing key and the `release-signing` environment** - **open.** **Owner
+      action.** The signing is built and tested (`.github/workflows/release-assets.yml` and
+      `os-image.yml` sign a release manifest; `install-linux.sh` and `nox update` verify it), but no
+      key exists: the trust lists are empty (`TRUSTED_KEYS` in `src/nox/release/trusted_keys.py`,
+      `TRUSTED_RELEASE_KEYS` in `scripts/install-linux.sh`), the GitHub environment
+      `release-signing` has not been created (the repository has no environments), and the secret
+      `NOX_RELEASE_SIGNING_KEY` is not set. Until then every release run fails with "Release not
+      signed", installations verify nothing and the Nox-OS image gets no release asset. Create the
+      key, the environment (required reviewer, `v*` tags only) and the trust entries as described in
+      [`RELEASES.md`](RELEASES.md#setting-up-the-release-key-owner).
+      _Evidence needed: a release with `release-manifest.json` and its signature, and
+      `nox release verify` exiting 0 on it._
+- [ ] **22. Windows Authenticode signing of the installer** - **open.** **Owner action.**
+      `installer/nox.iss` configures no signing, so `Nox-Setup-*.exe` is unsigned and Windows
+      SmartScreen and some antivirus products warn about it. It needs a code-signing certificate (an
+      ongoing cost and an identity check) and a signing step in the build; the release manifest's
+      Ed25519 signature does not replace it, because the installer cannot check that itself.
+      _Evidence needed: a signed `Nox-Setup-<version>.exe` whose signature `signtool verify` accepts._
+- [ ] **23. Windows installer built and attached by the release workflow** - **open.** The installer
+      is built and smoke-tested by `installer-windows.yml`, but `release-assets.yml` does not build
+      it, so it is not a release asset and not in the signed manifest
+      ([`RELEASES.md`](RELEASES.md)). Until it is, the only Windows routes are from source or a
+      self-built installer.
+      _Evidence needed: the installer among a release's assets, listed in its manifest._
+- [ ] **24. Software bill of materials (SBOM) for a release** - **open.** Nothing generates one.
+      `docs/THIRD_PARTY_LICENSES.md` lists names, versions and licenses and the lock files pin
+      them, but there is no machine-readable SBOM (CycloneDX or SPDX) attached to a release.
+      _Evidence needed: an SBOM generated in the release workflow and listed in the manifest._
+- [ ] **25. A release that carries the Linux installer** - **open.** **Owner action.** The
+      Raspberry Pi guide, the node installers and the Nox-OS image all install "the newest
+      release" - but the latest release (0.5.0) predates them and has no assets, so the one-line
+      install command downloads a script that is not there. A release needs the version bump, items
+      21 and 23 for a signed manifest, and the changelog entry.
+      _Evidence needed: a release whose assets include `install-linux.sh`, its checksum and the
+      signed manifest, and a fresh Pi install from it._
+- [ ] **26. Decision on encrypting stored data at rest** - **open.** **Owner action.** The memory
+      database, logs, clips and the vault are not encrypted by Nox; the OS permissions and the
+      user's disk encryption are what protect them, as [`PRIVACY.md`](PRIVACY.md) says. Decide
+      before 1.0 whether that is accepted for 1.0 or whether the database gets encryption, and
+      record it here.
+      _Evidence needed: a written decision, or the implementation with tests._
 
 ## Support policy
 
 Nox is a solo/small-project open-source release. Support channel: GitHub Issues. There is no
-guaranteed response time and no paid support tier — issues are triaged as time allows, security
-reports get priority (see `../SECURITY.md`). Nox is provided as-is, under the warranty disclaimer
-of the Apache License 2.0 (§7/§8) — no promise beyond that.
+guaranteed response time and no paid support tier - issues are triaged as time allows, security
+reports get priority (see [`SECURITY.md`](../SECURITY.md)). Nox is provided as-is, under the
+warranty disclaimer of the Apache License 2.0 (§7/§8) - no promise beyond that.
 
 ## Open points this checklist cannot close on its own
 
-- Who performs the external security review (item 11) — not decided.
-- Replacing Piper with a permissively licensed TTS engine so bundled builds can ship under
-  Apache-2.0 alone (wave 2) — the GPL notice in `NOTICE` is the interim answer, not the end state.
-- Items 7, 8, 9 need physical/VM access to a non-development machine.
+- **Owner actions:** the reviewer for the external security review (11), the release signing key and
+  environment (21), a code-signing certificate (22), confirming the publication runbook (20), the
+  tags for the old changelog entries (16), the release that carries the Linux installer (25) and the
+  decision on encryption at rest (26).
+- **Needs a non-development machine** (7, 8, 9): a fresh Windows 11 PC or VM, and a Raspberry Pi.
+- **Needs code:** a dependency scan in CI (14), the SBOM (24), the Windows installer in the release
+  workflow (23), and replacing Piper with a permissively licensed TTS engine so bundled builds can
+  ship under Apache-2.0 alone ([#21](https://github.com/Crackxsy/nox/issues/21)) - the GPL notice in
+  `NOTICE` is the interim answer, not the end state.
