@@ -17,6 +17,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 
 from nox.release import manifest as manifest_module
+from nox.release import trusted_release_keys
 from nox.release import verify as verify_module
 from nox.release.keys import TrustedKey
 from nox.release.manifest import (
@@ -249,7 +250,11 @@ def test_the_layout_is_exactly_what_nox_release_writes(
     assert script.MANIFEST_SCHEMA == manifest_module.MANIFEST_SCHEMA
     assert script.SIGNATURE_SCHEMA == verify_module.SIGNATURE_SCHEMA
     assert script.PROJECT == manifest_module.PROJECT
-    assert script.read_trust_list(REPO / "src" / "nox" / "release" / "trusted_keys.py") == []
+    # The script reads exactly the keys the repository trusts (the list may be empty or not).
+    assert script.read_trust_list(REPO / "src" / "nox" / "release" / "trusted_keys.py") == [
+        {"key_id": key.key_id, "public_key": key.public_key, "not_after": key.not_after}
+        for key in trusted_release_keys()
+    ]
 
 
 def test_the_signer_imports_nothing_but_the_standard_library_and_cryptography() -> None:
