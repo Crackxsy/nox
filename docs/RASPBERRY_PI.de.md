@@ -16,7 +16,8 @@ Gerät sein eigenes hat.
 | System | **Raspberry Pi OS 64-bit** (Bookworm oder neuer), Debian 12+, Ubuntu 22.04+. Ein 32-Bit-System lehnt der Installer mit Begründung ab. |
 | Netzwerk | Der Pi im selben Heimnetz wie deine anderen Geräte. |
 
-Python, die Abhängigkeiten und das Dashboard bringt der Installer mit. Kein Node.js, kein Compiler.
+Python, die Abhängigkeiten und – bei einem Release – das Dashboard bringt der Installer mit. Kein
+Node.js, kein Compiler.
 Dazu installiert er `bubblewrap` und `python3` aus den Systempaketen: Befehle, Skills und
 MCP-Server führt Nox nur in dieser Sandbox aus (siehe „Die Befehls-Sandbox“ unten).
 
@@ -28,8 +29,17 @@ Auf dem Pi in einem Terminal (oder per SSH):
 curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh | sudo bash
 ```
 
+> **Noch nicht verfügbar:** Kein veröffentlichtes Release enthält `install-linux.sh` (das neueste,
+> 0.5.0, hat keine Dateien), der Befehl funktioniert also erst, wenn ein Release damit erstellt
+> wird. Bis dahin aus einer Kopie dieses Repositorys, der du vertraust:
+> `sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh` (so installiert es die CI; der Kopf
+> des Skripts erklärt die Optionen). **Aus einer Kopie gibt es kein Dashboard:** der Kern läuft, aber
+> das fertige Dashboard-Paket gibt es nur für ein Release, das Dashboard zeigt deshalb eine
+> Hinweisseite. Der Installer hat keine Option, es auf dem Pi zu bauen; einen einfacheren Weg als
+> ein Release gibt es nicht.
+
 Lieber erst lesen? `curl -fsSLO <dieselbe Adresse>`, dann `less install-linux.sh` und
-`sudo bash install-linux.sh`. Jedes Release enthält dazu `install-linux.sh.sha256`, das nur einen
+`sudo bash install-linux.sh`. Jedes mit dem Release-Workflow erstellte Release enthält dazu `install-linux.sh.sha256`, das nur einen
 beschädigten Download erkennt, und – sobald der Release-Schlüssel des Projekts eingerichtet ist –
 ein signiertes `release-manifest.json`, das alle Dateien des Release aufführt. Damit lehnen der
 Installer und `nox update` ein verändertes oder nicht mit dem Release-Schlüssel signiertes Release

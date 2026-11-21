@@ -95,7 +95,8 @@ Everything committed here - code, comments, tests, fixtures, docs, commit messag
 text - is public:
 
 - **English** for code, comments, docs, commits and pull requests (user-facing UI strings are
-  translated through the i18n files).
+  translated through the i18n files). Three guides also exist in German (`docs/*.de.md`); where
+  a German and an English version differ, English is authoritative.
 - **No personal data**: no real names, places, e-mail addresses, employers, or details of anyone's
   machine, hardware or accounts. Use neutral examples (`Alex`, `Springfield`, `example.com`).
 - **No local paths**: no drive letters or home folders from a real machine. Use `tmp_path` in tests,
@@ -133,7 +134,7 @@ manifest can never turn them off. A pull request that weakens one of them will b
    build if one appears.
 2. **Secrets never live in code.** No key, token, password or OAuth secret in source, config,
    tests, fixtures, logs, prompts or documentation. Secrets go through
-   `nox.security.secrets` into the Windows Credential Manager; tests use the in-memory backend.
+   `nox.security.secrets` into the OS secret store (the Windows Credential Manager); tests use the in-memory backend.
    The `release-hygiene` CI job scans the working tree *and* the history: every commit a pull
    request adds (a secret added and deleted again is still found), the whole branch on a push.
 3. **All egress goes through the guard.** Every outbound connection goes through

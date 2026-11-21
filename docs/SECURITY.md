@@ -163,12 +163,13 @@ permission.self_elevate
 
 ## Rocket League observation-only boundary
 
-Immutable, code-level, not a setting: screen/HUD capture, replay files, and
-non-invasive input *observation* (hotkey-listener statistics, never sending input) are the only
-things Nox's Rocket League feature does. Nox does not listen to the game's sound: there is no
-loopback or audio-capture code in the plugin. The spoken callouts are Nox's own voice, played on
-the private channel only; when no pre-recorded clip is installed under a callout's name (none
-ships), the callout's words are spoken in the active voice instead.
+Immutable, code-level, not a setting: Nox's Rocket League feature only observes. Today that is
+screen/HUD capture, reading replay files and noticing that the game process runs; there is no
+game-audio capture and no input observation. Anything added later stays observation-only - nothing
+is ever sent to the game.
+The spoken callouts are Nox's own voice, played on the private channel only; when no
+pre-recorded clip is installed under a callout's name (none ships), the callout's words are
+spoken in the active voice instead.
 
 No file anywhere in the repository may import a process-memory API (`ReadProcessMemory`,
 `WriteProcessMemory`) or a third-party input-automation library (`pydirectinput`, `pyautogui`).
@@ -223,8 +224,10 @@ a hole. `tests/unit/security/test_input_synthesis_guard.py` runs the same script
 
 ## Secrets handling
 
-`SecretStore`, backed by the `keyring` package (Windows Credential Manager on the platform Nox
-ships for), names shaped `nox/<component>/<key>` (e.g. `nox/twitch/oauth_token`,
+`SecretStore`, backed by the `keyring` package (Windows Credential Manager on Windows) - or, on a
+Linux server without a keyring, one `secrets.json` in Nox's data folder with owner-only file rights
+(mode 0600, an owner-only ACL on Windows), the same protection an SSH private key has;
+`nox where` says which one a machine uses - names shaped `nox/<component>/<key>` (e.g. `nox/twitch/oauth_token`,
 `nox/obs/websocket_password`). Set via `nox secrets set <name>` (value read from a hidden prompt,
 never a command-line argument) or the onboarding wizard's equivalent prompts; a dashboard UI is
 planned. Values are never logged, never included in a `repr()`, never audited, and never placed in

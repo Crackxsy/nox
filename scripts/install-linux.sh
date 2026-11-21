@@ -4,8 +4,12 @@
 #
 #   curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh | sudo bash
 #
+# (Not working yet: no published release carries this script - the latest, 0.5.0, has no assets.
+# Until one does, run it from a checkout you trust: sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh;
+# the core runs, but a checkout has no prebuilt dashboard package, so the dashboard shows a notice page)
+#
 # Prefer to read it first: download it, look at it, then run `sudo bash install-linux.sh`. Each
-# release also carries install-linux.sh.sha256.
+# release made with the release workflow also carries install-linux.sh.sha256.
 #
 # Layout - every version is complete before it is used, so an update can always be undone:
 #   /opt/nox/releases/<commit>   one finished version each: code, Python environment, dashboard
