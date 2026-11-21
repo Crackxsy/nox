@@ -478,6 +478,9 @@ A release whose manifest cannot be signed - the release key is not set up yet - 
 these files: the workflow stops at the signing job ("Release not signed") before it uploads
 anything.
 
+No release has an image yet (the latest, 0.5.0, predates the image and has no assets), so the
+address below does not work until one does.
+
 In Raspberry Pi Imager: *App options* -> *Content repository* -> *Use custom URL*:
 `https://github.com/Crackxsy/nox/releases/latest/download/nox-os.rpi-imager.json`, then pick
 "Nox-OS (based on Raspberry Pi OS)". Or write the `.img.xz` with any tool that writes images.

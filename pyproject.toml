@@ -98,8 +98,8 @@ build-backend = "hatchling.build"
 packages = ["src/nox"]
 
 # openwakeword 0.6.0 declares `tflite-runtime` for Linux, which has no wheels beyond Python
-# 3.11 and makes the universal lock unsolvable. Nox only supports Windows, where openwakeword
-# runs its models through ONNX Runtime, so the lock uses its metadata without that entry.
+# 3.11 and makes the universal lock unsolvable. Nox always runs openwakeword's models through ONNX
+# Runtime (`inference_framework="onnx"`), so the lock uses its metadata without that entry.
 [[tool.uv.dependency-metadata]]
 name = "openwakeword"
 version = "0.6.0"

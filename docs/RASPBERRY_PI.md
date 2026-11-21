@@ -14,7 +14,8 @@ reminders and calendar - instead of each having its own.
 | System | **Raspberry Pi OS 64-bit** (Bookworm or newer), Debian 12+, Ubuntu 22.04+. A 32-bit system is refused with that reason. |
 | Network | The Pi in the same home network as your other devices. |
 
-Python, the dependencies and the dashboard come with the installer. No Node.js, no compiler.
+Python, the dependencies and - for a release - the dashboard come with the installer. No Node.js,
+no compiler.
 The installer also adds `bubblewrap` and `python3` from the system's packages: Nox runs commands,
 skills and MCP servers only inside that sandbox (see "The command sandbox" below).
 
@@ -26,8 +27,16 @@ On the Pi, in a terminal (or over SSH):
 curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh | sudo bash
 ```
 
+> **Not available yet:** no published release carries `install-linux.sh` (the latest, 0.5.0, has no
+> assets), so this command works only once a release is cut with it. Until then, from a checkout of
+> this repository that you trust: `sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh` (how CI
+> installs it; the header of the script explains the options). **From a checkout there is no
+> dashboard:** the core runs, but the prebuilt dashboard package exists only for a release, so the
+> dashboard shows a notice page. The installer has no option to build it on the Pi; there is no
+> simpler way than a release.
+
 Prefer to read it first? `curl -fsSLO <same address>`, `less install-linux.sh`, then
-`sudo bash install-linux.sh`. Each release also carries `install-linux.sh.sha256`, which only
+`sudo bash install-linux.sh`. Each release made with the release workflow carries `install-linux.sh.sha256`, which only
 catches a damaged download, and - once the project's release key is set up - a signed
 `release-manifest.json` that lists every file of the release. With it the installer and
 `nox update` refuse a release that was altered or not signed by the release key, and an older

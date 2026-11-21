@@ -47,6 +47,12 @@ against a core that was taken over or patched to allow everything.
 | Linux without a screen (a Pi) | the same with `sudo bash -s -- --node --headless` | A hardened system unit for its own system user `nox-node`; data in `/var/lib/nox-node`. Command: `sudo nox-node ...`. |
 | macOS (**beta**) | `bash scripts/install-macos.sh --node` in a checkout of this repository | A LaunchAgent at login, as you. **This script does not check release signatures yet:** once signing is set up it installs nothing from the network (no tag, branch or commit), only a checkout you verified (`NOX_SOURCE=<folder>`). |
 
+> **No download yet:** no published release carries `Nox-Setup-<version>.exe` or `install-linux.sh`
+> (the latest, 0.5.0, has no assets), so the commands above work only once a release is cut with
+> them. Until then: on Windows build the installer from the repository (`installer/README.md`); on
+> Linux run the script from a checkout you trust, `NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+> --node` (with `sudo env` in front for `--headless`), as CI does.
+
 **What a node offers is installed with it.** The Linux and macOS installers add the libraries
 for what the node can do: the screen and camera (`senses`, on a desktop), the browser library
 (`browser`), the voice satellite (`voice`, `voice-supertonic`) and, on a desktop, the tray and its

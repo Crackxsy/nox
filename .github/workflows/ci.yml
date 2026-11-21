@@ -778,10 +778,10 @@ jobs:
         run: python scripts/check_planning_ids.py
 
       # Fails when a dependency's license is denied or unresolved against docs/license_policy.yaml.
-      # Known open point as of 2026-09-14: piper-tts (voice extra) declares GPL-3.0-or-later on
-      # PyPI, which this policy denies for bundled code - this step is expected to be red until
-      # that is resolved (swap engine, or a documented exception), not a bug in the check itself.
-      # See docs/THIRD_PARTY_LICENSES.md.
+      # piper-tts (voice extra) declares GPL-3.0-or-later on PyPI, which this policy denies for
+      # bundled code; it is a documented exception in docs/license_policy.yaml (a build that
+      # bundles it is distributed under GPL-3.0 terms, see NOTICE). See
+      # docs/THIRD_PARTY_LICENSES.md.
       - name: Third-party license audit
         run: python scripts/license_audit.py --check
 

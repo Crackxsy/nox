@@ -53,7 +53,8 @@ nox update v0.7.1 --allow-downgrade       # an older release, deliberately
 
 The first install starts with a downloaded script that cannot vouch for itself. To check it by
 hand, with nothing but `openssl`, `python3` and the public key printed in
-`src/nox/release/trusted_keys.py`:
+`src/nox/release/trusted_keys.py`. (No published release has these files yet - the latest, 0.5.0,
+has no assets - so the addresses below work only once a release is cut with them.)
 
 ```bash
 base=https://github.com/Crackxsy/nox/releases/latest/download
