@@ -346,6 +346,30 @@ immediately and never becomes an event or reaches a language model.
 until you hold push-to-talk) and `continuous`, which keeps it open behind the wake-word gate for
 hands-free use. Change it in the dashboard under Einstellungen.
 
+**When the microphone goes away.** A headset that is unplugged, a driver reset or a sleep/wake cycle
+used to leave Nox deaf without a sign. The capture loop now runs under a supervisor: if the input
+fails or stops delivering audio while capture is meant to be on, it is closed and opened again after
+1, 2, 5, 10 and then every 30 seconds (a microphone that keeps dropping out waits longer each time).
+The voice health line shows `limited` with the reason ("microphone: ..."). After three failures in a
+row the core says once, on the private channel, "Ich höre dich gerade nicht." ("I can't hear you
+right now."), and once more when audio flows again - but only where unprompted speech is allowed
+(not muted, no privacy zone, not in a quiet privacy mode, outside quiet hours); otherwise the health
+line is all you get. A microphone that keeps dropping out is announced once as "wackelt". A
+microphone that is closed on purpose (push-to-talk waiting, muted, privacy off) is silence, not a
+failure, and a restart never opens a device the privacy gate keeps closed. The list of input
+devices is compared every 2 seconds while the microphone is down, but PortAudio only knows the
+devices that were present when audio was initialised: a headset plugged in later is reliably found
+at the next restart of the voice service (re-initialising PortAudio would cut off speech that is
+playing).
+
+**How fast a spoken answer is.** The voice worker times every voice turn from the end of your
+utterance to the first audio chunk handed to the output device: the end-of-speech decision, the
+transcription (`stt_ms`), the core's wait for the first sentence (`reply_ms`, which contains the
+model's first token) and the speech synthesis (`synth_ms`). Each turn is one structured log line
+(`voice.turn_latency`, milliseconds only, never the words), and the request `voice.latency` returns
+P50/P95 over the last 50 turns. Nothing leaves the machine. Time since your last word is
+`total_ms` plus `endpoint_ms`, the silence the detector waits for (zero with push-to-talk).
+
 ### Profiles
 
 A profile decides what Nox may do, independently of what the model asks for. Switch it from the

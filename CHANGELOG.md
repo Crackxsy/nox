@@ -9,6 +9,21 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Voice: the microphone is supervised and says when it is gone.** A capture loop that ends,
+  fails or goes quiet while capture should be on is restarted with a growing delay (1, 2, 5, 10,
+  then every 30 s, longer still for a microphone that keeps dropping out), the voice health line
+  shows `limited` with the reason, and after three failures in a row the core says "Ich höre dich
+  gerade nicht." once and "Ich höre dich wieder." once when audio is back - never on every retry,
+  and only where unprompted speech is allowed (new event `voice.capture_notice`, decided by
+  `SpeechPolicy`). A closed gate (muted, push-to-talk waiting, privacy off) is not a failure, and a
+  restart never opens a device the gate keeps closed. A device that cannot be opened no longer
+  breaks the push-to-talk request or the worker's start. Limit: PortAudio lists only the devices
+  present when audio was initialised, so a headset plugged in later is reliably found at the next
+  restart of the voice service.
+- **Voice: turn latency is measured.** Every voice turn is timed from the end of the utterance to
+  the first audio chunk (transcription, wait for the first sentence, synthesis); one `voice.turn_latency`
+  log line per turn and a new request `voice.latency` with P50/P95 over the last 50 turns. Local
+  only, milliseconds only. The worker heartbeat carries the microphone state (additive fields).
 - **Nox-OS first boot without a screen** (`os/pi-gen/stage-nox/04-firstboot`, os/README.md):
   a provisioning file on the boot partition (`nox-provision.json`, versioned JSON schema in
   `os/provisioning/`: Wi-Fi, country, hostname, time zone, locale, the setup card's claim-code hash
@@ -411,6 +426,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `check-image.sh` and the QEMU boot test check all of it, including an SSH on/off round trip.
 
 ### Fixed
+- **Voice: interrupting Nox now silences the whole answer.** `tts.stop` and a barge-in only
+  stopped the sentence that was playing; sentences the core had already handed over waited for it
+  and started right afterwards, so Nox kept talking for seconds. An interruption now ends the
+  current generation: the playing sentence and every sentence waiting for its turn are dropped (each
+  still ends with exactly one `tts.interrupted`), while the next turn's sentences play normally. The
+  core also stops the turn that is still producing sentences as soon as the worker reports a
+  barge-in, so later sentences of the interrupted answer are not spoken either. An interruption that
+  lands between two sentences, or while `tts.started` is still on its way, is no longer lost, and
+  the reason of an interruption is no longer overwritten by the next sentence.
 - **Twitch chat: Nox answers only when he is spoken to, and what he writes is filtered.** Every
   `!word` used to count as "addressed to Nox", so another bot's `!lurk` or `!discord` got a model
   answer, and Nox's own `!rps` or `!funken` got one on top of the real answer. A command now

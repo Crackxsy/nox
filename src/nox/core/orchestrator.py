@@ -289,6 +289,8 @@ class Orchestrator:
     _active: asyncio.Task[Turn] | None = None
     voice_turn: asyncio.Task[None] | None = None
     _unsubs: list[Callable[[], None]] = field(default_factory=list)
+    #: Cancellations started by a barge-in event, held so they are not collected mid-run.
+    _barge_cancels: set[asyncio.Task[None]] = field(default_factory=set)
     _safe_mode: bool = False
     #: The live conversation of each channel (`conversation_for`).
     _conversations: dict[str, _Conversation] = field(default_factory=dict)
@@ -311,6 +313,7 @@ class Orchestrator:
     async def start(self) -> None:
         self._unsubs = [
             self.bus.subscribe(E.VOICE_TRANSCRIPT_READY, self._on_transcript),
+            self.bus.subscribe(E.TTS_INTERRUPTED, self._on_tts_interrupted),
             self.bus.subscribe(E.SECURITY_KILL_SWITCH, self._on_kill),
             self.bus.subscribe(E.SYSTEM_STARTED, self._on_started),
             self.bus.subscribe(E.SYSTEM_STOPPING, self._on_stopping),
@@ -323,6 +326,8 @@ class Orchestrator:
         for u in self._unsubs:
             u()
         self._unsubs.clear()
+        for pending in list(self._barge_cancels):
+            pending.cancel()
         await self.cancel(reason="stop")
         if self.voice_turn is not None and not self.voice_turn.done():
             self.voice_turn.cancel()
@@ -473,6 +478,27 @@ class Orchestrator:
             raise
         except Exception as exc:  # noqa: BLE001 - a failed turn is logged, never fatal
             log.warning("orchestrator.turn_failed", error=str(exc))
+
+    async def _on_tts_interrupted(self, ev: Event) -> None:
+        """The user talked over Nox (the worker decided that): stop the turn that is still
+        producing sentences, so none of its later sentences is spoken after the interruption.
+
+        Only the worker's own barge-in counts; the interruptions this class asks for itself
+        (`new_input`, kill, stop) carry other reasons and would otherwise come back as events.
+        The cancel runs in a task of its own: this handler runs inside the delivery of the
+        worker's event, and `cancel` waits on the worker (see `_on_transcript`).
+        """
+        turn = self._active
+        if ev.payload.get("reason") != "barge_in" or turn is None or turn.done():
+            return
+        task = asyncio.create_task(self._cancel_turn(turn, "barge_in"), name="nox-barge-in-cancel")
+        self._barge_cancels.add(task)
+        task.add_done_callback(self._barge_cancels.discard)
+
+    async def _cancel_turn(self, turn: asyncio.Task[Turn], reason: str) -> None:
+        """Cancel `turn` unless a newer one has taken its place meanwhile."""
+        if self._active is turn:
+            await self.cancel(reason=reason)
 
     async def _on_kill(self, _: Event) -> None:
         self._safe_mode = True

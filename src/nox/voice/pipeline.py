@@ -16,15 +16,22 @@ Two loops run beside the capture loop so the event loop is never the bottleneck:
 detector's ONNX inference runs in a worker thread over batches of queued frames, and transcription
 runs one utterance at a time through a single-consumer queue, which also keeps transcript events in
 utterance order.
+
+The capture loop runs under a supervisor (`nox.voice.capture_health`): a device that disappears is
+reopened with a growing delay, and the user is told once when Nox cannot hear and once when it can
+again. Speech is organised in generations: an interruption ends the current generation, so every
+sentence that was already accepted for it - playing or waiting its turn - is dropped, while a
+sentence requested afterwards belongs to the next generation and plays normally. Each voice turn is
+timed from the end of the utterance to the first audio chunk (`nox.voice.latency`).
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import math
-from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 import numpy as np
@@ -35,15 +42,17 @@ from nox.util.aio import aclose
 from nox.voice._logging import get_logger
 from nox.voice.audio import AudioUnavailableError
 from nox.voice.base import AudioInput, AudioOutput, SttEngine, TtsEngine, TtsRequest
+from nox.voice.capture_health import (
+    CaptureMonitor,
+    CaptureNotice,
+    CaptureSupervisor,
+)
+from nox.voice.latency import LatencySummary, LatencyTracker, TurnTicket, noting_first_chunk
+from nox.voice.levels import pace_levels
 from nox.voice.stt.wake_gate import GateDecision, WakeGate
 from nox.voice.stt.wake_word import WakeWordMatcher
 from nox.voice.tts.clips import ClipNotFoundError
 from nox.voice.vad import EnergyVad, Segmenter, SegmentEvent, SegmentKind
-
-#: How often the loudness of what is playing is published (`tts.level`), per second.
-LEVEL_HZ = 30
-#: Smallest change in loudness worth an event.
-LEVEL_STEP = 0.01
 
 log = get_logger(__name__)
 
@@ -72,6 +81,8 @@ class _Utterance:
     audio: np.ndarray
     forced: bool
     duration_ms: int
+    #: When the end-of-speech decision was made, on the pipeline's latency clock.
+    ended_at: float
 
 
 class DefaultVoicePipeline:
@@ -87,7 +98,12 @@ class DefaultVoicePipeline:
         config: PipelineConfig | None = None,
         segmenter: Segmenter | None = None,
         wake_gate: WakeGate | None = None,
+        clock: Callable[[], float] = time.perf_counter,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        input_devices: Callable[[], Sequence[str]] | None = None,
     ) -> None:
+        """`clock` and `sleep` are injected for tests. `input_devices` lists the input devices'
+        names: a change while the microphone is down makes the supervisor try again at once."""
         self._audio_in = audio_in
         self._audio_out = audio_out
         self._stt = stt
@@ -112,16 +128,36 @@ class DefaultVoicePipeline:
         self._started = False
         self._speaking = False
         self._ptt_active = False
-        self._interrupt_reason: str | None = None
+        self._clock = clock
+        #: Raised by every interruption. A sentence belongs to the generation it was requested in
+        #: and is dropped, not played, once the pipeline has moved on to a newer one.
+        self._generation = 0
+        #: Why the latest interruption happened. Reported on the `tts.interrupted` of whatever it
+        #: cut off; deliberately not cleared by later sentences.
+        self._interrupt_reason = ""
+        #: Sentences requested and not yet finished: playing, or waiting for the speech lock.
+        self._inflight = 0
         self._say_lock = asyncio.Lock()
-        self._listen_task: asyncio.Task[None] | None = None
+        self._notice_tasks: set[asyncio.Task[None]] = set()
+        self._latency = LatencyTracker(clock=clock)
+        self._device_lock = asyncio.Lock()
+        self._capture = CaptureMonitor(clock=clock)
+        self._supervisor = CaptureSupervisor(
+            monitor=self._capture,
+            listen=self._listen,
+            is_active=self.capture_active,
+            reopen=self._reopen_capture,
+            announce=self._announce_capture,
+            stopped=lambda: self._stopped,
+            clock=clock,
+            sleep=sleep,
+            input_devices=input_devices,
+        )
         self._detect_task: asyncio.Task[None] | None = None
         self._transcribe_task: asyncio.Task[None] | None = None
         self._detect_queue: asyncio.Queue[np.ndarray] = asyncio.Queue()
         self._pending: asyncio.Queue[_Utterance] = asyncio.Queue()
         self._current_audio: AsyncIterator[bytes] | None = None
-        #: Empty while capture works, otherwise why it stopped - read by `capture_health()`.
-        self.capture_error = ""
         self.frames_seen = 0
         self.utterances = 0
 
@@ -130,6 +166,11 @@ class DefaultVoicePipeline:
     @property
     def speaking(self) -> bool:
         return self._speaking
+
+    @property
+    def _busy_speaking(self) -> bool:
+        """Something is playing, or sentences are waiting for their turn to play."""
+        return bool(self._speaking or self._inflight)
 
     @property
     def muted(self) -> bool:
@@ -152,12 +193,17 @@ class DefaultVoicePipeline:
         return self._gate.health()
 
     def capture_health(self) -> tuple[HealthStatus, str]:
-        """Whether the capture path is still alive - `unavailable` once the listen loop has died."""
-        if self.capture_error:
-            return HealthStatus.UNAVAILABLE, self.capture_error
+        """Whether the capture path works: `unavailable`, with the reason, from the moment the
+        microphone fails until audio flows again."""
+        if self._capture.failing:
+            return self._capture.health()
         if not self._started:
             return HealthStatus.UNAVAILABLE, "capture not started"
         return HealthStatus.AVAILABLE, "capturing"
+
+    def latency_summary(self) -> LatencySummary:
+        """P50/P95 of the last turns, from the end of the utterance to the first audio chunk."""
+        return self._latency.summary()
 
     def gate_open(self) -> bool:
         """True when capture is permitted right now (privacy state, mute, kill latch, running)."""
@@ -180,11 +226,45 @@ class DefaultVoicePipeline:
         the device is not merely ignored while PTT is up, it is not open at all.
         """
         active = self.capture_active()
-        await self._audio_in.set_enabled(active)
+        async with self._device_lock:
+            await self._set_device_enabled(active)
         if not active and self._segmenter.active:
             self._segmenter.reset()
         if not active:
             self._gate.reset()
+
+    async def _set_device_enabled(self, active: bool) -> None:
+        """Open or close the device. Opening can fail (unplugged, in use): that becomes a health
+        state and a retry by the supervisor, not an error for whoever changed the gate."""
+        try:
+            await self._audio_in.set_enabled(active)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - reported through health, retried by the supervisor
+            if not active:
+                raise
+            self._supervisor.report_open_failure(
+                f"cannot open the microphone: {type(exc).__name__}: {exc}"
+            )
+
+    async def _reopen_capture(self) -> None:
+        """Supervisor restart: close the input completely, open it again, re-apply the gate.
+
+        Raises when the device still cannot be opened; the supervisor counts that as a failure.
+        """
+        async with self._device_lock:
+            try:
+                await self._audio_in.set_enabled(False)
+                await self._audio_in.stop()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - closing a device that is gone may well fail
+                log.debug("voice.capture_close_failed", error=f"{type(exc).__name__}: {exc}")
+            await self._audio_in.start()
+            if self._segmenter.active:
+                self._segmenter.reset()
+            self._gate.reset()
+            await self._audio_in.set_enabled(self.capture_active())
 
     async def reset_kill(self) -> None:
         self._kill_latched = False
@@ -197,10 +277,10 @@ class DefaultVoicePipeline:
             return
         self._stopped = False
         self._started = True
-        self.capture_error = ""
+        self._capture.reset()
         await self._audio_in.start()
         await self.refresh_gate()
-        self._listen_task = asyncio.create_task(self._listen(), name="voice-listen")
+        self._supervisor.start()
         self._detect_task = asyncio.create_task(self._detect_loop(), name="voice-wake-detect")
         self._transcribe_task = asyncio.create_task(
             self._transcribe_loop(), name="voice-transcribe"
@@ -217,16 +297,26 @@ class DefaultVoicePipeline:
     async def stop(self) -> None:
         self._stopped = True
         self._started = False
-        await self._audio_in.set_enabled(False)
+        # Under the device lock, so a reopen that is opening the device right now finishes first
+        # and is closed here, instead of leaving a stream open behind a stopped pipeline.
+        async with self._device_lock:
+            await self._audio_in.set_enabled(False)
         await self.interrupt(reason="stop")
-        await self._audio_in.stop()
-        tasks = [t for t in (self._listen_task, self._detect_task, self._transcribe_task) if t]
+        async with self._device_lock:
+            await self._audio_in.stop()
+        await self._supervisor.stop()
+        tasks = [
+            t
+            for t in (self._detect_task, self._transcribe_task, *self._notice_tasks)
+            if t is not None
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        self._listen_task = self._detect_task = self._transcribe_task = None
+        self._detect_task = self._transcribe_task = None
         self._segmenter.reset()
+        self._latency.abandon()
         log.info("voice.pipeline_stopped")
 
     # ---- capture side ----------------------------------------------------------------------------
@@ -234,35 +324,47 @@ class DefaultVoicePipeline:
     async def _listen(self) -> None:
         """Pull frames from the capture device until it ends or fails.
 
-        A failure here would make the pipeline permanently deaf, so it is recorded on
-        `capture_error` and reported by `capture_health` instead of ending the task in silence.
+        Runs under the capture supervisor, which restarts it: a loop that ended or raised is a
+        failure it records and retries, not the end of listening.
         """
+        async for frame in self._audio_in.frames():
+            if self._stopped:
+                return
+            if not self.capture_active():
+                # Defense in depth: even if the device still delivers frames, drop them here.
+                await self._audio_in.set_enabled(False)
+                if self._segmenter.active:
+                    self._segmenter.reset()
+                continue
+            self._supervisor.note_frame()
+            self.frames_seen += 1
+            # The detector sees every frame, so a wake word spoken *before* the segment opened
+            # still counts; the inference itself happens in `_detect_loop`, off this loop.
+            self._detect_queue.put_nowait(frame)
+            event = self._segmenter.push(frame)
+            if event is not None:
+                await self._on_segment(event)
+
+    def _announce_capture(self, notice: CaptureNotice) -> None:
+        """Tell the core once that the microphone is gone, unstable or back (never per retry).
+
+        The worker does not speak it: an unprompted sentence is the core's to allow (quiet hours,
+        privacy mode and zones, game mode - `SpeechPolicy`), which this process does not know.
+        """
+        if self._stopped or self._kill_latched:
+            return
+        payload = {"notice": str(notice), "reason": self._capture.reason}
+        task = asyncio.create_task(self._send_notice(payload), name="voice-capture-notice")
+        self._notice_tasks.add(task)
+        task.add_done_callback(self._notice_tasks.discard)
+
+    async def _send_notice(self, payload: dict[str, Any]) -> None:
         try:
-            async for frame in self._audio_in.frames():
-                if self._stopped:
-                    return
-                if not self.capture_active():
-                    # Defense in depth: even if the device still delivers frames, drop them here.
-                    await self._audio_in.set_enabled(False)
-                    if self._segmenter.active:
-                        self._segmenter.reset()
-                    continue
-                self.frames_seen += 1
-                # The detector sees every frame, so a wake word spoken *before* the segment opened
-                # still counts; the inference itself happens in `_detect_loop`, off this loop.
-                self._detect_queue.put_nowait(frame)
-                event = self._segmenter.push(frame)
-                if event is not None:
-                    await self._on_segment(event)
+            await self._emit(E.VOICE_CAPTURE_NOTICE, payload)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - reported through the health check, never hidden
-            self.capture_error = f"microphone capture stopped: {type(exc).__name__}: {exc}"
-            log.error("voice.capture_failed", error=f"{type(exc).__name__}: {exc}")
-            return
-        if not self._stopped:
-            self.capture_error = "the capture device stopped delivering frames"
-            log.error("voice.capture_ended")
+        except Exception as exc:  # noqa: BLE001 - the health state still says it
+            log.warning("voice.capture_notice_failed", error=f"{type(exc).__name__}: {exc}")
 
     async def _detect_loop(self) -> None:
         """Run the wake-word detector in a worker thread over whatever frames have queued up.
@@ -285,12 +387,18 @@ class DefaultVoicePipeline:
     async def _on_segment(self, event: SegmentEvent) -> None:
         if event.kind == SegmentKind.START:
             await self._emit(E.VOICE_INPUT_STARTED, {"forced": event.forced})
-            if self._speaking and self.config.barge_in:
+            if self._busy_speaking and self.config.barge_in:
                 await self.interrupt(reason="barge_in")
         elif event.kind == SegmentKind.END and event.audio is not None:
+            ended_at = self._clock()
             await self._emit(E.VOICE_INPUT_STOPPED, {"duration_ms": event.duration_ms})
             self._pending.put_nowait(
-                _Utterance(audio=event.audio, forced=event.forced, duration_ms=event.duration_ms)
+                _Utterance(
+                    audio=event.audio,
+                    forced=event.forced,
+                    duration_ms=event.duration_ms,
+                    ended_at=ended_at,
+                )
             )
         elif event.kind == SegmentKind.ABORT:
             await self._emit(
@@ -303,7 +411,10 @@ class DefaultVoicePipeline:
             utterance = await self._pending.get()
             try:
                 await self._process_utterance(
-                    utterance.audio, forced=utterance.forced, duration_ms=utterance.duration_ms
+                    utterance.audio,
+                    forced=utterance.forced,
+                    duration_ms=utterance.duration_ms,
+                    ended_at=utterance.ended_at,
                 )
             except asyncio.CancelledError:
                 raise
@@ -311,7 +422,12 @@ class DefaultVoicePipeline:
                 log.error("voice.utterance_failed", error=f"{type(exc).__name__}: {exc}")
 
     async def _process_utterance(
-        self, audio: np.ndarray, *, forced: bool, duration_ms: int = 0
+        self,
+        audio: np.ndarray,
+        *,
+        forced: bool,
+        duration_ms: int,
+        ended_at: float,
     ) -> None:
         if not self.gate_open() and not forced:
             return
@@ -329,6 +445,7 @@ class DefaultVoicePipeline:
         except Exception as exc:  # noqa: BLE001 - engine failure must not kill the listen loop
             log.error("voice.stt_failed", error=f"{type(exc).__name__}: {exc}")
             return
+        transcribed_at = self._clock()
         text = transcript.text.strip()
         if not text:
             return
@@ -365,6 +482,13 @@ class DefaultVoicePipeline:
             latency_ms=transcript.latency_ms,
         )
         await self._emit(E.VOICE_TRANSCRIPT_READY, ready.model_dump(mode="json"))
+        if addressed:
+            self._latency.begin(
+                ended_at=ended_at,
+                transcribed_at=transcribed_at,
+                published_at=self._clock(),
+                endpoint_ms=0.0 if forced else float(self.config.end_silence_ms),
+            )
 
     async def push_to_talk(self, pressed: bool) -> None:
         if pressed:
@@ -380,7 +504,7 @@ class DefaultVoicePipeline:
             event = self._segmenter.force_start()
             if event is not None:
                 await self._on_segment(event)
-            elif self._speaking and self.config.barge_in:
+            elif self._busy_speaking and self.config.barge_in:
                 await self.interrupt(reason="barge_in")
             return
         if not self._ptt_active:
@@ -402,58 +526,104 @@ class DefaultVoicePipeline:
     # ---- speaking side ---------------------------------------------------------------------------
 
     async def say(self, request: TtsRequest) -> None:
-        async with self._say_lock:
-            if self._stopped:
-                return
-            self._interrupt_reason = None
-            started = TtsStarted(
-                text=request.text,
-                channel=str(request.channel),
-                engine=self._tts.id,
-                utterance_id=request.utterance_id,
-            )
-            # Set before the await: a barge-in landing while `tts.started` is still in flight must
-            # interrupt this utterance, not be dropped as "not speaking yet".
-            self._speaking = True
+        """Speak one sentence, unless an interruption overtakes it before its turn comes.
+
+        The generation is read on entry, before waiting for the speech lock: an interruption that
+        happens while this sentence waits ends its generation and drops it, however many sentences
+        are queued behind the one that was playing. The first sentence after a voice turn's
+        transcript is timed (`nox.voice.latency`).
+        """
+        generation = self._generation
+        ticket = self._latency.say_requested()
+        self._inflight += 1
+        try:
+            async with self._say_lock:
+                if self._stopped:
+                    return
+                if generation != self._generation:
+                    await self._drop(request)
+                    return
+                await self._speak(request, generation, ticket)
+        finally:
+            self._inflight -= 1
+
+    async def _drop(self, request: TtsRequest) -> None:
+        """A sentence the user interrupted before it started: it ends like any interrupted one."""
+        log.debug("voice.say_dropped", utterance_id=request.utterance_id)
+        await self._emit(
+            E.TTS_INTERRUPTED,
+            {"utterance_id": request.utterance_id, "reason": self._interrupt_reason},
+        )
+
+    async def _speak(self, request: TtsRequest, generation: int, ticket: TurnTicket | None) -> None:
+        started = TtsStarted(
+            text=request.text,
+            channel=str(request.channel),
+            engine=self._tts.id,
+            utterance_id=request.utterance_id,
+        )
+        # Set before the await: a barge-in landing while `tts.started` is still in flight must
+        # interrupt this utterance, not be dropped as "not speaking yet".
+        self._speaking = True
+        reported = False
+        pacer: asyncio.Task[None] | None = None
+        audio: AsyncIterator[bytes] | None = None
+        try:
             await self._emit(E.TTS_STARTED, started.model_dump(mode="json"))
+            if generation != self._generation:
+                return  # interrupted before the first sample; `finally` reports it
             audio = self._synthesize(request)
             self._current_audio = audio
-            reported = False
             pacer = (
-                asyncio.create_task(self._pace_levels(request))
+                asyncio.create_task(pace_levels(self._audio_out, self._emit, request))
                 if hasattr(self._audio_out, "level") and str(request.channel) != "mute"
                 else None
             )
+            heard = (
+                audio
+                if ticket is None
+                else noting_first_chunk(audio, lambda: self._note_first_audio(ticket))
+            )
             try:
                 await self._audio_out.play(
-                    audio, self._tts.sample_rate, request.channel, utterance_id=request.utterance_id
+                    heard, self._tts.sample_rate, request.channel, utterance_id=request.utterance_id
                 )
-            except (AudioUnavailableError, FileNotFoundError, ValueError) as exc:
-                log.error("voice.tts_failed", utterance_id=request.utterance_id, error=str(exc))
-                reported = True
-                await self._finish(request, ok=False, reason=type(exc).__name__)
-                return
-            except Exception as exc:
-                # Anything else is still an utterance the user did not hear. Report it, then let
-                # the caller see the original error.
-                log.error(
-                    "voice.tts_failed",
-                    utterance_id=request.utterance_id,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-                reported = True
-                await self._finish(request, ok=False, reason=type(exc).__name__)
-                raise
             finally:
-                if pacer is not None:
-                    pacer.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await pacer
-                self._speaking = False
-                self._current_audio = None
+                if heard is not audio:
+                    await aclose(heard)
+        except (AudioUnavailableError, FileNotFoundError, ValueError) as exc:
+            log.error("voice.tts_failed", utterance_id=request.utterance_id, error=str(exc))
+            reported = True
+            await self._finish(request, ok=False, reason=type(exc).__name__)
+        except Exception as exc:
+            # Anything else is still an utterance the user did not hear. Report it, then let
+            # the caller see the original error.
+            log.error(
+                "voice.tts_failed",
+                utterance_id=request.utterance_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            reported = True
+            await self._finish(request, ok=False, reason=type(exc).__name__)
+            raise
+        finally:
+            if pacer is not None:
+                pacer.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pacer
+            self._speaking = False
+            self._current_audio = None
+            if audio is not None:
                 await aclose(audio)
-                if not reported:
-                    await self._finish(request, ok=True, reason="")
+            if not reported:
+                await self._finish(
+                    request, ok=True, reason="", interrupted=generation != self._generation
+                )
+
+    def _note_first_audio(self, ticket: TurnTicket) -> None:
+        result = self._latency.first_audio(ticket)
+        if result is not None:
+            log.info("voice.turn_latency", **asdict(result))
 
     async def _synthesize(self, request: TtsRequest) -> AsyncIterator[bytes]:
         """The engine's audio for `request`. A prepared clip that is not installed is spoken from
@@ -483,37 +653,11 @@ class DefaultVoicePipeline:
         finally:
             await aclose(spoken)
 
-    async def _pace_levels(self, request: TtsRequest) -> None:
-        """While an utterance plays: its loudness as `tts.level`, about LEVEL_HZ times a second.
-
-        The level is measured where the audio leaves (the output device's block RMS), so the
-        pet's mouth moves with what is heard, not with synthesis running ahead of playback. Only
-        changes are sent; silence costs one event, not thirty a second. Never the words.
-        """
-        last = -1.0
-        while True:
-            raw = float(getattr(self._audio_out, "level", 0.0) or 0.0)
-            level = round(min(1.0, max(0.0, raw)), 3) if math.isfinite(raw) else 0.0
-            if abs(level - last) >= LEVEL_STEP or (level == 0.0 and last != 0.0):
-                last = level
-                try:
-                    await self._emit(
-                        E.TTS_LEVEL,
-                        {
-                            "utterance_id": request.utterance_id,
-                            "channel": str(request.channel),
-                            "level": level,
-                        },
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - a lost level must never stop speech
-                    log.debug("voice.tts_level_dropped", error=str(exc))
-            await asyncio.sleep(1.0 / LEVEL_HZ)
-
-    async def _finish(self, request: TtsRequest, *, ok: bool, reason: str) -> None:
+    async def _finish(
+        self, request: TtsRequest, *, ok: bool, reason: str, interrupted: bool = False
+    ) -> None:
         """Exactly one terminal event per utterance, so no `say` ever dangles."""
-        if ok and self._interrupt_reason is not None:
+        if ok and interrupted:
             await self._emit(
                 E.TTS_INTERRUPTED,
                 {"utterance_id": request.utterance_id, "reason": self._interrupt_reason},
@@ -525,7 +669,13 @@ class DefaultVoicePipeline:
         await self._emit(E.TTS_FINISHED, payload)
 
     async def interrupt(self, *, reason: str) -> None:
-        if not self._speaking:
+        """Stop what is playing and drop every sentence still waiting for its turn.
+
+        Sentences requested after this call belong to the next generation and are unaffected, so
+        the next turn speaks normally.
+        """
+        if not self._busy_speaking:
             return
+        self._generation += 1
         self._interrupt_reason = reason
         await self._audio_out.stop(reason=reason)

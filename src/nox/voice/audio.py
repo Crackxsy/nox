@@ -75,6 +75,18 @@ def output_device_names() -> list[str]:
     return sorted({d["name"] for d in (wasapi or devices)}, key=str.casefold)
 
 
+def input_device_names() -> list[str]:
+    """The input devices PortAudio currently lists, one entry per device and host API.
+
+    Blocking: it walks the host APIs, so the capture supervisor calls it from a thread. It is
+    compared with an earlier answer to notice a headset that was plugged in while the microphone
+    was down. The list is PortAudio's own and is not refreshed until the library is initialised
+    again, which is never done here because it would cut off playing speech; so a device plugged in
+    later may only show up after the voice service restarts.
+    """
+    return sorted(f"{d['hostapi']}:{d['name']}" for d in list_devices() if d["inputs"] != "0")
+
+
 def _device_index(value: str) -> int | None:
     """`"#12"` or `"12"` names a device by its PortAudio index; anything else is a name."""
     text = value.strip().removeprefix("#")

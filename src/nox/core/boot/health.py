@@ -64,11 +64,13 @@ def core_health_checks(
             return HealthStatus.UNAVAILABLE, "worker not running"
         # Registered but not yet ready means the engines are still loading: `limited`, not
         # `available`, because nothing can be spoken yet.
-        return (
-            (HealthStatus.AVAILABLE, "worker registered")
-            if worker.registered.is_set()
-            else (HealthStatus.LIMITED, "worker starting")
-        )
+        if not worker.registered.is_set():
+            return HealthStatus.LIMITED, "worker starting"
+        # A microphone that fails or is gone leaves Nox able to speak but deaf: `limited`, and the
+        # reason says what is wrong, so the tile never claims a voice that cannot hear is fine.
+        if worker.capture is not None and worker.capture[0] is not HealthStatus.AVAILABLE:
+            return HealthStatus.LIMITED, f"microphone: {worker.capture[1]}"
+        return HealthStatus.AVAILABLE, "worker registered"
 
     async def tokens_check() -> tuple[HealthStatus, str]:
         # The session token file is a secret on disk. When its permissions could not be tightened,
