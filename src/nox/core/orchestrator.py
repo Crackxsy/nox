@@ -16,11 +16,20 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import NamedTuple, Protocol
 
 from nox.ai.base import AiRequest, AiRole, Message, Router, ToolCallRequest, ToolDefinition
+from nox.ai.errors import (
+    BudgetExceededError,
+    NoProviderAvailableError,
+    NoProviderCause,
+    RouterError,
+)
 from nox.ai.escalation import EscalationPolicy
 from nox.ai.fastpath import FastPath
+from nox.ai.limits import ProviderLimit
+from nox.ai.notices import GAVE_UP_ON_TOOLS, failure_notice
 from nox.ai.tooluse import render_result
 from nox.core.events import E, Event, EventBus
 from nox.core.hooks import NamedHooks
@@ -46,13 +55,12 @@ TOOL_TURN_MARGIN_S = 30.0
 #: Said once when a tool loop keeps the user waiting with nothing said yet (`filler_delay_s`).
 TOOL_FILLER = {"de": "Moment, ich schau nach.", "en": "One moment, let me check."}
 
-#: Said when the model kept asking for tools until the turn ran out of rounds. Deliberately
-#: short: the user only needs to know that nothing happened, and the detail belongs in the log.
-GAVE_UP_ON_TOOLS = {"de": "Das hat nicht funktioniert.", "en": "That did not work."}
-
 #: Provider id reported for a turn the deterministic fast path answered. It is a real provider name
 #: in the dashboard badge on purpose: the user must be able to see that no language model was asked.
 FAST_PATH_PROVIDER = "fastpath"
+
+#: Provider id reported for a turn no model answered and Nox itself said why (`failure_notice`).
+NOTICE_PROVIDER = "notice"
 
 
 class Speaker(Protocol):
@@ -473,6 +481,8 @@ class Orchestrator:
             raise
         except Exception as exc:  # noqa: BLE001 - a failed turn is logged, never fatal
             log.warning("orchestrator.turn_failed", error=str(exc))
+            if not self._safe_mode:  # after the kill switch silence is what the user asked for
+                await self._publish_turn_failed(NoProviderCause.FAILED, language)
 
     async def _on_kill(self, _: Event) -> None:
         self._safe_mode = True
@@ -589,18 +599,24 @@ class Orchestrator:
         speech = _TurnSpeech(speak=speak_enabled and self.speaker is not None)
         if tools is not None:
             tools.listeners.append(lambda event: self._on_tool_event(event, speech, language, turn))
+        failed = False
         try:
-            await self._converse(
-                turn,
-                messages,
-                decision.role,
-                language,
-                turn_context,
-                tools,
-                speech,
-                on_chunk,
-                started,
-            )
+            try:
+                await self._converse(
+                    turn,
+                    messages,
+                    decision.role,
+                    language,
+                    turn_context,
+                    tools,
+                    speech,
+                    on_chunk,
+                    started,
+                )
+            except RouterError as exc:
+                failed = True
+                await self._announce_failure(turn, exc, language, speech.speak, on_chunk)
+                ready = {"provider": NOTICE_PROVIDER, "degraded": True}
             if not ready:  # router emitted ready after the generator finished: ask it
                 explain = self.router.explain(request_id)
                 ready = {
@@ -612,7 +628,8 @@ class Orchestrator:
             self._note_first_sentence(turn, started)
             turn.timings.total_ms = (time.perf_counter() - started) * 1000
             await self._record_turn(turn)
-            self._notify_turn_complete(text, turn.response)
+            if not failed:
+                self._notify_turn_complete(text, turn.response)
             return turn
         finally:
             unsub()
@@ -690,6 +707,59 @@ class Orchestrator:
                 speak=speech.speak,
                 on_chunk=on_chunk,
             )
+
+    async def _announce_failure(
+        self,
+        turn: Turn,
+        error: RouterError,
+        language: str,
+        speak: bool,
+        on_chunk: Callable[[str], Awaitable[None] | None] | None,
+    ) -> None:
+        """No model answered: say why and what to do, as the reply (so a typed chat shows it) and,
+        for a turn that was to be spoken, through the proactive layer, which decides by the usual
+        rules - mode, privacy, quiet hours - whether it may be heard."""
+        cause, limit = NoProviderCause.FAILED, None
+        if isinstance(error, NoProviderAvailableError):
+            cause, limit = error.cause, error.limit
+        elif isinstance(error, BudgetExceededError):
+            cause = NoProviderCause.BUDGET
+        log.warning("orchestrator.turn_failed", request_id=turn.request_id, cause=cause.value)
+        notice = failure_notice(
+            language,
+            cause,
+            until=limit.until if limit else None,
+            now=datetime.now(UTC),
+            estimated=bool(limit and limit.estimated),
+        )
+        if turn.response and not turn.response[-1:].isspace():
+            notice = f" {notice}"  # after an answer the failure cut short
+        turn.response += notice
+        if on_chunk is not None:
+            result = on_chunk(notice)
+            if result is not None:
+                await result
+        if speak:
+            await self._publish_turn_failed(cause, language, limit)
+
+    async def _publish_turn_failed(
+        self,
+        cause: NoProviderCause,
+        language: str,
+        limit: ProviderLimit | None = None,
+    ) -> None:
+        await self.bus.publish(
+            Event(
+                name=E.AI_TURN_FAILED,
+                payload={
+                    "cause": cause.value,
+                    "language": language[:2],
+                    "until": limit.until.isoformat() if limit else "",
+                    "estimated": bool(limit and limit.estimated),
+                },
+                source="orchestrator",
+            )
+        )
 
     def _notify_turn_complete(self, user_text: str, response: str) -> None:
         if self.on_turn_complete is None or not response.strip():
