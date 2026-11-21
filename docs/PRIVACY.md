@@ -19,11 +19,11 @@ Depending on what you enabled at onboarding (`nox onboard`) or later:
 - **Screen / HUD** — only for features that need it (e.g. Rocket League observation), and never
   while a privacy zone is active (see below).
 - **Camera** — off by default; only if you explicitly enable it.
-- **Game state (Rocket League)** — screen/HUD capture, game audio, replay files, and
-  non-invasive input *observation* (statistics from a global hotkey listener — Nox never sends
-  input to the game). This is a hard, code-level boundary, not a setting: no file in the codebase
-  may import an input-synthesis or process-memory API for a game window, and CI fails the build if
-  one ever appears.
+- **Game state (Rocket League)** — screen/HUD capture, your replay files, and whether the game
+  process is running. There is no game-audio capture and no recording of your keyboard or mouse for
+  this feature. Nox never sends input to the game. This is a hard, code-level boundary, not a
+  setting: no file in the codebase may import an input-synthesis or process-memory API for a game
+  window, and CI fails the build if one ever appears.
 - **Twitch chat / stream events** — only if you connected Twitch at onboarding.
 
 A **capture indicator** in the desktop shell always shows the true mic/screen/camera state. It
@@ -38,15 +38,45 @@ cannot be hidden or disabled by configuration.
   before being written, rotated (14 days by default).
 - **Memory / vault notes** — local files in your chosen vault folder, meant to be yours: readable,
   portable, and never written to while a privacy zone is active for the thing being discussed.
+- **The database** (`nox.db`, SQLite, in the `database` folder of the data folder) — conversation
+  turns, the facts Nox has learned about you, reminders, the audit log, paired devices and the
+  data of the integrations you use (Twitch viewers and chat events, Rocket League matches, clips).
+  The raw text of conversation turns is kept 7 days by default (`privacy.retention.raw_transcripts_days`),
+  Twitch chat text likewise (`stream.chat.retain_raw_text_days`).
 - **Raw audio is never persisted**, in any mode, at any privacy level. Only the transcript (if
   transcription is enabled) is kept, under the retention window above.
-- **Secrets** (API keys, OAuth tokens, passwords for Twitch/OBS/Telegram) — the Windows Credential
-  Manager only. Never a config file, never a log line, never included in a prompt sent to an AI
-  provider.
+- **Secrets** (API keys, OAuth tokens, passwords for Twitch/OBS/Telegram, calendar addresses) — the
+  Windows Credential Manager (the macOS Keychain or a desktop Linux keyring on those systems).
+  Never a config file you edit, never a log line, never included in a prompt sent to an AI
+  provider. The one exception is a Linux server without a desktop session, which has no keyring:
+  there Nox keeps them in `secrets.json` in its data folder, readable by the `nox` user only (see
+  [`RASPBERRY_PI.md`](RASPBERRY_PI.md#secrets-without-a-desktop)); `nox where` says which store a
+  machine uses.
 - **Audit log** — a local, tamper-evident (hash-chained) record of security-relevant events
   (mode/privacy changes, kill switch, permission decisions, config changes, tool executions with
   side effects, memory deletions, plugin lifecycle). The audit log itself never contains secrets
   or raw private content.
+
+### What is *not* protected at rest
+
+Nox does **not** encrypt what it stores. The database (conversations, learned facts, reminders,
+audit log), the logs, the clips, `personality.md` and your vault are ordinary files, and anyone who
+can read the data folder can read them - including a copy of that folder in a backup, in cloud
+sync or on a disk that was not erased. What protects them today is the operating system:
+
+- **Windows:** the data folder lives in your user profile, whose default permissions keep other
+  non-administrator accounts out. An administrator, someone using your unlocked session and a
+  backup of your profile are not kept out. Turn on **BitLocker / device encryption** if the PC can
+  be lost or stolen.
+- **Linux server / Raspberry Pi:** the data folder (`/var/lib/nox`) belongs to the `nox` user with
+  mode 0700, and the update snapshots in `/var/backups/nox` are readable by root only. A removed SD
+  card or disk is readable on any other machine; use full-disk encryption (LUKS) if that matters.
+- **Secrets** are the exception where an OS keyring exists: the Credential Manager, Keychain or
+  keyring encrypts them for your account. The audit log is tamper-*evident* (hash-chained), not
+  confidential.
+
+Encrypting the database itself is not built. Keep the vault out of a cloud folder you do not trust,
+and treat the data folder like your documents.
 
 ## What ever leaves your device, and under what conditions
 
@@ -95,13 +125,29 @@ window's title/process name) and that detection itself never leaves the machine.
 
 ## How to inspect or delete your data
 
+- **Where everything is:** `nox where` prints the data folder and how secrets are stored on this
+  machine. By default the data folder is `%APPDATA%\Nox` on Windows and `/var/lib/nox` on the Linux
+  server (`~/.local/share/Nox` for a plain Linux user); `paths.data_dir` moves it.
 - **Vault**: it is a folder of plain files you already own — open it in any editor, or delete
-  individual notes yourself. Nox never deletes vault content silently.
-- **Transcripts, logs, cache, database**: all under your configured data folder
-  (`%APPDATA%\Nox` by default); delete the folder (while Nox is stopped) to reset to a clean
-  state without touching the vault.
+  individual notes yourself. Nox never deletes vault content silently. **Careful:** unless you
+  chose another place at onboarding, the vault is the `vault` folder *inside* the data folder, and
+  deleting the data folder deletes it too. Check `nox where`, and copy the vault out first.
+- **What Nox learned about you**: Settings → *Was Nox über dich weiß* lists every fact and lets you
+  forget each one; nothing is learned while the privacy mode forbids memory writes.
+- **Transcripts, logs, cache, database, clips, models**: all under the data folder - the
+  `database`, `index`, `logs`, `cache`, `backups`, `data` (clips) and `models` subfolders, with
+  `personality.md` and your `user.yaml` next to them. Logs and raw transcripts expire on their own
+  (14 and 7 days by default). To delete everything Nox keeps, stop Nox and delete the data folder
+  (vault moved out first, see above): that also removes your settings, the audit log, the pairings
+  and the downloaded voice models (about 400 MB to fetch again), and Nox starts as new.
+- **Update snapshots** (Linux server): `/var/backups/nox` holds copies of the data folder, secrets
+  included, from before each update (the last five). Delete them as well
+  (`sudo rm -r /var/backups/nox`) if you wipe the data.
+- **Paired devices** see everything the dashboard shows; remove one with `nox unpair <name>` or in
+  the dashboard's Devices tab ([`NETWORK_ACCESS.md`](NETWORK_ACCESS.md)).
 - **Secrets**: `nox secrets delete <name>`, or remove them directly from Windows Credential
-  Manager.
+  Manager (entries of the service `nox`). Deleting the data folder does **not** remove secrets
+  that live in the Credential Manager.
 - **Audit log**: inspectable from the dashboard; resetting it requires your PIN (it is a security
   control, not a convenience feature).
 

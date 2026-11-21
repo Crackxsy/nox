@@ -270,12 +270,17 @@ cannot be turned off or hidden by configuration — if something is being captur
 
 ## 7. Where your data lives
 
-- **Data folder** (`%APPDATA%\Nox` by default, chosen at onboarding): database, cache, logs,
-  runtime tokens. Deleting it resets Nox to a fresh state but does **not** touch your vault.
-- **Vault folder** (chosen separately at onboarding): your notes/memory in plain files, meant to
-  be readable and portable on their own (e.g. as an Obsidian vault).
-- **Secrets** (Twitch/OBS/Telegram credentials, if you set any): the Windows Credential Manager
-  only — never a file, never a log, never a prompt sent to the AI.
+- **Data folder** (`%APPDATA%\Nox` by default, chosen at onboarding; `nox where` prints it):
+  database, cache, logs, clips, voice models, runtime tokens. Deleting it resets Nox to a fresh
+  state - **and deletes your vault too if the vault is inside it**: the wizard suggests a `vault`
+  folder in the data folder, so move the vault out first if you want to keep it.
+- **Vault folder** (asked for at onboarding): your notes/memory in plain files, meant to be
+  readable and portable on their own (e.g. as an Obsidian vault).
+- None of this is encrypted by Nox; [`PRIVACY.md`](PRIVACY.md) says what protects it and what does
+  not, and how to delete things.
+- **Secrets** (Twitch/OBS/Telegram credentials, if you set any): the Windows Credential Manager —
+  never a config file, never a log, never a prompt sent to the AI. (A Linux server without a
+  desktop keyring keeps them in an owner-only file instead; see [`PRIVACY.md`](PRIVACY.md).)
 
 ## 8. Support
 
