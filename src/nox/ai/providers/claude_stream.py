@@ -29,6 +29,15 @@ class StreamItem(BaseModel):
     #: On `message_start`: the prompt tokens of that model step, by how they are billed.
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
+    #: On `rate_limit`: the window that refused the request (`five_hour`, `seven_day`, ...) and when
+    #: it resets (Unix seconds). Set only for a refusal, never for an allowed or warning status.
+    limit_kind: str = ""
+    limit_resets_at: float | None = None
+
+    @property
+    def refused(self) -> bool:
+        """A `rate_limit` item that says a plan limit refused the request."""
+        return self.kind == "rate_limit" and self.text == "rejected"
 
 
 class ClaudeStreamParser:
@@ -71,11 +80,31 @@ class ClaudeStreamParser:
                 return StreamItem(kind="other")
             return StreamItem(kind="text" if self.saw_partial else "delta", text=text)
         if kind == "rate_limit_event":
-            info = data.get("rate_limit_info") or {}
-            return StreamItem(kind="rate_limit", text=str(info.get("status", "")))
+            return self._rate_limit(data.get("rate_limit_info") or {})
         if kind == "result":
             return self._result(data, sid)
         return StreamItem(kind="other")
+
+    @staticmethod
+    def _rate_limit(info: dict[str, Any]) -> StreamItem:
+        """The status of the plan limits. Only `rejected` carries a refusal: the event itself, or
+        the window inside `unifiedWindows` that refused (the one that resets last when several
+        did, because the request may not go through before all of them have reset)."""
+        status = str(info.get("status", ""))
+        item = StreamItem(kind="rate_limit", text=status)
+        refusals: list[tuple[str, float | None]] = []
+        if status == "rejected":
+            refusals.append((str(info.get("rateLimitType", "")), _as_float(info.get("resetsAt"))))
+        windows = info.get("unifiedWindows")
+        for name, window in windows.items() if isinstance(windows, dict) else ():
+            if isinstance(window, dict) and window.get("status") == "rejected":
+                refusals.append((str(name), _as_float(window.get("resetsAt"))))
+        if not refusals:
+            return item
+        kind, resets_at = max(refusals, key=lambda refusal: refusal[1] or 0.0)
+        return item.model_copy(
+            update={"text": "rejected", "limit_kind": kind, "limit_resets_at": resets_at}
+        )
 
     def _stream_event(self, event: dict[str, Any], sid: str) -> StreamItem:
         etype = event.get("type")

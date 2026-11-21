@@ -6,6 +6,7 @@ mode, budget, load and availability. Claude Code's operational model is validate
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -120,6 +121,9 @@ class ProviderInfo(BaseModel):
     roles: list[AiRole]
     status: HealthStatus = HealthStatus.UNAVAILABLE
     reason: str = ""
+    #: Set while the provider's usage limit is used up: when it may be tried again. The status is
+    #: `unavailable` for that time, and `reason` says which limit it is.
+    limited_until: datetime | None = None
 
 
 class AiProvider(Protocol):

@@ -340,6 +340,21 @@ export interface AiRequestFailed {
   fallback_to?: string | null;
 }
 
+export interface AiProviderLimited {
+  provider: string;
+  kind: string;
+  until: string;
+  estimated?: boolean;
+  fallback?: string;
+}
+
+export interface AiTurnFailed {
+  cause: string;
+  language?: string;
+  until?: string;
+  estimated?: boolean;
+}
+
 export interface PetStateChanged {
   functional: string;
   mood?: Record<string, number>;
