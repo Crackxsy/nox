@@ -10,8 +10,8 @@ core gracefully, then the shell process, then itself.
 from __future__ import annotations
 
 import webbrowser
-from collections.abc import Callable
-from concurrent.futures import Future
+from collections.abc import Callable, Iterable
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,14 @@ from nox.shell.logic import (
     ws_url,
 )
 from nox.shell.logutil import get_logger
+from nox.shell.pet_quiet import (
+    Observed,
+    QuietSettings,
+    decide,
+    frames_message,
+    observe,
+    watched_games,
+)
 from nox.shell.pet_window import PetWindow
 from nox.shell.runtime import (
     IpcEndpoints,
@@ -75,8 +83,16 @@ RECONNECT_INTERVAL_MS = 3000
 PING_FAILURES_BEFORE_RECONNECT = 2
 PING_TIMEOUT_S = 3.0
 CLIENT_ID = "shell:main"
+#: How often the shell looks for a game or a full-screen program (it reads the process list).
+QUIET_POLL_INTERVAL_MS = 3000
+#: `settings.changed` paths that change how the pet behaves around games or where it sits.
+QUIET_SETTING_PATHS = frozenset(
+    {"pet.hide_in_fullscreen", "pet.fps_target", "pet.fps_in_game", "pet.default_monitor"}
+)
 
 PermissionHandler = Callable[[dict[str, Any]], dict[str, Any] | None]
+#: Looks at the machine for the watched games and returns what it saw (`pet_quiet.observe`).
+Observer = Callable[[Iterable[str]], Observed]
 SupervisorKill = Callable[[str, int, str], dict[str, Any]]
 SupervisorStop = Callable[[str, int, str], dict[str, Any]]
 
@@ -85,6 +101,7 @@ class _Signals(QObject):
     event_received = Signal(object)  # envelope dict, emitted from the bridge thread
     hotkey = Signal(object, bool)  # (HotkeyAction, pressed), emitted from pynput thread
     ping = Signal(bool)
+    observed = Signal(object)  # an `Observed`, emitted from the observer thread
 
 
 class ShellApp:
@@ -102,6 +119,8 @@ class ShellApp:
         open_url: Callable[[str], object] = webbrowser.open,
         enable_hotkeys: bool = True,
         create_pet_window: bool = True,
+        observer: Observer = observe,
+        watch_games: bool = True,
     ) -> None:
         self.runtime_dir = runtime_dir or resolve_runtime_dir()
         # Re-read on `settings.changed` only when we own the file (tests inject a dict instead).
@@ -128,6 +147,14 @@ class ShellApp:
         self._signals.event_received.connect(self._on_event_main)
         self._signals.hotkey.connect(self._on_hotkey_main)
         self._signals.ping.connect(self._on_ping_result)
+        self._signals.observed.connect(self._on_observed)
+        # The pet steps aside and slows down around games (`pet_quiet`). `_quiet_hidden` is only
+        # the automatic part: the user's own show/hide choice stays in `model.pet_visible`.
+        self._observer = observer
+        self._watch_games = watch_games
+        self._quiet_hidden = False
+        self._observing = False
+        self._observer_pool: ThreadPoolExecutor | None = None
 
         self.tray = TrayController(
             on_toggle_pet=self.toggle_pet,
@@ -142,7 +169,13 @@ class ShellApp:
         )
         self.pet: PetWindow | None = None
         if create_pet_window:
-            self.pet = PetWindow(self.state, on_moved=self._on_pet_moved)
+            self.pet = PetWindow(
+                self.state,
+                on_moved=self._on_pet_moved,
+                default_monitor=self._default_monitor(),
+            )
+            settings = self._quiet_settings()
+            self.pet.set_frames(frames_message(settings, decide(settings, Observed())))
 
         self._hotkeys: GlobalHotkeys | None = None
         if enable_hotkeys:
@@ -161,6 +194,9 @@ class ShellApp:
         self._ping_failures = 0
         self._pet_page_stale = True
         self._pet_page_token: str | None = None
+        self._quiet_timer = QTimer()
+        self._quiet_timer.setInterval(QUIET_POLL_INTERVAL_MS)
+        self._quiet_timer.timeout.connect(self._poll_quiet)
 
     # -- lifecycle -------------------------------------------------------------------------------
 
@@ -170,8 +206,10 @@ class ShellApp:
             self._load_pet_page()
         self._connect_bridge()
         if self.pet is not None:
-            if self.model.pet_visible:
-                self.pet.show()
+            self._sync_pet_visibility()
+            if self._watch_games:
+                self._quiet_timer.start()
+                self._poll_quiet()
             if self.model.click_through:
                 self.model.click_through = self.pet.set_click_through(True)
         if self._hotkeys is not None and not self._hotkeys.start():
@@ -186,6 +224,9 @@ class ShellApp:
         self._request_supervisor_stop()
         self._ping_timer.stop()
         self._reconnect_timer.stop()
+        self._quiet_timer.stop()
+        if self._observer_pool is not None:
+            self._observer_pool.shutdown(wait=False, cancel_futures=True)
         if self._hotkeys is not None:
             self._hotkeys.stop()
         if self.bridge is not None:
@@ -353,18 +394,77 @@ class ShellApp:
         placeholder.
         """
         paths = payload.get("paths")
-        if not isinstance(paths, list) or "pet.variant" not in paths:
+        if not isinstance(paths, list):
+            return
+        variant_changed = "pet.variant" in paths
+        quiet_changed = any(p in QUIET_SETTING_PATHS for p in paths if isinstance(p, str))
+        if not (variant_changed or quiet_changed):
             return
         if self._config_from_disk:
             self.config = load_config()
         if self.pet is None:
             return
-        log.info("shell.pet_variant_changed", variant=self._pet_variant())
-        self._load_pet_page()
+        if quiet_changed:
+            self.pet.set_default_monitor(self._default_monitor())
+            self._poll_quiet()  # applies the new settings to what is on screen right now
+        if variant_changed:
+            log.info("shell.pet_variant_changed", variant=self._pet_variant())
+            self._load_pet_page()
 
     def _pet_variant(self) -> str:
         pet = self.config.get("pet")
         return str(pet.get("variant", "neutral")) if isinstance(pet, dict) else "neutral"
+
+    def _default_monitor(self) -> str:
+        pet = self.config.get("pet")
+        configured = pet.get("default_monitor", "left") if isinstance(pet, dict) else "left"
+        return str(configured)
+
+    def _quiet_settings(self) -> QuietSettings:
+        return QuietSettings.from_config(self.config)
+
+    # -- quiet around games ----------------------------------------------------------------------
+
+    def _poll_quiet(self) -> None:
+        """Look at the machine on a worker thread (the process list is slow) and apply the result
+        on the main thread. A look still under way is not started twice."""
+        if self.pet is None or self._observing:
+            return
+        self._observing = True
+        if self._observer_pool is None:
+            self._observer_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pet-quiet")
+        watched = watched_games(self.config)
+        self._observer_pool.submit(self._observe_once, watched)
+
+    def _observe_once(self, watched: Iterable[str]) -> None:
+        try:
+            observed = self._observer(watched)
+        except Exception:  # noqa: BLE001 - the pet must stay as it is rather than lose its thread
+            log.exception("shell.observe_failed")
+            observed = None
+        self._signals.observed.emit(observed)
+
+    def _on_observed(self, observed: object) -> None:
+        self._observing = False
+        if isinstance(observed, Observed):
+            self.apply_observation(observed)
+
+    def apply_observation(self, observed: Observed) -> None:
+        """Hide or show the pet and set its frame budget for what was seen (public for tests)."""
+        if self.pet is None:
+            return
+        settings = self._quiet_settings()
+        presence = decide(settings, observed)
+        self.pet.set_frames(frames_message(settings, presence))
+        if presence.hidden != self._quiet_hidden:
+            self._quiet_hidden = presence.hidden
+            log.info("shell.pet_quiet_changed", hidden=presence.hidden)
+            self._sync_pet_visibility()
+
+    def _sync_pet_visibility(self) -> None:
+        """The pet shows when the user wants it and nothing full-screen is in the way."""
+        if self.pet is not None:
+            self.pet.setVisible(self.model.pet_visible and not self._quiet_hidden)
 
     def _handle_permission(self, payload: dict[str, Any]) -> None:
         key = (str(payload.get("agent")), str(payload.get("tool")), str(payload.get("action")))
@@ -427,8 +527,7 @@ class ShellApp:
 
     def toggle_pet(self) -> None:
         self.model.pet_visible = not self.model.pet_visible
-        if self.pet is not None:
-            self.pet.setVisible(self.model.pet_visible)
+        self._sync_pet_visibility()
         self.state.visible = self.model.pet_visible
         self._persist_state()
 

@@ -338,3 +338,181 @@ def test_settings_changed_reloads_the_pet_page_with_the_new_variant(
     assert len(loads) == 2
     app._ping_timer.stop()
     app._reconnect_timer.stop()
+
+
+# ---- the pet around games --------------------------------------------------------------------
+
+
+class _Pet:
+    """What `ShellApp` asks of the pet window around games."""
+
+    def __init__(self) -> None:
+        self.visible: bool | None = None
+        self.frames: list[dict[str, Any]] = []
+        self.monitor = ""
+
+    def setVisible(self, visible: bool) -> None:  # noqa: N802 - Qt API
+        self.visible = visible
+
+    def set_frames(self, message: dict[str, Any]) -> None:
+        self.frames.append(message)
+
+    def set_default_monitor(self, setting: str) -> None:
+        self.monitor = setting
+
+    def x(self) -> int:
+        return 10
+
+    def y(self) -> int:
+        return 20
+
+
+def _quiet_app(tmp_path: Path, factory: Any, pet_config: dict[str, Any] | None = None) -> Any:
+    config: dict[str, Any] = {"identity": {"ui_language": "en"}, "pet": pet_config or {}}
+    app = ShellApp(
+        runtime_dir=make_runtime(tmp_path),
+        config=config,
+        bridge_factory=factory,
+        enable_hotkeys=False,
+        create_pet_window=False,
+        open_url=lambda _url: None,
+    )
+    app.pet = _Pet()
+    return app
+
+
+def test_the_pet_hides_over_a_full_screen_game_and_comes_back(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    from nox.shell.pet_quiet import Observed
+
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app.apply_observation(Observed(game_running=True, fullscreen=True))
+    assert app.pet.visible is False
+    assert app.pet.frames[-1]["gameActive"] is True
+    app.apply_observation(Observed())
+    assert app.pet.visible is True
+    assert app.pet.frames[-1]["gameActive"] is False
+
+
+def test_a_windowed_game_slows_the_pet_but_does_not_hide_it(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    from nox.shell.pet_quiet import Observed
+
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app.apply_observation(Observed(game_running=True))
+    assert app.pet.visible is None, "nothing to hide or show"
+    assert app.pet.frames[-1] == {"fpsTarget": 60, "fpsInGame": 20, "gameActive": True}
+
+
+def test_the_pet_stays_when_hiding_in_full_screen_is_switched_off(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    from nox.shell.pet_quiet import Observed
+
+    app = _quiet_app(tmp_path, fake_bridge_factory[0], {"hide_in_fullscreen": False})
+    app.apply_observation(Observed(fullscreen=True))
+    assert app.pet.visible is None
+    assert app.pet.frames[-1]["gameActive"] is True
+
+
+def test_a_pet_the_user_hid_stays_hidden_when_the_game_ends(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    from nox.shell.pet_quiet import Observed
+
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app.apply_observation(Observed(fullscreen=True))
+    app.toggle_pet()  # the user hides it by hand while it is away
+    assert app.model.pet_visible is False
+    app.apply_observation(Observed())
+    assert app.pet.visible is False
+    app.toggle_pet()
+    assert app.pet.visible is True
+
+
+def test_toggling_the_pet_during_a_full_screen_game_does_not_bring_it_back(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    from nox.shell.pet_quiet import Observed
+
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app.apply_observation(Observed(fullscreen=True))
+    app.toggle_pet()  # hide
+    app.toggle_pet()  # show again - but a game owns the screen
+    assert app.model.pet_visible is True
+    assert app.pet.visible is False
+
+
+def test_what_the_user_chose_is_saved_not_what_the_game_did(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    from nox.shell.pet_quiet import Observed
+
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app.apply_observation(Observed(fullscreen=True))
+    app.toggle_pet()
+    app.toggle_pet()
+    assert app.state.visible is True
+
+
+def test_the_pet_setting_paths_are_applied_when_they_change(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    from nox.shell.pet_quiet import Observed
+
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app.config["pet"] = {"default_monitor": "right", "hide_in_fullscreen": False}
+    app._apply_settings_changed({"paths": ["pet.default_monitor", "pet.hide_in_fullscreen"]})
+    assert app.pet.monitor == "right"
+    app.apply_observation(Observed(fullscreen=True))
+    assert app.pet.visible is None
+
+
+def test_a_look_at_the_machine_runs_off_the_ui_thread_and_is_applied_on_it(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    import threading
+    import time
+
+    from nox.shell.pet_quiet import Observed
+
+    seen: dict[str, Any] = {}
+
+    def observer(watched: Any) -> Observed:
+        seen["thread"] = threading.current_thread()
+        seen["watched"] = tuple(watched)
+        return Observed(fullscreen=True)
+
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app._observer = observer
+    app._poll_quiet()
+    app._poll_quiet()  # a look still under way is not started twice
+    deadline = time.monotonic() + 10
+    while app.pet.visible is None and time.monotonic() < deadline:
+        qapp.processEvents()
+    assert app.pet.visible is False
+    assert seen["thread"] is not threading.main_thread()
+    assert seen["watched"] == ("RocketLeague.exe",)
+    assert app._observing is False
+    app._observer_pool.shutdown(wait=True)
+
+
+def test_an_observer_that_fails_leaves_the_pet_as_it_is(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app._observing = True
+    app._on_observed(None)
+    assert app._observing is False
+    assert app.pet.visible is None
+
+
+def test_a_settings_event_with_odd_paths_is_ignored(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    app = _quiet_app(tmp_path, fake_bridge_factory[0])
+    app._apply_settings_changed({"paths": [["pet.default_monitor"], 3, None]})
+    app._apply_settings_changed({"paths": "pet.default_monitor"})
+    assert app.pet.monitor == ""

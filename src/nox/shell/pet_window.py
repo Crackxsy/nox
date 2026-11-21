@@ -18,20 +18,29 @@ GPU: hardware compositing stays on by default. Set the environment variable
 where GPU compositing under a transparent, click-through, always-on-top window misbehaves. Qt reads
 `QTWEBENGINE_CHROMIUM_FLAGS` when the `QApplication` is constructed, so `nox.shell.app.run` sets it
 before that call; this module only documents and consumes the resulting behaviour.
+
+Placement and quiet: the window opens on `pet.default_monitor` unless its saved position is still
+on a screen, is pulled back whenever it ends up off the screens that exist (a monitor unplugged, a
+smaller resolution, a drag too far), and can be told that a game is running so the page draws at
+`pet.fps_in_game` instead of `pet.fps_target`. The rules themselves are plain functions in
+`nox.shell.pet_layout` and `nox.shell.pet_quiet`; this class only applies their answers.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QUrl
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QGuiApplication, QMouseEvent, QScreen
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget
 
 from nox.shell import win32
 from nox.shell.logutil import get_logger
+from nox.shell.pet_layout import Monitor, Rect, corrected_rect, initial_rect
 from nox.shell.runtime import ShellState
 
 log = get_logger(__name__)
@@ -40,8 +49,23 @@ DRAG_THRESHOLD_PX = 6
 PET_FLAGS = (
     Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
 )
+#: The page reads its frame rate from this global and re-reads it on the `nox-pet-frames` event.
+FRAMES_GLOBAL = "__noxPetFrames"
+FRAMES_EVENT = "nox-pet-frames"
 
 _pet_profile_instance: QWebEngineProfile | None = None
+
+
+def qt_monitors() -> list[Monitor]:
+    """The screens Qt knows, as plain monitors: their usable area (without the task bar)."""
+    primary = QGuiApplication.primaryScreen()
+    monitors: list[Monitor] = []
+    for screen in QGuiApplication.screens():
+        area = screen.availableGeometry()
+        monitors.append(
+            Monitor(Rect(area.x(), area.y(), area.width(), area.height()), screen == primary)
+        )
+    return monitors
 
 
 def _pet_profile() -> QWebEngineProfile:
@@ -68,10 +92,15 @@ class PetWindow(QWidget):
         state: ShellState,
         *,
         on_moved: Callable[[int, int], None] | None = None,
+        default_monitor: str = "left",
+        monitors: Callable[[], list[Monitor]] = qt_monitors,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_moved = on_moved
+        self._default_monitor = default_monitor
+        self._monitors = monitors
+        self._frames: dict[str, Any] | None = None
         self._press_global: QPoint | None = None
         self._press_window: QPoint | None = None
         self._dragging = False
@@ -81,10 +110,15 @@ class PetWindow(QWidget):
 
         self.setWindowFlags(PET_FLAGS)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # Coming back after a full-screen game must not take the keyboard away from whatever the
+        # user went back to.
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setWindowTitle("Nox")
         self.resize(state.width, state.height)
-        if state.x is not None and state.y is not None:
-            self.move(state.x, state.y)
+        saved = (state.x, state.y) if state.x is not None and state.y is not None else None
+        placed = initial_rect(saved, (state.width, state.height), default_monitor, monitors())
+        if placed is not None:
+            self.move(placed.x, placed.y)
 
         self.view = QWebEngineView(self)
         self.view.setPage(QWebEnginePage(_pet_profile(), self.view))
@@ -92,7 +126,8 @@ class PetWindow(QWidget):
         self.view.page().setBackgroundColor(Qt.GlobalColor.transparent)
         self.view.settings().setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)
         self.view.setGeometry(0, 0, state.width, state.height)
-        self.view.loadFinished.connect(self._install_filter)
+        self.view.loadFinished.connect(self._on_load_finished)
+        self._watch_screens()
 
     # -- loading ---------------------------------------------------------------------------------
 
@@ -106,9 +141,76 @@ class PetWindow(QWidget):
         """Honest offline page when the core HTTP server is not there (Process Model, shell)."""
         self.view.setHtml(OFFLINE_HTML, QUrl("about:offline"))
 
+    def _on_load_finished(self, ok: bool) -> None:
+        self._install_filter(ok)
+        if ok:
+            self._push_frames()  # a reloaded page starts from its defaults again
+
     def resizeEvent(self, event: object) -> None:  # noqa: N802 - Qt API
         self.view.setGeometry(0, 0, self.width(), self.height())
         super().resizeEvent(event)  # type: ignore[arg-type]
+
+    # -- placement -------------------------------------------------------------------------------
+
+    def keep_visible(self, *, notify: bool = True) -> bool:
+        """Move the window back onto the screens that exist, if it is not on them. Returns whether
+        it moved. Called when a screen comes, goes or changes, and after a drag."""
+        current = Rect(self.x(), self.y(), self.width(), self.height())
+        fixed = corrected_rect(current, self._default_monitor, self._monitors())
+        if fixed == current:
+            return False
+        self.move(fixed.x, fixed.y)
+        log.info("pet_window.moved_back_on_screen")
+        if notify and self._on_moved is not None:
+            self._on_moved(self.x(), self.y())
+        return True
+
+    def set_default_monitor(self, setting: str) -> None:
+        """`pet.default_monitor` changed: it applies the next time the window needs a place."""
+        self._default_monitor = setting
+
+    def _watch_screens(self) -> None:
+        app = QGuiApplication.instance()
+        if not isinstance(app, QGuiApplication):
+            return
+        for screen in QGuiApplication.screens():
+            self._watch(screen)
+        app.screenAdded.connect(self._on_screen_added)
+        app.screenRemoved.connect(self._on_screens_changed)
+
+    def _watch(self, screen: QScreen) -> None:
+        screen.availableGeometryChanged.connect(self._on_screens_changed)
+
+    def _on_screen_added(self, screen: QScreen) -> None:
+        self._watch(screen)
+        self.keep_visible()
+
+    def _on_screens_changed(self, *_args: object) -> None:
+        self.keep_visible()
+
+    # -- quiet -----------------------------------------------------------------------------------
+
+    def frames_script(self) -> str | None:
+        """The script that tells the page its frame budget, or None before it was set."""
+        if self._frames is None:
+            return None
+        return (
+            f"window.{FRAMES_GLOBAL}={json.dumps(self._frames)};"
+            f"window.dispatchEvent(new CustomEvent({json.dumps(FRAMES_EVENT)}));"
+        )
+
+    def set_frames(self, message: dict[str, Any]) -> None:
+        """Tell the page how fast to draw (`nox.shell.pet_quiet.frames_message`). Remembered, and
+        sent again after every page load."""
+        if message == self._frames:
+            return
+        self._frames = message
+        self._push_frames()
+
+    def _push_frames(self) -> None:
+        script = self.frames_script()
+        if script is not None:
+            self.view.page().runJavaScript(script)
 
     # -- click-through ---------------------------------------------------------------------------
 
@@ -151,8 +253,10 @@ class PetWindow(QWidget):
                 self._press_global = None
                 self._press_window = None
                 self._dragging = False
-                if was_drag and self._on_moved is not None:
-                    self._on_moved(self.x(), self.y())
+                if was_drag:
+                    self.keep_visible(notify=False)  # a drag too far comes back, then is saved
+                    if self._on_moved is not None:
+                        self._on_moved(self.x(), self.y())
         return False  # never swallow: the page still gets clicks for pet.interact
 
 

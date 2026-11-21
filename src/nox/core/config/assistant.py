@@ -234,11 +234,21 @@ PET_VARIANTS: tuple[str, ...] = get_args(PetVariant)
 
 class PetConfig(StrictSection):
     renderer: Literal["web"] = "web"
+    #: Where the pet window opens when it has no saved position or the saved one is no longer on
+    #: a screen: `left`, `right`, `primary`, or a number counted from the left (`1` is the
+    #: leftmost monitor). A monitor that is not there today falls back to the primary one.
     default_monitor: str = "left"
     always_on_top: bool = True
     click_through_when_idle: bool = False
+    #: Frame rate of the pet page while nothing is running that needs the machine (the sleep
+    #: tiers still go lower). Applied by the shell, so it needs the shell, not just the core.
     fps_target: int = Field(default=60, ge=1, le=240)
+    #: Frame rate while a game runs or something owns the screen; never above `fps_target`.
     fps_in_game: int = Field(default=20, ge=1, le=240)
+    #: Hide the pet while a program owns the whole screen (a full-screen game, a presentation)
+    #: instead of floating over it; it comes back when that ends. Switching it off keeps the pet
+    #: visible and only slows it to `fps_in_game`.
+    hide_in_fullscreen: bool = True
     greeting_enabled: bool = True
     #: Block unsolicited speech - the greeting and proactive hints, never a reply to the user -
     #: while privacy mode is private or offline: the pet stays silent and just shows it is ready.
