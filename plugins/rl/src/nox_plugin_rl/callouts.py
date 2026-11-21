@@ -1,7 +1,11 @@
-"""Prepared-clip callout engine: priority (danger > tactical_error > pattern > opportunity >
+"""Callout engine: priority (danger > tactical_error > pattern > opportunity >
 rare_praise), cooldown + 2-4/minute rate cap, silence-on-low-confidence. Only
 wires rules whose trigger is satisfiable from the `rl.event` kinds Stage 1 actually produces (goal,
 overtime, boost_low, demo - `save` is replay-only, never real-time).
+
+Every rule names a prepared clip and carries its words in German and English. The voice layer
+plays the clip when one is installed under that id and speaks the words in the active voice when
+it is not, so a callout is never silent just because no recording exists.
 
 The initial clip list ("Don't challenge, you're last.", "Rotate back post.",...) is mostly
 position-based and therefore *not* reachable in Stage 1 (no object detection until Stage 2) -
@@ -28,12 +32,25 @@ _TIER_PRIORITY = {
 
 
 @dataclass(frozen=True, slots=True)
+class CalloutText:
+    """What a callout says, in each language Nox speaks. It is spoken in the active voice when
+    the pre-rendered clip is not installed - which is the normal case, since no clip ships."""
+
+    de: str
+    en: str
+
+    def for_language(self, language: str) -> str:
+        """English for any `en...` setting, German otherwise (the default speech language)."""
+        return self.en if language.strip().lower().startswith("en") else self.de
+
+
+@dataclass(frozen=True, slots=True)
 class CalloutRule:
     id: str
     tier: str  # danger | tactical_error | pattern | opportunity | rare_praise
     kind: str  # rl.event kind this reacts to
     clip_id: str
-    fallback_text: str
+    text: CalloutText
     condition: Callable[[dict[str, Any]], bool] = field(default=lambda payload: True)
 
 
@@ -41,7 +58,10 @@ class CalloutRule:
 class CalloutDecision:
     rule_id: str
     clip_id: str
-    fallback_text: str
+    text: CalloutText
+
+    def text_for(self, language: str) -> str:
+        return self.text.for_language(language)
 
 
 def _team_scored(payload: dict[str, Any], team: str) -> bool:
@@ -58,21 +78,21 @@ DEFAULT_RULES: tuple[CalloutRule, ...] = (
         tier="danger",
         kind="demo",
         clip_id="careful_demo",
-        fallback_text="Careful, demo.",
+        text=CalloutText(de="Vorsicht, Demo.", en="Careful, demo."),
     ),
     CalloutRule(
         id="rl.callout.boost_low",
         tier="tactical_error",
         kind="boost_low",
         clip_id="boost_low_play_safe",
-        fallback_text="Low boost, play safe.",
+        text=CalloutText(de="Wenig Boost, spiel sicher.", en="Low boost, play safe."),
     ),
     CalloutRule(
         id="rl.callout.goal_against",
         tier="tactical_error",
         kind="goal",
         clip_id="goal_against_reset",
-        fallback_text="Reset, next kickoff.",
+        text=CalloutText(de="Neu sortieren, nächster Anstoß.", en="Reset, next kickoff."),
         condition=lambda p: _team_scored(p, "opponent"),
     ),
     CalloutRule(
@@ -80,14 +100,14 @@ DEFAULT_RULES: tuple[CalloutRule, ...] = (
         tier="opportunity",
         kind="overtime",
         clip_id="overtime_stay_focused",
-        fallback_text="Overtime. Stay focused.",
+        text=CalloutText(de="Verlängerung. Bleib fokussiert.", en="Overtime. Stay focused."),
     ),
     CalloutRule(
         id="rl.callout.goal_for",
         tier="rare_praise",
         kind="goal",
         clip_id="goal_for_nice",
-        fallback_text="Nice goal.",
+        text=CalloutText(de="Schönes Tor.", en="Nice goal."),
         condition=lambda p: _team_scored(p, "self"),
     ),
 )
@@ -143,9 +163,7 @@ class CalloutEngine:
                 continue
             self._last_fired[rule.clip_id] = now
             self._recent.append(now)
-            return CalloutDecision(
-                rule_id=rule.id, clip_id=rule.clip_id, fallback_text=rule.fallback_text
-            )
+            return CalloutDecision(rule_id=rule.id, clip_id=rule.clip_id, text=rule.text)
         return None
 
     def calls_in_last_minute(self) -> int:

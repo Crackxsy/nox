@@ -127,7 +127,12 @@ def install(core: Any) -> RlRuntime:
             events_retain_days=cfg.retention.events_days,
             matches_retain_days=cfg.retention.matches_days,
         ),
-        callouts=RlCalloutService(core.bus, _build_callout_engine(cfg), core.speaker),
+        callouts=RlCalloutService(
+            core.bus,
+            _build_callout_engine(cfg),
+            core.speaker,
+            language=lambda: _speech_language(core),
+        ),
         announcer=RlMatchAnnouncer(core.bus, core.speaker),
         summaries=RlSessionSummaryService(core.bus, matches, router=core.router, vault_writer=None),
     )
@@ -140,6 +145,13 @@ def install(core: Any) -> RlRuntime:
     runtime.backfill_queue = _build_backfill_queue(core, cfg, replays)
     _install_vision(core, runtime)
     return runtime
+
+
+def _speech_language(core: Any) -> str:
+    """The language a callout is spoken in: `de` or `en`. `auto` means "the language of the
+    message", which a callout has none of, so it falls back to German like the proactive layer."""
+    configured = str(core.config.identity.speech_language)
+    return configured if configured in ("de", "en") else "de"
 
 
 def _build_callout_engine(cfg: Any) -> CalloutEngineProtocol:

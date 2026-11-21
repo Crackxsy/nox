@@ -63,7 +63,9 @@ class FakeEngine:
     class _Decision:
         rule_id = "rl.callout.test"
         clip_id = "test_clip"
-        fallback_text = "Test callout."
+
+        def text_for(self, language: str) -> str:
+            return {"de": "Testansage.", "en": "Test callout."}[language]
 
     def evaluate(self, **_kwargs: Any) -> Any:
         return self._Decision()
@@ -177,6 +179,38 @@ async def test_callout_service_only_ever_speaks_on_the_private_channel(bus: Asyn
     assert len(speaker.said) == 1
     assert speaker.said[0].channel is Channel.PRIVATE
     assert speaker.said[0].prepared_clip == "test_clip"
+
+
+@pytest.mark.parametrize(("language", "words"), [("de", "Testansage."), ("en", "Test callout.")])
+async def test_callout_carries_its_words_in_the_speech_language(
+    bus: AsyncEventBus, language: str, words: str
+) -> None:
+    """The clip may not be installed; the words are what the voice layer speaks instead."""
+    speaker = FakeSpeaker()
+    service = RlCalloutService(bus, FakeEngine(), speaker, language=lambda: language)
+    service.start()
+    await bus.publish(
+        Event(
+            name=E.RL_EVENT,
+            payload={"match_id": 1, "kind": "demo", "source": "hud", "confidence": 0.9},
+        )
+    )
+    request = speaker.said[0]
+    assert (request.text, request.language, request.prepared_clip) == (words, language, "test_clip")
+
+
+async def test_callout_language_is_read_when_the_callout_fires(bus: AsyncEventBus) -> None:
+    speaker = FakeSpeaker()
+    chosen = ["de"]
+    service = RlCalloutService(bus, FakeEngine(), speaker, language=lambda: chosen[0])
+    service.start()
+    event = Event(
+        name=E.RL_EVENT, payload={"match_id": 1, "kind": "demo", "source": "hud", "confidence": 0.9}
+    )
+    await bus.publish(event)
+    chosen[0] = "en"
+    await bus.publish(event)
+    assert [r.language for r in speaker.said] == ["de", "en"]
 
 
 async def test_match_announcer_speaks_the_short_summary_privately(bus: AsyncEventBus) -> None:
