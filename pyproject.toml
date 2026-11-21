@@ -187,9 +187,9 @@ layers = ["nox.node.hub | nox.node.device", "nox.node.wire"]
 ignore_imports = [
     # The core builds the routed specs of the file tools from the same argument models and refusal
     # words the device runs (`PathArgs`, `write_risk`, `move_refusal`, ...). They call the write
-    # rules inside `device.safe_fs`, so they cannot move to `wire` before `safe_fs` is split into
-    # its pure rules and its file-system access.
-    "nox.node.hub.install.routes -> nox.node.device.hands",
+    # rules in `device.safe_fs.formats` and `device.safe_fs.text_checks`, so they cannot move to
+    # `wire` before those rules are lifted out of `device`.
+    "nox.node.hub.install.routes -> nox.node.device.hands.args",
     # The voice satellite builds its pipeline from the voice worker's builders. `worker.main`
     # reaches the core application only through its `voice setup` command (a lazy import of
     # `entrypoints`), which a device never runs. It goes once the builders live in a module of

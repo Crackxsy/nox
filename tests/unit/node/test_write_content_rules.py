@@ -11,7 +11,9 @@ from typing import Any
 import pytest
 
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, WriteArgs, hand_tools
+from nox.node.device.hands.args import WriteArgs
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.tools import NodeRefusal
 from nox.node.wire.manifest import GROUPS, NodeManifest
 from nox.node.wire.protocol import NoxCallMeta
@@ -152,7 +154,7 @@ async def test_a_link_cannot_turn_a_data_name_into_a_hidden_folder(
 
 
 def test_structured_formats_are_always_high_and_passive_ones_medium_when_new() -> None:
-    from nox.node.device.hands import write_risk
+    from nox.node.device.hands.args import write_risk
     from nox.node.hub.install.routes import write_risk_of
 
     for name in ("a.json", "a.YAML", "a.yml"):

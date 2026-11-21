@@ -12,7 +12,8 @@ from typing import Any
 
 import pytest
 
-from nox.node.device.hands import NodeHands, PathArgs, WriteArgs
+from nox.node.device.hands.args import PathArgs, WriteArgs
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.home import NodeHome
 from nox.node.device.safe_fs.core import OutsideFolders
 from nox.node.device.safe_fs.folders import Folders
@@ -324,9 +325,9 @@ def test_a_windows_listing_whose_folder_changed_is_refused(
 async def test_a_huge_listing_stops_counting(
     fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import hands as hands_module
+    from nox.node.device.hands import files as files_module
 
-    monkeypatch.setattr(hands_module, "MAX_SCAN", 3)
+    monkeypatch.setattr(files_module, "MAX_SCAN", 3)
     for i in range(6):
         (fs_world["root"] / "notes" / f"f{i}.txt").write_text("x", encoding="utf-8")
     listing = await hand_tools_for(fs_world)["file.list"].handler(PathArgs(path="notes"))
@@ -334,7 +335,7 @@ async def test_a_huge_listing_stops_counting(
 
 
 def test_utf8_cut_by_the_limit_stays_utf8() -> None:
-    from nox.node.device.hands import _decode
+    from nox.node.device.hands.files import _decode
 
     cut = ("aaa" + "é").encode("utf-8")[:-1]
     assert _decode(cut, True) == ("aaa", "utf-8")

@@ -11,7 +11,8 @@ from typing import Any
 import pytest
 
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, hand_tools
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.hub.install.routes import shell_target
 from nox.node.hub.registry import NodeRegistry
 from nox.node.hub.router import routed_spec
@@ -61,7 +62,7 @@ def test_a_padded_call_is_refused_never_shortened() -> None:
 
 
 def _node_shell_spec(confirmer: bool = True) -> Any:
-    from nox.node.device.hands import ShellArgs
+    from nox.node.device.hands.args import ShellArgs
 
     laptop = registry_entry("a" * 32, "Laptop", tools={"shell.run": "high"})
     laptop.confirmer = confirmer
@@ -141,7 +142,7 @@ def test_the_device_dialog_and_the_core_target_render_alike() -> None:
 
 
 def test_free_text_is_not_a_path_but_a_path_still_is(tmp_path: Path) -> None:
-    from nox.node.device.hands import ShellArgs as _Shell  # noqa: F401 - the model the gate validates
+    from nox.node.device.hands.args import ShellArgs as _Shell  # noqa: F401 - the model the gate validates
 
     gate = NodeGate(
         hand_tools(
@@ -160,7 +161,7 @@ def test_free_text_is_not_a_path_but_a_path_still_is(tmp_path: Path) -> None:
 def test_a_long_write_shows_head_tail_hash_and_what_is_not_shown() -> None:
     import hashlib
 
-    from nox.node.device.hands import PREVIEW_CHARS, write_summary
+    from nox.node.device.hands.args import PREVIEW_CHARS, write_summary
 
     text = "A" * PREVIEW_CHARS + "M" * 50 + "\n" + "Z" * PREVIEW_CHARS
     shown = write_summary("a.txt", text, append=False, overwrite=True)
@@ -175,7 +176,7 @@ def test_a_long_write_shows_head_tail_hash_and_what_is_not_shown() -> None:
 
 def test_the_write_is_rendered_alike_on_the_core_and_on_the_device() -> None:
     from nox.node.device.agent import confirmation_text
-    from nox.node.device.hands import PREVIEW_CHARS, write_summary
+    from nox.node.device.hands.args import PREVIEW_CHARS, write_summary
     from nox.node.hub.install.routes import write_target
     from nox.node.wire.protocol import render
 

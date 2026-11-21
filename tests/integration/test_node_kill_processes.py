@@ -73,7 +73,8 @@ from pathlib import Path
 from nox.node.device import agent as agent_module
 from nox.node.device.agent import NodeAgent
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, default_sandbox, hand_tools
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands, default_sandbox
 from nox.node.device.home import NodeHome
 from nox.node.device.keystore import NodeKeyStore
 from nox.node.wire.manifest import GROUPS, NodeManifest

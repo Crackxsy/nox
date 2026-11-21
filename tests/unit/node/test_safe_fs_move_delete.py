@@ -17,14 +17,9 @@ from typing import Any
 import pytest
 
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import (
-    MoveArgs,
-    NodeHands,
-    PathArgs,
-    delete_refusal,
-    hand_tools,
-    move_refusal,
-)
+from nox.node.device.hands.args import MoveArgs, PathArgs, delete_refusal, move_refusal
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.safe_fs import move_delete, posix, windows_files
 from nox.node.device.safe_fs.core import OutsideFolders
 from nox.node.device.safe_fs.folders import Folders

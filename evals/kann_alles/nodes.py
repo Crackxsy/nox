@@ -45,7 +45,8 @@ from typing import Any
 from pydantic import BaseModel
 
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, hand_tools
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.tools import NodeRefusal, NodeTool, default_tools
 from nox.node.hub.registry import NodeEntry, NodeRegistry
 from nox.node.wire.arguments import NoArgs

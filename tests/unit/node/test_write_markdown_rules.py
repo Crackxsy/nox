@@ -109,9 +109,9 @@ async def test_a_block_assembled_from_appends_is_refused(empty_fs_world: dict[st
 async def test_appending_to_a_huge_markdown_file_is_refused(
     empty_fs_world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nox.node.device import hands as hands_module
+    from nox.node.device.hands import files as files_module
 
-    monkeypatch.setattr(hands_module, "MAX_WRITE_BYTES", 10)
+    monkeypatch.setattr(files_module, "MAX_WRITE_BYTES", 10)
     (empty_fs_world["root"] / "notes" / "lang.md").write_text("x" * 20, encoding="utf-8")
     assert await _refused_existing(empty_fs_world, "notes/lang.md") == "too_large"
 

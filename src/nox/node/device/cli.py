@@ -44,7 +44,8 @@ from nox.node.device.confirmed import (
 )
 from nox.node.device.enroll import EnrollError, enroll
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, default_sandbox, hand_tools
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands, default_sandbox
 from nox.node.device.home import NodeHome, restrict_dir_to_owner
 from nox.node.device.keystore import NodeKeyStore
 from nox.node.device.safe_fs.folders import broad_folder

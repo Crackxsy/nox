@@ -17,7 +17,9 @@ import pytest
 from nox.lan.tls import TlsMaterial
 from nox.node.device.agent import NodeAgent
 from nox.node.device.gate import NodeGate
-from nox.node.device.hands import NodeHands, WriteArgs, hand_tools
+from nox.node.device.hands.args import WriteArgs
+from nox.node.device.hands.catalogue import hand_tools
+from nox.node.device.hands.node_hands import NodeHands
 from nox.node.device.home import NodeHome, NodeIdentity
 from nox.node.device.keystore import NodeKeyStore
 from nox.node.device.safe_fs.core import OutsideFolders
