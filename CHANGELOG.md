@@ -435,6 +435,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   barge-in, so later sentences of the interrupted answer are not spoken either. An interruption that
   lands between two sentences, or while `tts.started` is still on its way, is no longer lost, and
   the reason of an interruption is no longer overwritten by the next sentence.
+- **Twitch chat: Nox answers only when he is spoken to, and what he writes is filtered.** Every
+  `!word` used to count as "addressed to Nox", so another bot's `!lurk` or `!discord` got a model
+  answer, and Nox's own `!rps` or `!funken` got one on top of the real answer. A command now
+  belongs to its owner: only `!nox <question>` (or the bot's login), his name or `@` login as a
+  whole word ("equinox" no longer counts), or a reply to one of his messages is answered by the
+  model. Every line Nox sends - model answer, command reply, `!funken`, the AI-voice notice - now
+  passes an output filter before the moderation gate: invisible characters are removed; links
+  (schemes, `www.`, anything shaped like a domain, spaced or spelled-out dots, IP addresses,
+  punycode, full-width and look-alike letters) and lines that start with `/`, `.`, `!` or a
+  backslash are not sent at all; `@everyone`-style mass mentions lose their `@`, at most two
+  `@` mentions stay, and a line is cut to 450 characters. The log names the rule and the length of a
+  refused line, never its text. The `stream` profile's `twitch` ban and timeout rules are marked as
+  reserved (no plugin has such a tool), and the Funken docs say plainly that Funken can be earned
+  today and spending comes later.
 - **Nodes, external review of part 4:** the node's gate never resolves or opens anything the
   core sent (a UNC path in a notice could make Windows reach out over SMB) and checks the receipt
   before any argument; path aliases (`..`, `~`, 8.3, UNC, device paths) are refused on the text,
