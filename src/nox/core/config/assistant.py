@@ -245,9 +245,9 @@ class PetConfig(StrictSection):
     fps_target: int = Field(default=60, ge=1, le=240)
     #: Frame rate while a game runs or something owns the screen; never above `fps_target`.
     fps_in_game: int = Field(default=20, ge=1, le=240)
-    #: Hide the pet while a program owns the whole screen (a full-screen game, a presentation)
-    #: instead of floating over it; it comes back when that ends. Switching it off keeps the pet
-    #: visible and only slows it to `fps_in_game`.
+    #: Hide the pet while a program owns the whole screen (a full-screen game, film or
+    #: presentation) instead of floating over it; it comes back when that ends. Switching it off
+    #: keeps the pet visible and only slows it to `fps_in_game`.
     hide_in_fullscreen: bool = True
     greeting_enabled: bool = True
     #: Block unsolicited speech - the greeting and proactive hints, never a reply to the user -

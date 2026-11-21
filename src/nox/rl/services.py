@@ -258,11 +258,15 @@ class RlCalloutService:
         speaker: Speaker | None,
         *,
         language: Callable[[], str] = lambda: "de",
+        may_speak: Callable[[], bool] = lambda: True,
     ) -> None:
         self._bus = bus
         self._engine = engine
         self._speaker = speaker
         self._language = language
+        #: Whether Nox may speak at all right now. A callout is spoken text now, so an owner who
+        #: muted Nox hears nothing from it either (`nox.core.speech_policy`).
+        self._may_speak = may_speak
         self._unsub: Any = None
 
     def start(self) -> None:
@@ -285,6 +289,9 @@ class RlCalloutService:
             return
         if self._speaker is None:
             log.info("rl.callout_unspoken", rule_id=decision.rule_id, reason="no speaker wired")
+            return
+        if not self._may_speak():
+            log.info("rl.callout_unspoken", rule_id=decision.rule_id, reason="muted")
             return
         language = self._language()
         request = TtsRequest(

@@ -480,8 +480,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the configuration but nothing read them. The shell now watches for a game (the watched-game list,
   anti-cheat software, or a program that owns the whole screen) and tells the pet page to draw at
   `pet.fps_in_game` instead of `pet.fps_target`; `pet.fps_target` raises the top rate too. The new
-  `pet.hide_in_fullscreen` (on by default) hides the pet over a full-screen game or presentation
-  and brings it back, without taking the keyboard focus, when that ends - a pet you hid by hand
+  `pet.hide_in_fullscreen` (on by default) hides the pet over any full-screen program (a game, a film, a
+  presentation) and brings it back, without taking the keyboard focus, when that ends - a pet you hid by hand
   stays hidden. The window opens on `pet.default_monitor` (`left`, `right`, `primary`, or a number
   from the left; a monitor that is not plugged in falls back to the primary one) and is moved back
   onto a screen when its monitor goes away, the resolution shrinks or it is dragged out of sight.

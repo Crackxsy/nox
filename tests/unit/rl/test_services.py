@@ -344,3 +344,18 @@ async def test_a_spoken_callout_is_published(bus: AsyncEventBus) -> None:
 
     assert len(callouts) == 1
     assert callouts[0].payload["clip_id"] == "test_clip"
+
+
+async def test_a_muted_nox_says_no_callout(bus: AsyncEventBus) -> None:
+    speaker = FakeSpeaker()
+    allowed = [False]
+    service = RlCalloutService(bus, FakeEngine(), speaker, may_speak=lambda: allowed[0])
+    service.start()
+    event = Event(
+        name=E.RL_EVENT, payload={"match_id": 1, "kind": "demo", "source": "hud", "confidence": 0.9}
+    )
+    await bus.publish(event)
+    assert speaker.said == []
+    allowed[0] = True
+    await bus.publish(event)
+    assert len(speaker.said) == 1

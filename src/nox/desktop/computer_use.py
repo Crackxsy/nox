@@ -431,9 +431,7 @@ class ComputerUse:
                 "a game is running; Nox does not send input anywhere" + self._because()
             )
         if self._game_in_foreground():
-            raise GameRunningError(
-                "a game is in the foreground; nothing was sent" + self._because()
-            )
+            raise GameRunningError(self._locked("a game is in the foreground; nothing was sent"))
         if not self._enabled():
             self.end_session("switched off")
             raise ComputerUseError("computer use is switched off")
@@ -454,6 +452,12 @@ class ComputerUse:
         cause = self._lock_cause().strip()
         return f" ({cause})" if cause else ""
 
+    def _locked(self, default: str) -> str:
+        """The refusal for a locked machine: the guard's own cause when it names one (a full-screen
+        film is not "a game in the foreground"), else `default`."""
+        cause = self._lock_cause().strip()
+        return f"{cause}, so Nox does not type or click" if cause else default
+
     def blocks_confirmation(self) -> bool:
         """True while a session is open and for `CONFIRMATION_QUIET_S` after Nox's last event:
         the core then refuses an "allow" answer and privileged dashboard requests, so no click
@@ -468,9 +472,7 @@ class ComputerUse:
         refused into Nox's windows by the same check as a click, while a confirmation waits, and -
         like a click - never while a game runs or is in front."""
         if self._game_running() or self._game_in_foreground():
-            return (
-                "a game is running or in front; Nox does not send input anywhere" + self._because()
-            )
+            return self._locked("a game is running or in front; Nox does not send input anywhere")
         if self._confirmation_pending():
             return (
                 "a Nox confirmation is waiting for your answer; nothing is typed until it is given"

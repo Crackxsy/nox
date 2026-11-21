@@ -98,3 +98,25 @@ def test_the_frame_script_is_data_only(qapp: Any) -> None:
     script = window.frames_script() or ""
     assert script.startswith("window.__noxPetFrames=")
     assert script.count(";") == 2
+
+
+def test_a_removed_screen_that_is_still_listed_does_not_keep_the_window(
+    qapp: Any, monkeypatch: Any
+) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QRect, QTimer
+
+    moved: list[tuple[int, int]] = []
+    window = PetWindow(
+        ShellState(x=RIGHT.area.x + 100, y=100),
+        on_moved=lambda x, y: moved.append((x, y)),
+        monitors=lambda: [LEFT, RIGHT],  # Qt still lists the screen it announces as removed
+    )
+    rechecks: list[int] = []
+    monkeypatch.setattr(QTimer, "singleShot", staticmethod(lambda ms, _fn: rechecks.append(ms)))
+    gone = SimpleNamespace(availableGeometry=lambda: QRect(1920, 0, 2560, 1400))
+    window._on_screen_removed(gone)
+    assert LEFT.area.overlap_area(Rect(window.x(), window.y(), window.width(), window.height()))
+    assert moved == [(window.x(), window.y())]
+    assert rechecks == [500], "the screens are looked at once more shortly after"

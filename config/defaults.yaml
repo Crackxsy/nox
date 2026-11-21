@@ -195,8 +195,9 @@ pet:
   click_through_when_idle: false
   fps_target: 60                  # pet frame rate in normal use (the sleep tiers go lower)
   fps_in_game: 20                 # pet frame rate while a game runs or the screen is taken over
-  hide_in_fullscreen: true        # hide the pet over a full-screen game or presentation; it
-                                   # returns when that ends. false: stay, at fps_in_game.
+  hide_in_fullscreen: true        # hide the pet over any full-screen program (game, film,
+                                   # presentation); it returns when that ends. false: stay, at
+                                   # fps_in_game.
   greeting_enabled: true         # speak the startup greeting (the speech policy still decides)
   quiet_in_private_modes: true    # no unsolicited speech (greeting, hints) while privacy mode is
                                    # private or offline; replies to you are never blocked

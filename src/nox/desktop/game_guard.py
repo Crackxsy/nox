@@ -13,8 +13,8 @@ them has to be perfect:
 Any check that cannot answer says "locked": a lock that fails open is no lock. The answer is a
 `GameLockState` with a stable `code` and a plain-words `cause`, so the user can be told why Nox
 holds still instead of just being refused. A node answers the same question in
-`nox.node.device.world.GameLock`; `tests/unit/desktop/test_game_guard.py` holds the two to the
-same verdict for every combination of inputs.
+`nox.node.device.world.game_lock.GameLock`; `tests/unit/desktop/test_game_guard.py` holds the two
+to the same verdict for every combination of inputs.
 
 This module only observes: process names, service state and the shell's notification state.
 Nothing here sends input or reads another process's memory.
@@ -89,7 +89,7 @@ class GameGuard:
             if name in self._names() or is_anti_cheat(name):
                 return "a game is in front"
             if self.screen_state() in LOCKING_NOTIFICATION_STATES:
-                return "a full-screen program or presentation owns the screen"
+                return "a full-screen program (a game, a film or a presentation) owns the screen"
         except Exception:  # noqa: BLE001 - cannot tell: locked
             return "the state of the screen could not be read"
         return None

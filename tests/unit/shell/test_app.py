@@ -516,3 +516,31 @@ def test_a_settings_event_with_odd_paths_is_ignored(
     app._apply_settings_changed({"paths": [["pet.default_monitor"], 3, None]})
     app._apply_settings_changed({"paths": "pet.default_monitor"})
     assert app.pet.monitor == ""
+
+
+def test_the_configured_default_monitor_reaches_the_pet_window(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    """`pet.default_monitor` and the frame budget are handed to the window the shell creates."""
+    built: list[dict[str, Any]] = []
+
+    class FakeWindow(_Pet):
+        def __init__(self, state: Any, **kwargs: Any) -> None:
+            super().__init__()
+            built.append(kwargs)
+
+    config: dict[str, Any] = {
+        "identity": {"ui_language": "en"},
+        "pet": {"default_monitor": "right", "fps_target": 75, "fps_in_game": 12},
+    }
+    app = ShellApp(
+        runtime_dir=make_runtime(tmp_path),
+        config=config,
+        bridge_factory=fake_bridge_factory[0],
+        enable_hotkeys=False,
+        open_url=lambda _url: None,
+        pet_window_factory=FakeWindow,
+    )
+    assert built[0]["default_monitor"] == "right"
+    assert isinstance(app.pet, FakeWindow)
+    assert app.pet.frames[-1] == {"fpsTarget": 75, "fpsInGame": 12, "gameActive": False}

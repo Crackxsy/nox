@@ -32,7 +32,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QUrl
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QMouseEvent, QScreen
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -40,7 +40,7 @@ from PySide6.QtWidgets import QWidget
 
 from nox.shell import win32
 from nox.shell.logutil import get_logger
-from nox.shell.pet_layout import Monitor, Rect, corrected_rect, initial_rect
+from nox.shell.pet_layout import Monitor, Rect, corrected_rect, initial_rect, without_monitor
 from nox.shell.runtime import ShellState
 
 log = get_logger(__name__)
@@ -52,6 +52,9 @@ PET_FLAGS = (
 #: The page reads its frame rate from this global and re-reads it on the `nox-pet-frames` event.
 FRAMES_GLOBAL = "__noxPetFrames"
 FRAMES_EVENT = "nox-pet-frames"
+#: After a screen is removed, the screens are looked at once more: the list Qt hands out can still
+#: be settling when the signal arrives.
+SCREEN_RECHECK_MS = 500
 
 _pet_profile_instance: QWebEngineProfile | None = None
 
@@ -152,11 +155,15 @@ class PetWindow(QWidget):
 
     # -- placement -------------------------------------------------------------------------------
 
-    def keep_visible(self, *, notify: bool = True) -> bool:
+    def keep_visible(self, *, notify: bool = True, leaving: Rect | None = None) -> bool:
         """Move the window back onto the screens that exist, if it is not on them. Returns whether
-        it moved. Called when a screen comes, goes or changes, and after a drag."""
+        it moved. Called when a screen comes, goes or changes, and after a drag. `leaving` is the
+        usable area of a screen that is being removed and must not count any more."""
         current = Rect(self.x(), self.y(), self.width(), self.height())
-        fixed = corrected_rect(current, self._default_monitor, self._monitors())
+        monitors = self._monitors()
+        if leaving is not None:
+            monitors = without_monitor(monitors, leaving)
+        fixed = corrected_rect(current, self._default_monitor, monitors)
         if fixed == current:
             return False
         self.move(fixed.x, fixed.y)
@@ -176,7 +183,7 @@ class PetWindow(QWidget):
         for screen in QGuiApplication.screens():
             self._watch(screen)
         app.screenAdded.connect(self._on_screen_added)
-        app.screenRemoved.connect(self._on_screens_changed)
+        app.screenRemoved.connect(self._on_screen_removed)
 
     def _watch(self, screen: QScreen) -> None:
         screen.availableGeometryChanged.connect(self._on_screens_changed)
@@ -184,6 +191,11 @@ class PetWindow(QWidget):
     def _on_screen_added(self, screen: QScreen) -> None:
         self._watch(screen)
         self.keep_visible()
+
+    def _on_screen_removed(self, screen: QScreen) -> None:
+        area = screen.availableGeometry()
+        self.keep_visible(leaving=Rect(area.x(), area.y(), area.width(), area.height()))
+        QTimer.singleShot(SCREEN_RECHECK_MS, self.keep_visible)
 
     def _on_screens_changed(self, *_args: object) -> None:
         self.keep_visible()

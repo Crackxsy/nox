@@ -121,6 +121,7 @@ class ShellApp:
         create_pet_window: bool = True,
         observer: Observer = observe,
         watch_games: bool = True,
+        pet_window_factory: Callable[..., PetWindow] = PetWindow,
     ) -> None:
         self.runtime_dir = runtime_dir or resolve_runtime_dir()
         # Re-read on `settings.changed` only when we own the file (tests inject a dict instead).
@@ -169,7 +170,7 @@ class ShellApp:
         )
         self.pet: PetWindow | None = None
         if create_pet_window:
-            self.pet = PetWindow(
+            self.pet = pet_window_factory(
                 self.state,
                 on_moved=self._on_pet_moved,
                 default_monitor=self._default_monitor(),

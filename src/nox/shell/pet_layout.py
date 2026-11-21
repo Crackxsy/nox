@@ -30,6 +30,7 @@ __all__ = [
     "corrected_rect",
     "initial_rect",
     "pick_monitor",
+    "without_monitor",
 ]
 
 #: How much of the window has to be on a monitor before it counts as visible.
@@ -77,6 +78,12 @@ class Monitor:
 
     area: Rect
     primary: bool = False
+
+
+def without_monitor(monitors: Sequence[Monitor], area: Rect) -> list[Monitor]:
+    """`monitors` minus the one whose usable area is `area`. Qt announces a screen's removal while
+    the screen can still be in its own list, so the one that is going is taken out by hand."""
+    return [monitor for monitor in monitors if monitor.area != area]
 
 
 def _left_to_right(monitors: Sequence[Monitor]) -> list[Monitor]:

@@ -13,7 +13,7 @@ import pytest
 
 from nox.desktop.computer_use import ComputerUse, ComputerUseError, GameRunningError
 from nox.desktop.game_guard import CODE_IN_FRONT, CODE_RUNNING, GameGuard
-from nox.node.device.world import GameLock
+from nox.node.device.world.game_lock import GameLock
 
 #: `SHQueryUserNotificationState`: not busy / full-screen Direct3D / presentation / busy / app.
 FREE, BUSY, FULLSCREEN, PRESENTATION, APP = 5, 2, 3, 4, 7
@@ -226,3 +226,81 @@ def test_typing_is_refused_while_a_game_runs_or_is_in_front() -> None:
     machine.screen = FULLSCREEN
     refusal = computer.typing_refusal(100, "Editor")
     assert refusal is not None and "full-screen" in refusal
+
+
+# ---- the lists the lock stands on, and the words of a refusal --------------------------------
+
+
+def test_the_anti_cheat_services_and_drivers_are_the_documented_set() -> None:
+    """A service dropped from the list is a game the lock no longer sees: changing the list is a
+    decision, so it has to change here too."""
+    from nox.desktop.anticheat import ANTI_CHEAT_SERVICES
+
+    assert set(ANTI_CHEAT_SERVICES) == {
+        "vgc",
+        "vgk",
+        "EasyAntiCheat",
+        "EasyAntiCheat_EOS",
+        "EasyAntiCheatSys",
+        "BEService",
+        "BEDaisy",
+        "FACEIT",
+        "FACEITService",
+        "faceit",
+        "ACE-BASE",
+        "ACE-GAME",
+        "AntiCheatExpert Service",
+        "SGuardSvc",
+        "npggsvc",
+        "GameMon",
+        "PnkBstrA",
+        "PnkBstrB",
+        "xhunter1",
+        "XIGNCODE",
+        "mhyprot",
+        "mhyprot2",
+        "mhyprot3",
+        "atvi-randgrid_sr",
+        "atvi-randgrid_msstore",
+        "ESEADriver2",
+        "denuvo-anticheat",
+        "Denuvo Anti-Cheat",
+        "EQU8",
+        "NeacSafe64",
+    }
+    assert len(ANTI_CHEAT_SERVICES) == len(set(ANTI_CHEAT_SERVICES)), "no entry twice"
+
+
+def test_a_full_screen_program_is_not_called_a_game() -> None:
+    """A film in full screen locks input too, and the refusal must not claim a game is there."""
+    machine = Machine(screen=FULLSCREEN)
+    computer = _computer(machine, Hands())
+    machine.screen = FREE
+    computer.start_session(minutes=5, max_actions=10)
+    machine.screen = FULLSCREEN
+    with pytest.raises(GameRunningError) as refused:
+        computer.keys("ctrl+s")
+    message = str(refused.value)
+    assert "full-screen program" in message
+    assert "a game is in the foreground" not in message
+    assert "does not type or click" in message
+    typing = computer.typing_refusal(100, "Editor")
+    assert typing is not None
+    assert "full-screen program" in typing
+
+
+def test_without_a_named_cause_the_old_wording_stays() -> None:
+    machine = Machine()
+    guard = machine.guard()
+    computer = ComputerUse(
+        enabled=lambda: True,
+        game_running=lambda: False,
+        game_in_foreground=guard.in_front,
+        nox_pids=lambda: {4242},
+        sender=Hands,  # type: ignore[arg-type]
+        audit=lambda *_args: None,
+    )
+    computer.start_session(minutes=5, max_actions=10)
+    machine.front = "examplegame.exe"
+    with pytest.raises(GameRunningError, match="a game is in the foreground; nothing was sent"):
+        computer.keys("ctrl+s")

@@ -152,3 +152,21 @@ def test_overlap_and_distance_helpers() -> None:
     assert a.overlap_area(Rect(10, 0, 5, 5)) == 0  # sharing an edge is not overlapping
     assert a.overlap_area(Rect(20, 20, 5, 5)) == 0
     assert a.center_distance_sq(Rect(10, 0, 10, 10)) == 20 * 20
+
+
+def test_a_monitor_that_is_going_is_taken_out_by_its_area() -> None:
+    from nox.shell.pet_layout import without_monitor
+
+    assert without_monitor([LEFT, RIGHT], RIGHT.area) == [LEFT]
+    assert without_monitor([LEFT, RIGHT], Rect(1, 2, 3, 4)) == [LEFT, RIGHT]
+
+
+def test_a_window_on_a_monitor_that_is_still_listed_but_going_is_brought_back() -> None:
+    """Qt may still list the screen it announces as removed: without taking it out, the window
+    would count as visible and stay on a screen that is gone."""
+    from nox.shell.pet_layout import without_monitor
+
+    window = Rect(RIGHT.area.x + 100, 100, *SIZE)
+    assert corrected_rect(window, "left", [LEFT, RIGHT]) == window  # the stale list keeps it
+    fixed = corrected_rect(window, "left", without_monitor([LEFT, RIGHT], RIGHT.area))
+    assert LEFT.area.overlap_area(fixed) == fixed.area
