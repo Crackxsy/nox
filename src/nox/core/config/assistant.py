@@ -8,6 +8,7 @@ from typing import Literal, get_args
 
 from pydantic import Field, field_validator, model_validator
 
+from nox.core.config.games import DEFAULT_GAME_PROCESSES
 from nox.core.config.types import StrictSection, require_ordered
 from nox.core.logging import get_logger
 
@@ -368,7 +369,7 @@ class SensorGameConfig(StrictSection):
     """
 
     poll_interval_s: float = Field(default=5.0, gt=0.0)
-    process_names: list[str] = Field(default_factory=lambda: ["RocketLeague.exe"])
+    process_names: list[str] = Field(default_factory=lambda: list(DEFAULT_GAME_PROCESSES))
 
 
 class SensorsConfig(StrictSection):
