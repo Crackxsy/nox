@@ -92,6 +92,56 @@ async def test_kill_switch_cancels_and_blocks():
     await orch.stop()
 
 
+async def test_a_barge_in_reported_by_the_worker_stops_the_turn_that_is_still_speaking():
+    """Sentences of the interrupted turn must not be spoken after the interruption: the worker
+    drops what it had accepted, and the core stops producing more."""
+    orch, bus, router, speaker, _ = make()
+    router.delay = 0.3
+    await orch.start()
+    task = asyncio.create_task(orch.handle_text("lange Antwort bitte"))
+    await asyncio.sleep(0.05)
+
+    await bus.publish(
+        Event(name=E.TTS_INTERRUPTED, payload={"utterance_id": "x:1", "reason": "barge_in"})
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert speaker.interrupts == ["new_input", "barge_in"]  # the first one is the turn's own start
+    assert speaker.said == []
+    await orch.stop()
+
+
+async def test_other_interruptions_do_not_cancel_the_turn():
+    """The core's own interruptions come back as events too; they must not cancel anything."""
+    orch, bus, router, speaker, _ = make()
+    router.delay = 0.05
+    await orch.start()
+    task = asyncio.create_task(orch.handle_text("kurze Antwort"))
+    await asyncio.sleep(0.01)
+
+    for reason in ("new_input", "kill_switch", "stop", "panic"):
+        await bus.publish(
+            Event(name=E.TTS_INTERRUPTED, payload={"utterance_id": "x:1", "reason": reason})
+        )
+    turn = await task
+
+    assert turn.response and speaker.said
+    assert "barge_in" not in speaker.interrupts
+    await orch.stop()
+
+
+async def test_a_barge_in_event_with_no_turn_running_does_nothing():
+    orch, bus, _, speaker, _ = make()
+    await orch.start()
+
+    await bus.publish(Event(name=E.TTS_INTERRUPTED, payload={"reason": "barge_in"}))
+    await asyncio.sleep(0.01)
+
+    assert speaker.interrupts == []
+    await orch.stop()
+
+
 async def test_memory_policy_blocks_recording():
     orch, _, _, _, turns = make(policy=AllowPolicy(False))
     await orch.start()

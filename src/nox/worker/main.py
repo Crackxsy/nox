@@ -1,8 +1,9 @@
 """Voice worker process: hosts STT + TTS + audio devices and talks to the core hub over IPC.
 
-The worker side of the process model: `worker.register`, a heartbeat every two seconds, the inbound
-requests `tts.speak`, `tts.stop`, `stt.transcribe`, `voice.ptt` and `voice.mute`, and a
-subscription to `security.*` and `privacy.*` so capture stops or re-gates when the core says so.
+The worker side of the process model: `worker.register`, a heartbeat every two seconds (which also
+says whether the microphone works), the inbound requests `tts.speak`, `tts.stop`,
+`stt.transcribe`, `voice.ptt`, `voice.mute` and `voice.latency`, and a subscription to
+`security.*` and `privacy.*` so capture stops or re-gates when the core says so.
 `--service stt|tts|voice` selects which engines are loaded; the shipped configuration runs
 everything in one `voice` worker. The worker token comes from the environment (`NOX_WORKER_TOKEN`),
 never from the command line, and is never logged.
@@ -153,6 +154,7 @@ class VoiceWorker:
         # Built only inside run(), after `worker.register` has returned the core's merged config:
         # register first, apply the config, only then build and load engines - never before.
         self.pipeline: VoicePipeline | None = None
+        self._pipeline_started = False
         self.register_response: dict[str, Any] = {}
 
     # ---- gate + emit -----------------------------------------------------------------------------
@@ -180,6 +182,7 @@ class VoiceWorker:
             self.client.handle("stt.transcribe", self._on_stt_transcribe)
         self.client.handle("voice.ptt", self._on_voice_ptt)
         self.client.handle("voice.mute", self._on_voice_mute)
+        self.client.handle("voice.latency", self._on_voice_latency)
         if "tts" in self.capabilities:
             self.client.handle("voice.devices.list", self._on_devices_list)
             self.client.handle("voice.devices.set", self._on_devices_set)
@@ -234,6 +237,13 @@ class VoiceWorker:
         task.add_done_callback(self._emit_tasks.discard)
 
     async def _on_tts_stop(self, payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
+        """Stop what is playing *and* every sentence already accepted for this turn.
+
+        `tts.speak` answers at once and plays from a task, so by the time the core stops a turn
+        several of its sentences may sit in the pipeline waiting for the one that is playing. The
+        pipeline's interruption ends that whole generation; sentences the core sends afterwards
+        (the next turn) are a new generation and play.
+        """
         await self._pipeline_ready().interrupt(reason=str(payload.get("reason", "stop")))
         return {"ok": True}
 
@@ -254,6 +264,11 @@ class VoiceWorker:
     async def _on_voice_mute(self, payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
         await self._pipeline_ready().set_muted(bool(payload.get("muted", True)))
         return {"ok": True}
+
+    async def _on_voice_latency(self, _payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
+        """P50/P95 of the last turns, from the end of the utterance to the first audio chunk."""
+        summary = self._pipeline_ready().latency_summary()
+        return {"ok": True, **summary.model_dump(mode="json")}
 
     async def _on_devices_list(self, _payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
         """The output devices Settings offers; enumerated here, where the audio stack lives."""
@@ -328,8 +343,21 @@ class VoiceWorker:
             status=lambda: self.status.status,
             interval_s=self.heartbeat_s,
             load=self._load_fn,
+            extra=self._capture_report,
             service=self.service,
         )
+
+    def _capture_report(self) -> dict[str, Any]:
+        """The microphone's state for the heartbeat, so the core's voice health can show it.
+
+        Only once the pipeline has started and while the worker is running: in safe mode (kill
+        switch, kill phrase) the pipeline is stopped on purpose, which is not a failing microphone.
+        """
+        pipeline = self.pipeline
+        if pipeline is None or not self._pipeline_started or self.status.status != "running":
+            return {}
+        status, reason = pipeline.capture_health()
+        return {"capture": str(status), "capture_reason": reason}
 
     async def run(self) -> None:
         # connect -> worker.register -> apply the core's config -> only then build and load the
@@ -346,6 +374,7 @@ class VoiceWorker:
         self.pipeline = self._pipeline_factory(self.emit, self.capture_allowed, self.voice_config)
         self.status.status = "running"
         await self.pipeline.start()
+        self._pipeline_started = True
         await self.client.request("worker.ready", {"service": self.service})
         log.info("worker.running", service=self.service, capabilities=list(self.capabilities))
         try:
@@ -622,6 +651,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
     a requested shutdown from a crash.
     """
     from nox.ipc.client import IpcClient
+    from nox.voice.audio import input_device_names
 
     devices = _Devices()
 
@@ -648,6 +678,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
             capture_allowed=capture_allowed,
             config=pipeline_config_from(cfg),
             wake_gate=build_wake_gate(cfg),
+            input_devices=input_device_names,
         )
 
     client = IpcClient(

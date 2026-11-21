@@ -14,6 +14,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from nox.core.events import HealthStatus
+from nox.voice.latency import LatencySummary
 
 
 class Channel(StrEnum):
@@ -29,6 +30,9 @@ class Transcript(BaseModel):
     confidence: float
     duration_ms: int
     latency_ms: int
+    #: Reserved for a streaming STT engine that reports interim text. No engine sets it yet (every
+    #: engine returns one final transcript), and `voice.transcript_partial` is likewise not
+    #: emitted; the field stays so a streaming engine needs no contract change.
     partial: bool = False
 
 
@@ -115,3 +119,4 @@ class VoicePipeline(Protocol):
     async def interrupt(self, *, reason: str) -> None: ...
     async def refresh_gate(self) -> None: ...
     def capture_health(self) -> tuple[HealthStatus, str]: ...
+    def latency_summary(self) -> LatencySummary: ...

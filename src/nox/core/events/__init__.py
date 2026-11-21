@@ -124,6 +124,7 @@ from nox.core.events.system import (
     TranscriptReady,
     TtsLevel,
     TtsStarted,
+    VoiceCaptureNotice,
     VoiceKillPhrase,
 )
 
@@ -227,5 +228,6 @@ __all__ = [
     "TwitchEvent",
     "TwitchModerationAction",
     "TwitchResynced",
+    "VoiceCaptureNotice",
     "VoiceKillPhrase",
 ]

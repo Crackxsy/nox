@@ -14,7 +14,8 @@ from pydantic import ValidationError
 from nox.core.events import E, validate_payload
 from nox.voice.audio import block_level
 from nox.voice.base import Channel, TtsRequest
-from nox.voice.pipeline import LEVEL_HZ, DefaultVoicePipeline, PipelineConfig
+from nox.voice.levels import LEVEL_HZ
+from nox.voice.pipeline import DefaultVoicePipeline, PipelineConfig
 from nox.voice.vad import Segmenter
 from tests.unit.voice.conftest import FakeAudioInput, FakeAudioOutput, FakeStt, FakeTts
 

@@ -105,6 +105,7 @@ from nox.tools.builtin import register_v01_tools
 from nox.tools.executor import ToolExecutor
 from nox.tools.registry import ToolRegistry
 from nox.voice.base import Channel, TtsRequest
+from nox.voice.capture_notice import CaptureNoticeSpeaker
 
 log = get_logger(__name__)
 
@@ -500,6 +501,12 @@ class NoxCore:
             stream_plugins=self._stream_plugin_statuses,
         )
         await self.orchestrator.start()
+        notices = CaptureNoticeSpeaker(
+            policy=self.speech_policy,
+            speaker=self.speaker,
+            language=lambda: self.config.identity.ui_language,
+        )
+        self.bus.subscribe(E.VOICE_CAPTURE_NOTICE, notices.on_event)
 
     def _end_permission_session(self, _conversation: str) -> None:
         """A conversation was discarded: "remember for this session" ends with it."""

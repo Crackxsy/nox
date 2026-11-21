@@ -66,3 +66,13 @@ def test_a_node_never_reaches_the_hub_and_sees_no_event() -> None:
 
 def test_an_unknown_role_sees_nothing() -> None:
     assert role_may_see("intruder", "system.started") is False
+
+
+@pytest.mark.parametrize("role", ["pet", "overlay", "remote", "plugin"])
+def test_the_microphone_notice_stays_off_stream_pages_phones_and_plugins(role: str) -> None:
+    assert role_may_see(role, "voice.capture_notice") is False
+
+
+@pytest.mark.parametrize("role", ["dashboard", "shell", "device", "core"])
+def test_the_microphone_notice_reaches_the_users_own_dashboard_and_the_core(role: str) -> None:
+    assert role_may_see(role, "voice.capture_notice") is True

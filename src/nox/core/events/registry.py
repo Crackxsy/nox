@@ -105,6 +105,7 @@ from nox.core.events.system import (
     TranscriptReady,
     TtsLevel,
     TtsStarted,
+    VoiceCaptureNotice,
     VoiceKillPhrase,
 )
 
@@ -116,6 +117,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     E.STATE_CHANGED: StateChanged,
     E.VOICE_TRANSCRIPT_READY: TranscriptReady,
     E.VOICE_KILL_PHRASE: VoiceKillPhrase,
+    E.VOICE_CAPTURE_NOTICE: VoiceCaptureNotice,
     E.TTS_STARTED: TtsStarted,
     E.TTS_LEVEL: TtsLevel,
     E.AI_REQUEST_STARTED: AiRequestStarted,

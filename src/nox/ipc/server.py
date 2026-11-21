@@ -97,6 +97,9 @@ CLOSE_GOING_AWAY = 1001
 #: only inside the plugin that produces it.
 REDACTED_FROM: tuple[tuple[str, frozenset[str]], ...] = (
     ("voice.transcript_*", frozenset({"pet", "overlay", "remote", "plugin"})),
+    # Why the microphone failed, in the words of the audio stack: a diagnostic for the user's own
+    # dashboard, not for a stream page, a phone bridge or a plugin.
+    ("voice.capture_notice", frozenset({"pet", "overlay", "remote", "plugin"})),
     ("ai.response_*", frozenset({"pet", "overlay", "remote", "plugin"})),
     ("memory.*", frozenset({"pet", "overlay", "remote", "plugin"})),
     ("chat.*", frozenset({"pet", "overlay", "remote", "plugin"})),

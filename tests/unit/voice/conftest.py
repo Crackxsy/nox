@@ -49,6 +49,13 @@ class FakeAudioInput:
         self.opens = 0
         #: Set by a test to make the frame loop fail, like a device disappearing mid-session.
         self.fail_with: Exception | None = None
+        #: Set by a test to make opening the device fail, like an unplugged headset.
+        self.open_error: Exception | None = None
+        self.starts = 0
+        #: When given, every `start()` and every attempt to open the device is stamped with it.
+        self.clock: Callable[[], float] | None = None
+        self.start_times: list[float] = []
+        self.open_attempts: list[float] = []
 
     @property
     def sample_rate(self) -> int:
@@ -59,12 +66,24 @@ class FakeAudioInput:
         return self._enabled
 
     async def set_enabled(self, value: bool) -> None:
+        if value and self.clock is not None:
+            self.open_attempts.append(self.clock())
+        if value and self.open_error is not None:
+            raise self.open_error
         if value and not self._enabled:
             self.opens += 1
         self._enabled = value
 
     async def start(self) -> None:
         self.started = True
+        self.starts += 1
+        if self.clock is not None:
+            self.start_times.append(self.clock())
+        if self.stopped:
+            # Like the real input: a fresh start has a fresh queue, without the sentinel `stop()`
+            # left in the old one.
+            self.queue = asyncio.Queue()
+            self.stopped = False
 
     async def stop(self) -> None:
         self.stopped = True

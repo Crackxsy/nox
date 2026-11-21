@@ -4,7 +4,7 @@ model router, the pet, plugins and Rocket League."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,14 @@ class VoiceKillPhrase(BaseModel):
     by: str = "voice"
     reason: str = "kill phrase"
     language: str = ""
+
+
+class VoiceCaptureNotice(BaseModel):
+    """The voice worker's microphone changed state in a way the user should hear about."""
+
+    notice: Literal["deaf", "recovered", "unstable"]
+    #: Why, in words for a log or a tile; never audio or transcript content.
+    reason: str = ""
 
 
 class TtsStarted(BaseModel):
