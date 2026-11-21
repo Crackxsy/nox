@@ -95,7 +95,8 @@ Everything committed here - code, comments, tests, fixtures, docs, commit messag
 text - is public:
 
 - **English** for code, comments, docs, commits and pull requests (user-facing UI strings are
-  translated through the i18n files).
+  translated through the i18n files). Three guides also exist in German (`docs/*.de.md`); where
+  a German and an English version differ, English is authoritative.
 - **No personal data**: no real names, places, e-mail addresses, employers, or details of anyone's
   machine, hardware or accounts. Use neutral examples (`Alex`, `Springfield`, `example.com`).
 - **No local paths**: no drive letters or home folders from a real machine. Use `tmp_path` in tests,
