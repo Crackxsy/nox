@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -222,27 +223,50 @@ class RlPersistenceService:
 # ---- callout engine -----------------------------------------------------------------
 
 
+class CalloutDecisionLike(Protocol):
+    """What `RlCalloutService` needs from a decision: which rule fired, which prepared clip
+    belongs to it, and the words to speak when that clip is not installed."""
+
+    rule_id: str
+    clip_id: str
+
+    def text_for(self, language: str) -> str: ...
+
+
 class CalloutEngineProtocol(Protocol):
     def evaluate(
         self, *, kind: str, source: str, confidence: float, payload: dict[str, Any] | None = None
-    ) -> Any: ...
+    ) -> CalloutDecisionLike | None: ...
 
 
 class RlCalloutService:
     """`rl.event` -> the rule engine -> `TtsRequest(channel=PRIVATE, prepared_clip=...)`.
 
-    Callouts play as pre-rendered clips on the private channel only, never through text synthesis
-    into the stream. `rl.callout` is published only for a callout the user actually heard, with
-    the measured event-to-audio-start latency; a failed or impossible playback is logged instead,
-    so the transparency log never claims a callout that did not happen.
+    Callouts go to the private channel only, never into the stream. The request names the
+    prepared clip and carries the callout's words in the speech language: the voice layer plays
+    the clip when one is installed and speaks the words in the active voice when it is not (no
+    clip ships with Nox), so a callout is not silent for want of a recording. `rl.callout` is
+    published for a callout handed to the voice with the measured hand-over latency; a failed
+    hand-over is logged instead, so the transparency log never claims a callout that did not
+    happen.
     """
 
     def __init__(
-        self, bus: EventBus, engine: CalloutEngineProtocol, speaker: Speaker | None
+        self,
+        bus: EventBus,
+        engine: CalloutEngineProtocol,
+        speaker: Speaker | None,
+        *,
+        language: Callable[[], str] = lambda: "de",
+        may_speak: Callable[[], bool] = lambda: True,
     ) -> None:
         self._bus = bus
         self._engine = engine
         self._speaker = speaker
+        self._language = language
+        #: Whether Nox may speak at all right now. A callout is spoken text now, so an owner who
+        #: muted Nox hears nothing from it either (`nox.core.speech_policy`).
+        self._may_speak = may_speak
         self._unsub: Any = None
 
     def start(self) -> None:
@@ -266,9 +290,14 @@ class RlCalloutService:
         if self._speaker is None:
             log.info("rl.callout_unspoken", rule_id=decision.rule_id, reason="no speaker wired")
             return
+        if not self._may_speak():
+            log.info("rl.callout_unspoken", rule_id=decision.rule_id, reason="muted")
+            return
+        language = self._language()
         request = TtsRequest(
             utterance_id=uuid.uuid4().hex,
-            text=decision.fallback_text,
+            text=decision.text_for(language),
+            language=language,
             channel=Channel.PRIVATE,
             prepared_clip=decision.clip_id,
         )

@@ -3,6 +3,7 @@ and silence-on-low-confidence - table-driven."""
 
 from __future__ import annotations
 
+import pytest
 from nox_plugin_rl.callouts import CalloutEngine
 
 
@@ -91,3 +92,41 @@ def test_private_channel_only_is_enforced_by_the_caller_contract() -> None:
     decision = engine.evaluate(kind="overtime", source="hud", confidence=0.9, payload={})
     assert decision is not None
     assert not hasattr(decision, "channel")
+
+
+# ---- what a callout says --------------------------------------------------------------------
+
+
+def test_every_rule_has_its_words_in_both_languages() -> None:
+    """No clip ships, so these words are what is actually heard."""
+    from nox_plugin_rl.callouts import DEFAULT_RULES
+
+    for rule in DEFAULT_RULES:
+        assert rule.text.de.strip(), rule.id
+        assert rule.text.en.strip(), rule.id
+        assert rule.text.de != rule.text.en, f"{rule.id}: the German text is a copy of the English"
+
+
+def test_clip_ids_are_unique_and_valid_for_the_clip_loader() -> None:
+    from nox_plugin_rl.callouts import DEFAULT_RULES
+
+    from nox.voice.tts.clips import CLIP_ID
+
+    ids = [rule.clip_id for rule in DEFAULT_RULES]
+    assert len(ids) == len(set(ids))
+    assert all(CLIP_ID.match(clip_id) for clip_id in ids)
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [("de", "Vorsicht, Demo."), ("en", "Careful, demo."), ("EN", "Careful, demo."),
+     ("en-GB", "Careful, demo."), ("", "Vorsicht, Demo."), ("fr", "Vorsicht, Demo.")],
+)  # fmt: skip
+def test_the_decision_speaks_the_requested_language_and_defaults_to_german(
+    language: str, expected: str
+) -> None:
+    now, _ = _clock()
+    engine = CalloutEngine(now_fn=now)
+    decision = engine.evaluate(kind="demo", source="hud", confidence=0.9, payload={})
+    assert decision is not None
+    assert decision.text_for(language) == expected

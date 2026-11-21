@@ -55,6 +55,9 @@ export interface PetInput {
   voiceLevel?: number;
   /** Counts `tts.level` events, so the view can tell a fresh level from a stale one. */
   voiceSeq?: number;
+  /** The most frames per second the pet may draw (`pet.fps_target`, or `pet.fps_in_game` while a
+   * game runs); the sleep tiers only go lower. Defaults to 60. */
+  fpsCeiling?: number;
 }
 
 export type Ring = 'none' | 'pulse' | 'orbit' | 'segments' | 'shield' | 'cross' | 'alert' | 'bar';
@@ -160,19 +163,27 @@ export function isExpression(x: string): x is Expression {
 
 export const clamp = (x: number, lo = 0, hi = 1): number => Math.min(hi, Math.max(lo, x));
 
-/** Frame-rate policy: sleep tiers and unavailability reduce work. */
-export function fpsFor(sleep: SleepTier, functional: Functional, connected: boolean): number {
-  if (!connected) return 10;
-  if (functional === 'unavailable') return 10;
+export const DEFAULT_FPS_CEILING = 60;
+
+/** Frame-rate policy: sleep tiers and unavailability reduce work; `ceiling` is the configured
+ * top rate (`pet.fps_target`, or `pet.fps_in_game` while a game runs) and nothing exceeds it. */
+export function fpsFor(
+  sleep: SleepTier,
+  functional: Functional,
+  connected: boolean,
+  ceiling: number = DEFAULT_FPS_CEILING,
+): number {
+  if (!connected) return Math.min(10, ceiling);
+  if (functional === 'unavailable') return Math.min(10, ceiling);
   switch (sleep) {
     case 'none':
-      return 60;
+      return ceiling;
     case 'normal':
-      return 30;
+      return Math.min(30, ceiling);
     case 'high_load':
-      return 15;
+      return Math.min(15, ceiling);
     case 'offline':
-      return 20;
+      return Math.min(20, ceiling);
   }
 }
 
@@ -195,7 +206,7 @@ export function deriveAnim(input: PetInput, palette: BasePalette = NEUTRAL_PALET
 
   const energy = clamp(mood.energy + d(delta.energy));
   const p: AnimParams = {
-    fps: fpsFor(input.sleep, input.functional, input.connected),
+    fps: fpsFor(input.sleep, input.functional, input.connected, input.fpsCeiling),
     breathRate: 0.22 + energy * 0.28,
     breathAmp: 0.03 + energy * 0.03,
     bodyScale: 1,

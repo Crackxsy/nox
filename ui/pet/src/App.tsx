@@ -12,6 +12,7 @@ import {
   petVariantChanged,
   variantFromStateReply,
 } from './ipc';
+import { fpsCeiling, useFrameBudget } from './frameBudget';
 import { Pet } from './Pet';
 import {
   INITIAL_STATE,
@@ -337,7 +338,9 @@ export function App({
     if (reason) console.info('pet.rig_backend', backend, reason);
   }, []);
 
-  const input = useMemo(() => toInput(state), [state]);
+  // The shell says whether a game is running; the pet then draws at `pet.fps_in_game`.
+  const frameCeiling = fpsCeiling(useFrameBudget());
+  const input = useMemo(() => ({ ...toInput(state), fpsCeiling: frameCeiling }), [state, frameCeiling]);
   const params = useMemo(() => {
     const derived = deriveAnim(input, {
       hue: variant.palette.bodyHue,

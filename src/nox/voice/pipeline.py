@@ -51,6 +51,7 @@ from nox.voice.latency import LatencySummary, LatencyTracker, TurnTicket, noting
 from nox.voice.levels import pace_levels
 from nox.voice.stt.wake_gate import GateDecision, WakeGate
 from nox.voice.stt.wake_word import WakeWordMatcher
+from nox.voice.tts.clips import ClipNotFoundError
 from nox.voice.vad import EnergyVad, Segmenter, SegmentEvent, SegmentKind
 
 log = get_logger(__name__)
@@ -571,7 +572,7 @@ class DefaultVoicePipeline:
             await self._emit(E.TTS_STARTED, started.model_dump(mode="json"))
             if generation != self._generation:
                 return  # interrupted before the first sample; `finally` reports it
-            audio = self._tts.synthesize(request)
+            audio = self._synthesize(request)
             self._current_audio = audio
             pacer = (
                 asyncio.create_task(pace_levels(self._audio_out, self._emit, request))
@@ -623,6 +624,34 @@ class DefaultVoicePipeline:
         result = self._latency.first_audio(ticket)
         if result is not None:
             log.info("voice.turn_latency", **asdict(result))
+
+    async def _synthesize(self, request: TtsRequest) -> AsyncIterator[bytes]:
+        """The engine's audio for `request`. A prepared clip that is not installed is spoken from
+        the request's own text instead of failing: callouts name a clip and carry their words, and
+        no clip ships with Nox, so the alternative to speaking the words is silence."""
+        first = self._tts.synthesize(request)
+        started = False
+        try:
+            async for chunk in first:
+                started = True
+                yield chunk
+            return
+        except ClipNotFoundError:
+            if started or not request.prepared_clip or not request.text.strip():
+                raise
+            log.info(
+                "voice.clip_missing_spoken",
+                utterance_id=request.utterance_id,
+                clip_id=request.prepared_clip,
+            )
+        finally:
+            await aclose(first)
+        spoken = self._tts.synthesize(request.model_copy(update={"prepared_clip": None}))
+        try:
+            async for chunk in spoken:
+                yield chunk
+        finally:
+            await aclose(spoken)
 
     async def _finish(
         self, request: TtsRequest, *, ok: bool, reason: str, interrupted: bool = False
