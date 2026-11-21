@@ -19,7 +19,7 @@ Depending on what you enabled at onboarding (`nox onboard`) or later:
 - **Screen / HUD** — only for features that need it (e.g. Rocket League observation), and never
   while a privacy zone is active (see below).
 - **Camera** — off by default; only if you explicitly enable it.
-- **Game state (Rocket League)** — screen/HUD capture, game audio, replay files, and
+- **Game state (Rocket League)** — screen/HUD capture, replay files, and
   non-invasive input *observation* (statistics from a global hotkey listener — Nox never sends
   input to the game). This is a hard, code-level boundary, not a setting: no file in the codebase
   may import an input-synthesis or process-memory API for a game window, and CI fails the build if

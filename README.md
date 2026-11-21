@@ -24,7 +24,8 @@ personality, not a chat window with a mascot on top.
 - **Twitch / OBS stream companion** — chat responder, a "Funken" viewer loyalty currency, and a
   deliberately narrow OBS tool surface (scene switching is a confirmed action; there is no
   scene-delete and no stream-stop tool at all).
-- **Rocket League coach** — **observation only**: screen/HUD capture, game audio and replay files.
+- **Rocket League coach** — **observation only**: screen/HUD capture and replay files; it does not
+  listen to the game's sound, and its short callouts are Nox's own voice on your private output.
   Nox never sends input to the game and never reads or writes its process memory. This is a
   code-level boundary enforced by a CI job, not a setting you could flip.
 - **Coding agent** — orchestrates the Claude Code CLI inside workspaces you configured, under the

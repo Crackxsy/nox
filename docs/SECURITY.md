@@ -163,9 +163,12 @@ permission.self_elevate
 
 ## Rocket League observation-only boundary
 
-Immutable, code-level, not a setting: screen/HUD capture, game audio, replay files, and
+Immutable, code-level, not a setting: screen/HUD capture, replay files, and
 non-invasive input *observation* (hotkey-listener statistics, never sending input) are the only
-things Nox's Rocket League feature does.
+things Nox's Rocket League feature does. Nox does not listen to the game's sound: there is no
+loopback or audio-capture code in the plugin. The spoken callouts are Nox's own voice, played on
+the private channel only; when no pre-recorded clip is installed under a callout's name (none
+ships), the callout's words are spoken in the active voice instead.
 
 No file anywhere in the repository may import a process-memory API (`ReadProcessMemory`,
 `WriteProcessMemory`) or a third-party input-automation library (`pydirectinput`, `pyautogui`).
@@ -185,7 +188,12 @@ target:
   a `desktop.computer_use` event drives a visible notice; every action is audited. The kill switch
   and the stop hotkey (`ctrl+alt+shift+k`, read from the key state before every single event) end
   it at once. It refuses - in the module itself, first, and again immediately before every event -
-  while a watched game or an anti-cheat service is running and while a game is in the foreground.
+  while a watched game or anti-cheat software (process, service or kernel driver) is running, while
+  a game is in the foreground, and while something owns the screen (a full-screen Direct3D app,
+  "busy" or presentation mode - this is what catches a game that is on no list and has no
+  anti-cheat). The core asks this through `nox.desktop.game_guard`, the same four questions a node's
+  game lock asks, and every check that cannot answer locks. The refusal names its cause, so the
+  user learns why. `desktop.type_text` is refused by the same lock.
   Before every single event (each button down and up, wheel turn, key down) it checks the window
   under the cursor (`WindowFromPoint(GetCursorPos())`) and the foreground window against Nox's
   own windows - by process, by Qt window class and by a title naming Nox (the dashboard tab, while

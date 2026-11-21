@@ -150,7 +150,9 @@ cannot be turned off or hidden by configuration — if something is being captur
     audio track*: OBS gets a "Nox Voice" source on "CABLE Output" (on the tracks you tick), and Nox
     speaks into "CABLE Input" and your headphones. The devices are also in *Settings → Voice*.
   - When the Twitch login expires, Nox shows the code to enter at twitch.tv/activate.
-- **Rocket League coach**: observation-only — screen/HUD capture, game audio, replay files. Nox
+- **Rocket League coach**: observation-only — screen/HUD capture and replay files; Nox does not listen to
+  the game's sound. Its short callouts ("Low boost, play safe.") are spoken in Nox's own voice
+  on your private output, never into the stream. Nox
   never sends input to the game and never reads or injects into its process memory; this is a
   hard, code-level boundary (see `SECURITY.md` §Rocket League boundary), not a setting.
 - **Presets**: one phrase that reaches several systems at once - lights and scenes through
