@@ -9,6 +9,18 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Voice: the microphone is supervised and says when it is gone.** A capture loop that ends,
+  fails or goes quiet while capture should be on is restarted with a growing delay (1, 2, 5, 10,
+  then every 30 s; a new input device ends the wait), the voice health line shows `limited` with the
+  reason, and after three failures in a row Nox says "Ich höre dich gerade nicht." once and "Ich
+  höre dich wieder." once when audio is back - never on every retry. A closed gate (muted,
+  push-to-talk waiting, privacy off) is not a failure, and a restart never opens a device the gate
+  keeps closed. A device that cannot be opened no longer breaks the push-to-talk request or the
+  worker's start.
+- **Voice: turn latency is measured.** Every voice turn is timed from the end of the utterance to
+  the first audio chunk (transcription, wait for the first sentence, synthesis); one `voice.turn_latency`
+  log line per turn and a new request `voice.latency` with P50/P95 over the last 50 turns. Local
+  only, milliseconds only. The worker heartbeat carries the microphone state (additive fields).
 - **Nox-OS first boot without a screen** (`os/pi-gen/stage-nox/04-firstboot`, os/README.md):
   a provisioning file on the boot partition (`nox-provision.json`, versioned JSON schema in
   `os/provisioning/`: Wi-Fi, country, hostname, time zone, locale, the setup card's claim-code hash
@@ -394,6 +406,14 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `check-image.sh` and the QEMU boot test check all of it, including an SSH on/off round trip.
 
 ### Fixed
+- **Voice: interrupting Nox now silences the whole answer.** `tts.stop` and a barge-in only
+  stopped the sentence that was playing; sentences the core had already handed over waited for it
+  and started right afterwards, so Nox kept talking for seconds. An interruption now ends the
+  current generation: the playing sentence and every sentence waiting for its turn are dropped (each
+  still ends with exactly one `tts.interrupted`), while the next turn's sentences play normally. An
+  interruption that lands between two sentences, or while `tts.started` is still on its way, is no
+  longer lost either, and the reason of an interruption is no longer overwritten by the next
+  sentence.
 - **Nodes, external review of part 4:** the node's gate never resolves or opens anything the
   core sent (a UNC path in a notice could make Windows reach out over SMB) and checks the receipt
   before any argument; path aliases (`..`, `~`, 8.3, UNC, device paths) are refused on the text,
