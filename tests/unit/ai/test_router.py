@@ -549,3 +549,41 @@ async def test_the_causes_of_having_no_provider_are_told_apart(bus: FakeBus) -> 
     assert failed.value.cause is NoProviderCause.FAILED
     assert unavailable.value.cause is NoProviderCause.UNAVAILABLE
     assert timed_out.value.cause is NoProviderCause.TIMEOUT
+
+
+async def test_a_limit_without_a_reset_time_that_keeps_being_renewed_is_announced_once(
+    bus: FakeBus,
+) -> None:
+    """Locked for a quarter of an hour at a time, each retry meeting the limit again with another
+    end: one episode, one event, until the provider has answered."""
+    cloud = FakeProvider("claude_code", local=False, error=limited_error(0.25, estimated=True))
+    router = build(bus, cloud, FakeProvider("ollama"), wall_clock=(wall := WallClock()))
+
+    for step in range(4):
+        await router.complete(make_request(request_id=f"r{step}"))
+        wall.now += timedelta(minutes=16)
+        cloud.error = limited_error(0.25 + (step + 1) * 16 / 60, estimated=True)
+
+    assert len(bus.of(E.AI_PROVIDER_LIMITED)) == 1
+
+    cloud.error = None  # the limit is over: it answers
+    await router.complete(make_request(request_id="back"))
+    cloud.error = limited_error(10)
+    wall.now += timedelta(minutes=1)
+    await router.complete(make_request(request_id="again"))
+
+    assert len(bus.of(E.AI_PROVIDER_LIMITED)) == 2
+
+
+async def test_the_privacy_mode_is_named_before_a_limit_when_both_apply(bus: FakeBus) -> None:
+    """Private mode with a dead local model and a limited Claude: the user can act on the mode."""
+    cloud = FakeProvider("claude_code", local=False, error=limited_error())
+    local = FakeProvider("ollama", status=HealthStatus.UNAVAILABLE)
+    router = build(bus, cloud, local, wall_clock=WallClock())
+    with pytest.raises(NoProviderAvailableError):
+        await router.complete(make_request())  # learns the limit
+
+    with pytest.raises(NoProviderAvailableError) as caught:
+        await router.complete(make_request(request_id="r2", privacy_mode="private"))
+
+    assert caught.value.cause is NoProviderCause.PRIVACY

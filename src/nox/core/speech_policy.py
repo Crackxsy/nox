@@ -20,8 +20,13 @@ from datetime import datetime, time
 from typing import Literal, Protocol
 
 from nox.core.config import NoxConfig, QuietHoursConfig
+from nox.core.state import Mode
 
 SpeechKind = Literal["greeting", "proactive", "reply", "urgent"]
+
+#: Modes in which Nox does not speak a notice of its own - a game is running and the user is
+#: playing, not listening. What the user asked for is a different matter (`may_report_failure`).
+SILENT_MODES = frozenset({Mode.ROCKET_LEAGUE.value})
 
 #: Privacy modes that count as "quiet" for this gate when `pet.quiet_in_private_modes` is set.
 _QUIET_PRIVACY_MODES = frozenset({"private", "offline"})
@@ -65,6 +70,17 @@ class SpeechPolicy:
         self._active_zone = active_zone
         self._privacy_mode = privacy_mode
         self._clock = clock or (lambda: datetime.now().astimezone())
+
+    def may_report_failure(self, mode: str) -> tuple[bool, str]:
+        """Whether Nox may say, as the answer to what the user just said, that no model answered.
+
+        That is a reply: privacy mode, zones and quiet hours do not hold it back (the privacy case -
+        no local model while the cloud is off - is exactly the one that must be heard), mute and a
+        running game do.
+        """
+        if mode in SILENT_MODES:
+            return False, "silent_mode"
+        return self.may_speak("reply")
 
     def may_speak(self, kind: SpeechKind) -> tuple[bool, str]:
         """Returns `(allowed, reason)`; `reason` is `"ok"` when allowed, else why it was denied."""

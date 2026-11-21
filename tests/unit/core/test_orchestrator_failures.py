@@ -12,6 +12,7 @@ from nox.ai.errors import (
     BudgetExceededError,
     NoProviderAvailableError,
     NoProviderCause,
+    ProviderError,
 )
 from nox.ai.limits import ProviderLimit
 from nox.core.events import E, Event
@@ -55,12 +56,13 @@ async def test_a_typed_turn_gets_the_reason_and_the_next_step_as_its_reply() -> 
     assert "Das Modell antwortet gerade nicht" in turn.response
     assert "".join(chunks) == turn.response  # the chat shows exactly what the turn recorded
     assert turn.provider == NOTICE_PROVIDER and turn.degraded
-    assert [row[1] for row in turns.rows] == ["user", "assistant"]
+    # The question is kept; the notice is Nox's, not an answer, and stays out of the history.
+    assert [row[1] for row in turns.rows] == ["user"]
     assert failed_events(bus) == []  # nobody asked for speech: nothing to say aloud
     await orch.stop()
 
 
-async def test_a_spoken_turn_leaves_the_voice_to_the_proactive_rules() -> None:
+async def test_a_spoken_turn_is_answered_aloud_with_the_reason() -> None:
     orch, bus, speaker, _ = failing(
         NoProviderAvailableError("x", cause=NoProviderCause.UNAVAILABLE)
     )
@@ -69,7 +71,8 @@ async def test_a_spoken_turn_leaves_the_voice_to_the_proactive_rules() -> None:
     turn = await orch.handle_text("Erklär mir kurz Python", language="en")
 
     assert "No brain available" in turn.response
-    assert speaker.said == []  # not here: mode, privacy and quiet hours decide in one place
+    # A reply to what the user just said: spoken, not a proactive hint.
+    assert [s.text for s in speaker.said] == [turn.response]
     assert failed_events(bus) == [
         {"cause": "unavailable", "language": "en", "until": "", "estimated": False}
     ]
@@ -103,7 +106,7 @@ async def test_a_spent_background_budget_is_told_as_such() -> None:
 
 async def test_an_answer_cut_short_keeps_its_words_and_gets_the_reason_after_them() -> None:
     error = NoProviderAvailableError("limit", cause=NoProviderCause.FAILED)
-    orch, _, _, turns = failing(error, before=("Das Wetter ist",))
+    orch, _, speaker, turns = failing(error, before=("Das Wetter ist",))
     await orch.start()
     chunks: list[str] = []
 
@@ -111,7 +114,8 @@ async def test_an_answer_cut_short_keeps_its_words_and_gets_the_reason_after_the
 
     assert turn.response.startswith("Das Wetter ist Das Modell antwortet gerade nicht")
     assert chunks[0] == "Das Wetter ist" and chunks[1].startswith(" Das Modell")
-    assert turns.rows[-1][2] == turn.response
+    assert [row[1] for row in turns.rows] == ["user"]
+    assert [s.text for s in speaker.said] == []  # typed turn: no speech asked for
     await orch.stop()
 
 
@@ -127,15 +131,67 @@ async def test_a_failed_turn_is_not_handed_to_memory_capture() -> None:
     await orch.stop()
 
 
-async def test_an_unexpected_error_in_a_spoken_turn_is_announced_not_only_logged() -> None:
-    orch, bus, _, _ = failing(RuntimeError("bug"))
+async def test_an_unexpected_error_is_told_honestly_and_not_as_the_models_fault() -> None:
+    orch, bus, speaker, _ = failing(RuntimeError("bug"))
     await orch.start()
 
     await orch._voice_turn("Erklär mir kurz Python", "de")
 
     assert failed_events(bus) == [
-        {"cause": "failed", "language": "de", "until": "", "estimated": False}
+        {"cause": "internal", "language": "de", "until": "", "estimated": False}
     ]
+    (said,) = [s.text for s in speaker.said]
+    assert said.startswith("Etwas ist schiefgegangen") and "Modell antwortet" not in said
+    await orch.stop()
+
+
+async def test_a_providers_own_error_that_escapes_is_told_as_the_models() -> None:
+    orch, bus, speaker, _ = failing(ProviderError("claude_code", "exit 3"))
+    await orch.start()
+
+    await orch._voice_turn("Erklär mir kurz Python", "de")
+
+    assert failed_events(bus)[0]["cause"] == "failed"
+    assert "Das Modell antwortet gerade nicht" in speaker.said[0].text
+    await orch.stop()
+
+
+async def test_a_speaker_that_fails_is_not_mistaken_for_a_model_and_does_not_end_the_turn() -> None:
+    orch, bus, speaker, _ = failing(RuntimeError("bug"))
+
+    async def broken(_request: object) -> None:
+        raise OSError("no audio device")
+
+    speaker.say = broken  # type: ignore[method-assign]
+    await orch.start()
+
+    await orch._voice_turn("Erklär mir kurz Python", "de")  # must not raise
+
+    assert failed_events(bus)[0]["cause"] == "internal"
+    await orch.stop()
+
+
+async def test_a_notice_is_not_spoken_when_the_gate_says_no_but_still_shown() -> None:
+    error = NoProviderAvailableError("x", cause=NoProviderCause.UNAVAILABLE)
+    orch, bus, speaker, _ = failing(error)
+    orch.failure_may_speak = lambda: False
+    await orch.start()
+
+    turn = await orch.handle_text("Erklär mir kurz Python")
+
+    assert speaker.said == []
+    assert "Kein Gehirn verfügbar" in turn.response and failed_events(bus)
+    await orch.stop()
+
+
+async def test_the_failure_is_said_every_time_the_user_asks_not_once_per_five_minutes() -> None:
+    orch, _, speaker, _ = failing(NoProviderAvailableError("x", cause=NoProviderCause.FAILED))
+    await orch.start()
+
+    await orch.handle_text("Erklär mir kurz Python")
+    await orch.handle_text("Erklär mir noch etwas")
+
+    assert len(speaker.said) == 2
     await orch.stop()
 
 

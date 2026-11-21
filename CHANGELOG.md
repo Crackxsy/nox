@@ -410,19 +410,26 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   event and ignored it, so each request ran into the same error and the provider was only kept out
   for a minute. The limit - which window (five hours, a week) and when it resets - now keeps Claude
   out of the chain until the reset (`ai.providers` shows `limited_until`; nothing is asked of it
-  meanwhile, neither a request nor a health probe). Nox tells you once, in German or English, "Mein
-  Claude-Kontingent ist bis 14:30 Uhr aufgebraucht ...", says what answers meanwhile (the local
-  model, or only the fixed offline answers), and speaks it only where speaking is allowed (not
-  while muted, in a privacy zone or a quiet privacy mode, in quiet hours or a focus or game mode);
-  the visible notice is always shown. A limit that cuts an answer short ends it with a sentence
-  instead of silence. New events `ai.provider_limited` and `ai.turn_failed`.
+  meanwhile, neither a request nor a health probe; the lock lives in memory, so a restart finds the
+  limit again with the first request). The CLI words a refused request as a message of its own
+  (model `<synthetic>`, "You've hit your limit - resets 11pm"); that sentence is the error, never
+  an answer, and its reset time is read from it when no structured status came. Nox tells you
+  once per limit, in German or English, "Mein Claude-Kontingent ist bis 14:30 Uhr aufgebraucht
+  ...", says what answers meanwhile (the local model, or only the fixed offline answers), shows it
+  as a notification, and speaks it only where speaking is allowed (not while muted, in a privacy
+  zone or a quiet privacy mode, in quiet hours, in focus mode or while a game runs). A limit that
+  cuts an answer short ends it with a sentence instead of silence. New events
+  `ai.provider_limited` and `ai.turn_failed`.
 - **A failed turn is no longer silent.** A spoken turn that no model answered was only logged; a
   typed one ended in a bare error. Both now get a short reason and the next step ("Das Modell
   antwortet gerade nicht ...", "Kein Gehirn verfügbar: Claude ist nicht angemeldet ... und es
-  läuft kein lokales Modell", the limit, a privacy mode that forbids the cloud), in the chat reply
-  and, where speaking is allowed, aloud - the same failure at most once in five minutes. The
-  reply to a turn whose tools never got anywhere says what happened and what helps instead of
-  "Das hat nicht funktioniert."
+  läuft kein lokales Modell", the limit, a privacy mode that forbids the cloud; "Etwas ist
+  schiefgegangen" when it was not the model that failed). The notice is the reply: shown in the
+  chat and, for a spoken turn, said aloud every time - also in a private privacy mode, which is
+  exactly when no local model leaves nothing else to say - except while muted or while a game
+  runs. It is not written into the conversation history as something Nox said. A notification
+  repeats the same failure at most once in five minutes. The reply to a turn whose tools never got
+  anywhere says what happened and what helps instead of "Das hat nicht funktioniert."
 - **Asking whether Claude is there no longer costs quota.** The health check sent a real 1-token
   request every time its result expired (every 30 seconds from the health service, every minute
   from the router). Health now comes from the answers Nox really gets plus two local checks that

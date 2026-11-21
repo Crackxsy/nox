@@ -24,6 +24,7 @@ from nox.ai.errors import (
     BudgetExceededError,
     NoProviderAvailableError,
     NoProviderCause,
+    ProviderError,
     RouterError,
 )
 from nox.ai.escalation import EscalationPolicy
@@ -291,6 +292,9 @@ class Orchestrator:
     on_conversation_end: Callable[[str], None] | None = None
     fast_path: FastPath = field(default_factory=FastPath)
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
+    #: Set by `NoxCore`: whether Nox may say aloud, as the answer to the user, that a turn failed
+    #: (`SpeechPolicy.may_report_failure`). `None` = always.
+    failure_may_speak: Callable[[], bool] | None = None
     #: Monotonic seconds, for the idle timeout of conversations; a field so tests can move time.
     clock: Callable[[], float] = time.monotonic
 
@@ -482,7 +486,16 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001 - a failed turn is logged, never fatal
             log.warning("orchestrator.turn_failed", error=str(exc))
             if not self._safe_mode:  # after the kill switch silence is what the user asked for
-                await self._publish_turn_failed(NoProviderCause.FAILED, language)
+                # Only a provider's own error is told as the model's; a broken speaker or store
+                # is not "the model does not answer".
+                cause = (
+                    NoProviderCause.FAILED
+                    if isinstance(exc, ProviderError)
+                    else NoProviderCause.INTERNAL
+                )
+                text = failure_notice(language, cause, now=datetime.now(UTC))
+                await self._say_failure(text, language, "voice")
+                await self._publish_turn_failed(cause, language)
 
     async def _on_kill(self, _: Event) -> None:
         self._safe_mode = True
@@ -627,7 +640,9 @@ class Orchestrator:
             turn.degraded = bool(ready.get("degraded", False))
             self._note_first_sentence(turn, started)
             turn.timings.total_ms = (time.perf_counter() - started) * 1000
-            await self._record_turn(turn)
+            # A failure notice is Nox's, not an answer: the question is kept in the history, the
+            # notice is not, so the next turn's model never reads it as something it said.
+            await self._record_turn(turn, answer=not failed)
             if not failed:
                 self._notify_turn_complete(text, turn.response)
             return turn
@@ -740,7 +755,22 @@ class Orchestrator:
             if result is not None:
                 await result
         if speak:
+            await self._say_failure(notice.strip(), language, turn.request_id)
             await self._publish_turn_failed(cause, language, limit)
+
+    async def _say_failure(self, text: str, language: str, request_id: str) -> None:
+        """Say the failure notice aloud, as the reply to a spoken turn - never as a proactive hint,
+        so it is not held back by privacy mode or quiet hours, nor repeated away: only what
+        `failure_may_speak` forbids (mute, a running game) keeps it quiet. A speaker that fails
+        too is logged; there is nothing left to say it with."""
+        if self.speaker is None:
+            return
+        if self.failure_may_speak is not None and not self.failure_may_speak():
+            return
+        try:
+            await self._speak(text, language, request_id)
+        except Exception as exc:  # noqa: BLE001 - the notice is the last resort, not a new failure
+            log.warning("orchestrator.failure_not_spoken", error=f"{type(exc).__name__}: {exc}")
 
     async def _publish_turn_failed(
         self,

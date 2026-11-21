@@ -54,6 +54,8 @@ class NoProviderCause(StrEnum):
     TIMEOUT = "timeout"
     #: The providers that were tried failed.
     FAILED = "failed"
+    #: Not a provider's doing: something else in Nox broke the turn (speech output, storage).
+    INTERNAL = "internal"
     #: No provider is configured, signed in or running that serves this request.
     UNAVAILABLE = "unavailable"
 

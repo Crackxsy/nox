@@ -70,6 +70,10 @@ _FAILURE = {
             "Kein Gehirn verfügbar: Claude ist nicht angemeldet oder nicht installiert und es "
             "läuft kein lokales Modell. Melde Claude an oder starte Ollama."
         ),
+        NoProviderCause.INTERNAL: (
+            "Etwas ist schiefgegangen, nicht beim Modell, sondern bei mir. Versuch es gleich noch "
+            "einmal; wenn es so bleibt, schau ins Protokoll."
+        ),
     },
     "en": {
         NoProviderCause.PRIVACY: (
@@ -89,6 +93,10 @@ _FAILURE = {
         NoProviderCause.UNAVAILABLE: (
             "No brain available: Claude is not signed in or not installed and no local model is "
             "running. Sign in to Claude or start Ollama."
+        ),
+        NoProviderCause.INTERNAL: (
+            "Something went wrong - not with the model, with me. Try again in a moment; if it "
+            "stays that way, look at the log."
         ),
     },
 }

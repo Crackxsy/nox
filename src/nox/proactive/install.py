@@ -84,7 +84,11 @@ def install(core: _Core) -> ProactiveRuntime:
     service = _build_service(core)
     _register_requests(core)
     _register_tools(core, service)
-    relay = AiNoticeRelay(service, language=lambda: str(core.config.identity.ui_language))
+    relay = AiNoticeRelay(
+        service,
+        language=lambda: str(core.config.identity.ui_language),
+        mode=lambda: str(core.state.get("assistant.mode")),
+    )
     relay.attach(core.bus)
     return ProactiveRuntime(service=service, relay=relay)
 

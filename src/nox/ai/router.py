@@ -119,6 +119,9 @@ class DefaultRouter:
         self._health: dict[str, tuple[float, ProviderInfo]] = {}
         #: Providers whose plan limit is used up, until the reset.
         self._limits: dict[str, ProviderLimit] = {}
+        #: Providers whose limit was announced and that have not answered since: a limit that
+        #: ends and is met again at once (a retry that fails) is the same limit, said once.
+        self._announced: set[str] = set()
         self._decisions: deque[Decision] = deque(maxlen=max_decisions)
         self._usage = _Usage(day=today())
 
@@ -295,11 +298,11 @@ class DefaultRouter:
     ) -> NoProviderAvailableError:
         """The error for a request whose chain had no usable provider, with the reason a user
         can act on: a limit that is used up, a privacy mode, a spent budget, or just nothing."""
+        if cloud_blocked:  # the privacy mode is the reason the user can act on first
+            return NoProviderAvailableError(error, cause=NoProviderCause.PRIVACY)
         limit = next((lim for pid in chain if (lim := self._active_limit(pid))), None)
         if limit is not None:
             return NoProviderAvailableError(error, cause=NoProviderCause.LIMIT, limit=limit)
-        if cloud_blocked:
-            return NoProviderAvailableError(error, cause=NoProviderCause.PRIVACY)
         if budget_blocked:
             return NoProviderAvailableError(error, cause=NoProviderCause.BUDGET)
         return NoProviderAvailableError(error)
@@ -390,11 +393,13 @@ class DefaultRouter:
 
     async def _adopt_limit(self, provider: AiProvider, remaining: Sequence[AiProvider]) -> None:
         """A request that was answered can still have run into the limit on its way out (an answer
-        cut short by it): the provider knows, and the router keeps it out from now on."""
-        if not isinstance(provider, _HasActiveLimit):
-            return
-        limit = provider.active_limit()
-        if limit is not None and provider.info.id not in self._limits:
+        cut short by it): the provider knows, and the router keeps it out from now on. One that
+        answered cleanly has no limit any more, and a later one is announced again."""
+        pid = provider.info.id
+        limit = provider.active_limit() if isinstance(provider, _HasActiveLimit) else None
+        if limit is None:
+            self._announced.discard(pid)  # it answered: a later limit is a new one
+        elif pid not in self._limits:
             await self._mark_limited(provider, limit, remaining)
 
     async def _mark_limited(
@@ -403,11 +408,11 @@ class DefaultRouter:
         """Lock the provider until `limit.until` and say so once: a request that meets the same
         limit again (a second turn already under way) does not announce it twice."""
         pid = provider.info.id
-        known = self._limits.get(pid)
         self._limits[pid] = limit
         self._health.pop(pid, None)
-        if known is not None and known.active(self._wall_clock()):
+        if pid in self._announced:
             return
+        self._announced.add(pid)
         log.warning(
             "ai.provider_limited", provider=pid, kind=limit.kind, until=limit.until.isoformat()
         )

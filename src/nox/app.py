@@ -490,6 +490,10 @@ class NoxCore:
             cloud_allowed=self.security.privacy.allows_cloud,
             on_conversation_end=self._end_permission_session,
         )
+        policy = self.speech_policy
+        self.orchestrator.failure_may_speak = lambda: policy.may_report_failure(
+            self._current_mode()
+        )[0]
         self.orchestrator.mode_gate = ModeGate(
             switch=self._switch_mode,
             current_mode=self._current_mode,

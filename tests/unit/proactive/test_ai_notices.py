@@ -7,8 +7,10 @@ from typing import Any
 
 import pytest
 
-from nox.core.config import NoxConfig
+from nox.app import DEFAULTS_PATH
+from nox.core.config import NoxConfig, load_config
 from nox.core.events import E, Event
+from nox.core.state import Mode
 from nox.proactive.ai_notices import FAILURE_NOTICE_COOLDOWN_S, AiNoticeRelay
 from tests.unit.fakes import FakeBus
 from tests.unit.proactive.test_service import FakeSpeaker, make_service
@@ -21,9 +23,13 @@ class FakeService:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
+        self.speak: list[bool] = []
 
-    async def notify(self, kind: str, priority: str, text: str, *, context_key: str = "") -> None:
+    async def notify(
+        self, kind: str, priority: str, text: str, *, context_key: str = "", speak: bool = True
+    ) -> None:
         self.calls.append((kind, priority, text, context_key))
+        self.speak.append(speak)
 
 
 class Time:
@@ -95,13 +101,43 @@ async def test_the_same_limit_is_said_once(bus: FakeBus, service: FakeService) -
     assert len(service.calls) == 1
 
 
-async def test_a_new_limit_after_the_old_one_is_said_again(
+async def test_a_limit_that_is_renewed_while_it_holds_is_the_same_limit(
     bus: FakeBus, service: FakeService
 ) -> None:
+    """A limit without a reset time is locked for a quarter of an hour at a time, each time with
+    another end. It is one limit and one announcement."""
+    await bus.publish(limited(NOW + timedelta(minutes=15), estimated=True))
+    await bus.publish(limited(NOW + timedelta(minutes=14), estimated=True))
+    await bus.publish(limited(NOW + timedelta(days=5)))
+
+    assert len(service.calls) == 1
+
+
+async def test_a_new_limit_after_the_old_one_ended_is_said_again(
+    service: FakeService, clock: Time
+) -> None:
+    moments = [NOW]
+    bus = FakeBus()
+    AiNoticeRelay(
+        service,  # type: ignore[arg-type]
+        language=lambda: "de",
+        clock=lambda: moments[0],
+        monotonic=clock,
+    ).attach(bus)  # type: ignore[arg-type]
     await bus.publish(limited(NOW + timedelta(hours=2)))
+    moments[0] = NOW + timedelta(hours=3)
     await bus.publish(limited(NOW + timedelta(days=5)))
 
     assert len(service.calls) == 2
+
+
+async def test_a_failed_turn_is_only_shown_never_spoken_from_here(
+    bus: FakeBus, service: FakeService
+) -> None:
+    """The orchestrator already said it, as the answer to what the user said."""
+    await bus.publish(failed("unavailable"))
+
+    assert service.speak == [False]
 
 
 async def test_a_failure_is_said_once_per_cooldown_not_after_every_sentence(
@@ -194,19 +230,31 @@ async def test_after_detach_nothing_is_relayed(service: FakeService) -> None:
 # ---- through the real service: who may hear it -------------------------------------------
 
 
+def shipped_config() -> NoxConfig:
+    """The attention table as shipped, not as a test would like it."""
+    return load_config(DEFAULTS_PATH, None, None, {})
+
+
 async def relayed_through_the_service(
-    **service_options: Any,
+    event: Event, *, mode: Mode = Mode.COMPANION, **service_options: Any
 ) -> tuple[list[str], list[tuple[str, dict[str, Any]]]]:
     speaker = FakeSpeaker()
-    real, events, _ = make_service(speaker=speaker, **service_options)
+    config = service_options.pop("config", None) or shipped_config()
+    real, events, state = make_service(speaker=speaker, config=config, **service_options)
+    state.state.assistant.mode = mode
     bus = FakeBus()
-    AiNoticeRelay(real, language=lambda: "de", clock=lambda: NOW).attach(bus)  # type: ignore[arg-type]
-    await bus.publish(limited(NOW + timedelta(hours=2)))
+    AiNoticeRelay(
+        real,
+        language=lambda: "de",
+        mode=lambda: str(state.get("assistant.mode")),
+        clock=lambda: NOW,
+    ).attach(bus)  # type: ignore[arg-type]
+    await bus.publish(event)
     return speaker.calls, events
 
 
 async def test_the_limit_is_spoken_and_shown_when_speaking_is_allowed() -> None:
-    spoken, events = await relayed_through_the_service()
+    spoken, events = await relayed_through_the_service(limited(NOW + timedelta(hours=2)))
 
     assert len(spoken) == 2 and spoken[1].startswith("Mein Claude-Kontingent")  # lead-in, then text
     assert [name for name, _ in events] == ["proactive.notification"]
@@ -220,12 +268,16 @@ async def test_the_limit_is_spoken_and_shown_when_speaking_is_allowed() -> None:
         {"muted": True},
         {"active_zone": "bedroom"},
         {"clock_hour": 3},
+        {"mode": Mode.ROCKET_LEAGUE},
+        {"mode": Mode.FOCUS},
     ],
 )
 async def test_the_limit_is_shown_but_never_spoken_in_quiet_situations(
     options: dict[str, Any],
 ) -> None:
-    spoken, events = await relayed_through_the_service(**options)
+    """Including a running game (the shipped table lets `rocket_league` speak with ceiling 1) and
+    focus (ceiling 0)."""
+    spoken, events = await relayed_through_the_service(limited(NOW + timedelta(hours=2)), **options)
 
     assert spoken == []
     notices = [payload for name, payload in events if name == "proactive.notification"]
@@ -233,16 +285,16 @@ async def test_the_limit_is_shown_but_never_spoken_in_quiet_situations(
     assert notices[0]["spoken"] is False
 
 
-async def test_the_limit_is_not_spoken_in_a_mode_that_asks_for_no_interruptions() -> None:
-    config = NoxConfig()
-    config.attention.per_mode = {"focus": 0}
-    speaker = FakeSpeaker()
-    real, events, state = make_service(speaker=speaker, config=config)
-    state.state.assistant.mode = "focus"  # type: ignore[assignment]
-    bus = FakeBus()
-    AiNoticeRelay(real, language=lambda: "de", clock=lambda: NOW).attach(bus)  # type: ignore[arg-type]
+@pytest.mark.parametrize("mode", list(Mode))
+@pytest.mark.parametrize("privacy_mode", ["balanced", "private", "offline"])
+async def test_a_failed_turn_goes_through_the_real_service_as_a_toast_that_is_never_spoken(
+    mode: Mode, privacy_mode: str
+) -> None:
+    spoken, events = await relayed_through_the_service(
+        failed("unavailable"), mode=mode, privacy_mode=privacy_mode
+    )
 
-    await bus.publish(limited(NOW + timedelta(hours=2)))
-
-    assert speaker.calls == []
-    assert [name for name, _ in events] == ["proactive.notification"]
+    assert spoken == []  # the reply was spoken by the orchestrator; this is only the record
+    (notice,) = [payload for name, payload in events if name == "proactive.notification"]
+    assert notice["priority"] == "resources"  # not `security`, which no quiet rule holds back
+    assert notice["kind"] == "urgent" and notice["spoken"] is False

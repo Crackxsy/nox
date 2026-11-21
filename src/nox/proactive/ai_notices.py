@@ -3,11 +3,11 @@ answer.
 
 The router publishes `ai.provider_limited` once per limit; the orchestrator publishes
 `ai.turn_failed` for a spoken turn that no model answered. Both become one notification through
-`ProactiveService.notify`, so the existing rules decide whether it is *spoken*: not while muted or
-inside a privacy zone, not in a quiet privacy mode or quiet hours, not in a mode that asks for no
-interruptions (a game, focus). The visible toast is never held back. This module adds only what
-those rules do not know: the sentences, saying a limit once, and not repeating a failure on every
-turn.
+`ProactiveService.notify`, which shows it as a toast and decides whether it may also be heard: not
+while muted or inside a privacy zone, not in a quiet privacy mode or quiet hours, not in a mode
+that asks for no interruptions (focus), and - added here - not while a game runs. A failed turn is
+never spoken from here: the orchestrator already said it as the answer to what the user said, so
+this only shows it, and not again for the same cause within a few minutes.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from nox.ai.notices import failure_notice, limit_notice
 from nox.core.events import E, Event, EventBus
 from nox.core.events.system import AiProviderLimited, AiTurnFailed
 from nox.core.logging import get_logger
+from nox.core.speech_policy import SILENT_MODES
 from nox.proactive.service import ProactiveService
 
 log = get_logger(__name__)
@@ -42,16 +43,19 @@ class AiNoticeRelay:
         service: ProactiveService,
         *,
         language: Callable[[], str],
+        mode: Callable[[], str] = lambda: "",
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         monotonic: Callable[[], float] = time.monotonic,
         cooldown_s: float = FAILURE_NOTICE_COOLDOWN_S,
     ) -> None:
         self._service = service
         self._language = language
+        self._mode = mode
         self._clock = clock
         self._monotonic = monotonic
         self._cooldown_s = cooldown_s
-        #: Per provider, the `until` of the limit already announced: the same limit once.
+        #: Per provider, when the limit announced last ends: one limit is announced once, however
+        #: often its end is moved (a limit without a reset time is renewed every few minutes).
         self._limits: dict[str, datetime] = {}
         #: Per cause, when a failure was last announced.
         self._failed_at: dict[str, float] = {}
@@ -75,18 +79,24 @@ class AiNoticeRelay:
         except (ValidationError, ValueError):
             log.warning("ai_notices.bad_payload", name=event.name)
             return
-        if self._limits.get(limited.provider) == until:
-            return
+        now = self._clock()
+        announced = self._limits.get(limited.provider)
         self._limits[limited.provider] = until
+        if announced is not None and announced > now:
+            return
         text = limit_notice(
             self._language(),
             until=until,
-            now=self._clock(),
+            now=now,
             estimated=limited.estimated,
             fallback=limited.fallback,
         )
         await self._service.notify(
-            "urgent", "resources", text, context_key=f"ai.limit:{limited.provider}"
+            "urgent",
+            "resources",
+            text,
+            context_key=f"ai.limit:{limited.provider}",
+            speak=self._mode() not in SILENT_MODES,
         )
 
     async def _on_failed(self, event: Event) -> None:
@@ -107,4 +117,6 @@ class AiNoticeRelay:
         text = failure_notice(
             failed.language, cause, until=until, now=now, estimated=failed.estimated
         )
-        await self._service.notify("urgent", "resources", text, context_key=f"ai.turn:{cause}")
+        await self._service.notify(
+            "urgent", "resources", text, context_key=f"ai.turn:{cause}", speak=False
+        )
