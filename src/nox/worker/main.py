@@ -325,7 +325,7 @@ class VoiceWorker:
         game = bool(env.payload.get("game_running", False))
         level = perf.game_priority if game else perf.priority
         if self.priority_setter(level):
-            log.info("worker.priority", level=level, game=game)
+            log.info("worker.priority", priority=level, game=game)
 
     # ---- lifecycle -------------------------------------------------------------------------------
 
@@ -491,7 +491,7 @@ def apply_priority(level: str) -> bool:
         }
         psutil.Process().nice(classes[level])
     except Exception as exc:  # noqa: BLE001 - priority is best effort
-        log.warning("worker.priority_failed", level=level, error=str(exc))
+        log.warning("worker.priority_failed", priority=level, error=str(exc))
         return False
     return True
 
