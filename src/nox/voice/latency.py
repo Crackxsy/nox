@@ -14,6 +14,11 @@ orchestrator's `TurnTimings` break it down). Only voice turns are measured: a tu
 moment an addressed transcript is published, and ends at the first sound that follows. Everything is
 local: the numbers go to the structured log (no content, only milliseconds) and to
 `summary()`, which the `voice.latency` request returns. Time is injected, so tests use a fake clock.
+
+A second number belongs to the same request: the *sentence gap*, the silence between the end of one
+sentence and the start of the next one when the next one was already waiting. It is what the user
+hears as a stutter in a long answer, and it has a budget (`SENTENCE_GAP_BUDGET_MS`) that the tests
+hold the pipeline to.
 """
 
 from __future__ import annotations
@@ -30,6 +35,13 @@ from pydantic import BaseModel
 LATENCY_WINDOW = 50
 #: A published transcript whose answer starts later than this is not counted as one turn.
 REPLY_TIMEOUT_S = 60.0
+#: How many sentence gaps the percentiles are computed over: a long answer has dozens of them.
+GAP_WINDOW = 100
+#: The 95th-percentile silence between two sentences of one answer that is still heard as one
+#: breath. The sentence-gap budget (see `LatencySummary.sentence_gap_ok`).
+SENTENCE_GAP_BUDGET_MS = 120.0
+#: Fewer gaps than this say nothing about the machine, so health does not judge on them.
+GAP_MIN_SAMPLES = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +81,15 @@ class LatencySummary(BaseModel):
     synth_ms: Spread | None
     endpoint_ms: float
     last: dict[str, float] | None
+    #: Silence between the end of a sentence and the start of the next one of the same answer,
+    #: for sentences that were already waiting; None until there is one.
+    sentence_gap_ms: Spread | None = None
+    #: How many gaps the percentiles are over (up to `GAP_WINDOW`).
+    sentence_gaps: int = 0
+    #: The budget the 95th percentile is held to.
+    sentence_gap_budget_ms: float = SENTENCE_GAP_BUDGET_MS
+    #: Whether the 95th percentile is under the budget; None while there are no gaps yet.
+    sentence_gap_ok: bool | None = None
 
 
 def percentile(values: Sequence[float], pct: float) -> float:
@@ -110,6 +131,7 @@ class LatencyTracker:
         self._clock = clock
         self._reply_timeout_s = reply_timeout_s
         self._turns: deque[TurnLatency] = deque(maxlen=window)
+        self._gaps: deque[float] = deque(maxlen=GAP_WINDOW)
         self._open: TurnTicket | None = None
         self.abandoned = 0
 
@@ -157,6 +179,20 @@ class LatencyTracker:
         self._turns.append(result)
         return result
 
+    def record_gap(self, started_at: float, ended_at: float) -> float:
+        """One sentence gap: the previous sentence's audio ended at `started_at`, the next one's
+        first chunk reached the output at `ended_at`. Returns the gap in milliseconds."""
+        gap = _ms(started_at, ended_at)
+        self._gaps.append(gap)
+        return gap
+
+    def gap_p95_ms(self) -> tuple[float, int] | None:
+        """`(95th percentile in ms, number of gaps)`, or None before the first gap."""
+        gaps = list(self._gaps)
+        if not gaps:
+            return None
+        return round(percentile(gaps, 95), 1), len(gaps)
+
     def abandon(self) -> None:
         """The open turn will not produce sound (interrupted, replaced, stopped)."""
         if self._open is not None:
@@ -166,7 +202,13 @@ class LatencyTracker:
     def summary(self) -> LatencySummary:
         turns = list(self._turns)
         last = turns[-1] if turns else None
+        gaps = list(self._gaps)
+        gap_spread = _spread(gaps)
         return LatencySummary(
+            sentence_gap_ms=gap_spread,
+            sentence_gaps=len(gaps),
+            sentence_gap_budget_ms=SENTENCE_GAP_BUDGET_MS,
+            sentence_gap_ok=None if gap_spread is None else gap_spread.p95 < SENTENCE_GAP_BUDGET_MS,
             turns=len(turns),
             window=self.window,
             abandoned=self.abandoned,

@@ -19,6 +19,7 @@ from nox.core.events import HealthStatus
 from nox.core.health import Check
 from nox.data.db import Database
 from nox.ipc.tokens import TokenStore
+from nox.voice.latency import GAP_MIN_SAMPLES, SENTENCE_GAP_BUDGET_MS
 
 __all__ = ["core_health_checks"]
 
@@ -70,6 +71,16 @@ def core_health_checks(
         # reason says what is wrong, so the tile never claims a voice that cannot hear is fine.
         if worker.capture is not None and worker.capture[0] is not HealthStatus.AVAILABLE:
             return HealthStatus.LIMITED, f"microphone: {worker.capture[1]}"
+        # Speech with pauses in it is not broken, but it is not what was promised either: the
+        # tile says so once there are enough sentence boundaries to judge by.
+        if worker.speech_gap is not None:
+            p95_ms, gaps = worker.speech_gap
+            if gaps >= GAP_MIN_SAMPLES and p95_ms >= SENTENCE_GAP_BUDGET_MS:
+                return (
+                    HealthStatus.LIMITED,
+                    f"speech pauses between sentences: p95 {p95_ms:g} ms "
+                    f"(budget {SENTENCE_GAP_BUDGET_MS:g} ms)",
+                )
         return HealthStatus.AVAILABLE, "worker registered"
 
     async def tokens_check() -> tuple[HealthStatus, str]:

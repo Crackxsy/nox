@@ -144,11 +144,20 @@ voice:
     streaming: true
     steps: 5                     # Supertonic flow-matching steps, 1-32: fewer = faster,
                                  # more = slightly more natural (upstream default 8)
+    prefetch_sentences: 1        # sentences synthesised while the one before is still heard
+                                 # (0 = off, max 2): no pause at the sentence boundaries
+    prefetch_buffer_s: 20        # most audio one look-ahead sentence may hold in memory
+    prefetch_cpu_ceiling: 0.85   # look-ahead only while system CPU load is below this fraction,
+                                 # so a game keeps its frames (the sentence then waits its turn)
+    edge_fade_ms: 4              # fade of each sentence's first/last ms: no click at the seam
   channels:
     private_device: ""           # default output device when empty
     stream_device: ""            # e.g. VB-Audio Cable input, empty = disabled
     routing: private             # private | stream | both | mute
   barge_in: true
+  barge_in_min_ms: 180           # talking over Nox needs this much loud speech ...
+  barge_in_min_db: -38           # ... at or above this level (dBFS): a cough, noise or the echo
+                                 # of Nox's own voice does not cut the answer off
 
 ai:
   router:

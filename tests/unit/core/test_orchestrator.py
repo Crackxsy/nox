@@ -101,8 +101,12 @@ async def test_a_barge_in_reported_by_the_worker_stops_the_turn_that_is_still_sp
     task = asyncio.create_task(orch.handle_text("lange Antwort bitte"))
     await asyncio.sleep(0.05)
 
+    assert orch.active_request_id is not None
     await bus.publish(
-        Event(name=E.TTS_INTERRUPTED, payload={"utterance_id": "x:1", "reason": "barge_in"})
+        Event(
+            name=E.TTS_INTERRUPTED,
+            payload={"utterance_id": f"{orch.active_request_id}:1", "reason": "barge_in"},
+        )
     )
     with pytest.raises(asyncio.CancelledError):
         await task

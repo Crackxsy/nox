@@ -207,7 +207,8 @@ async def test_say_streams_in_order_and_finishes(
     audio_in: FakeAudioInput, audio_out: FakeAudioOutput
 ) -> None:
     tts = FakeTts(chunks=4)
-    p, rec, _ = make_pipeline(audio_in, audio_out, tts=tts)
+    # The fake engine's bytes are labels, not audio: the sentence edges are not faded here.
+    p, rec, _ = make_pipeline(audio_in, audio_out, tts=tts, edge_fade_ms=0)
     await p.say(TtsRequest(utterance_id="u1", text="Hallo. Ich bin Nox.", channel=Channel.BOTH))
     assert rec.names() == [E.TTS_STARTED, E.TTS_FINISHED]
     started = rec.last(E.TTS_STARTED)

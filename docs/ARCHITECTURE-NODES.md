@@ -646,10 +646,20 @@ The slot is handed on only when the cancelled turn has finished unwinding (`_unw
 clean-up is never cut short and two turns never overlap. A barge-in whose caller gave up starts
 no turn.
 
+**Which turn a barge-in belongs to.** The voice worker reports `tts.interrupted` for every
+sentence it drops, so reports about an earlier turn's sentences can arrive after the owner has
+moved on and a newer turn is running. The event carries the sentence's `utterance_id`, whose
+first part is the request id of the turn that spoke it (`Orchestrator.active_request_id`); the
+core cancels the running turn only when that matches. A sentence of another turn, of a notice
+or of nothing is ignored, and the cancellation, which runs in a task of its own, looks at the
+running turn again before it cancels (`_cancel_turn`), so a decision made for a turn that has
+since ended never reaches its successor.
+
 Tests: `tests/unit/core/test_orchestrator_turn_slot.py`
 (`test_of_two_barge_ins_in_one_cancel_window_the_newer_wins`,
 `test_a_waiting_node_turn_yields_to_a_pending_barge_in`,
-`test_the_slot_is_held_until_a_cancelled_turn_has_unwound`).
+`test_the_slot_is_held_until_a_cancelled_turn_has_unwound`), and
+`tests/unit/core/test_orchestrator_barge_in.py` for the matching.
 
 ### 6f. The update chain
 

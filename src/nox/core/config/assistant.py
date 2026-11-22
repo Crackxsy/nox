@@ -121,6 +121,17 @@ class TtsConfig(StrictSection):
     #: Supertonic flow-matching steps: fewer is faster, more is slightly more natural (upstream
     #: uses 8). Ignored by the other engines.
     steps: int = Field(default=5, ge=1, le=32)
+    #: Sentences synthesised while the one before them is still heard, so a long answer has no
+    #: pause at every sentence boundary. 0 = off (each sentence is synthesised when its turn
+    #: comes); 2 is the most that is ever worth the work.
+    prefetch_sentences: int = Field(default=1, ge=0, le=2)
+    #: The most audio one look-ahead sentence may buffer, in seconds.
+    prefetch_buffer_s: float = Field(default=20.0, gt=0.0, le=120.0)
+    #: The look-ahead only starts while the machine's processor load is below this fraction: with
+    #: a game keeping it busy a sentence is synthesised when its turn comes, never in its way.
+    prefetch_cpu_ceiling: float = Field(default=0.85, gt=0.0, le=1.0)
+    #: Fade of the first and last milliseconds of each sentence (no click between sentences).
+    edge_fade_ms: float = Field(default=4.0, ge=0.0, le=20.0)
 
 
 class VoiceChannelsConfig(StrictSection):
@@ -134,6 +145,10 @@ class VoiceConfig(StrictSection):
     tts: TtsConfig = Field(default_factory=TtsConfig)
     channels: VoiceChannelsConfig = Field(default_factory=VoiceChannelsConfig)
     barge_in: bool = True
+    #: Talking over Nox: how much loud speech (milliseconds) cuts the answer off, and how loud
+    #: "loud" is (dBFS). Noise, a cough or the echo of Nox's own voice must not end a turn.
+    barge_in_min_ms: int = Field(default=180, ge=0, le=2000)
+    barge_in_min_db: float = Field(default=-38.0, ge=-90.0, le=0.0)
     #: Root for the voice model files (`<models_dir>/piper`, `/kokoro`, `/openwakeword`). Empty
     #: resolves to `<paths.data_dir>/models`. The voice worker only ever receives this section of
     #: the configuration, so a moved `paths.data_dir` has to be repeated here.

@@ -361,7 +361,8 @@ fails or stops delivering audio while capture is meant to be on, it is closed an
 1, 2, 5, 10 and then every 30 seconds (a microphone that keeps dropping out waits longer each time).
 The voice health line shows `limited` with the reason ("microphone: ..."). After three failures in a
 row the core says once, on the private channel, "Ich höre dich gerade nicht." ("I can't hear you
-right now."), and once more when audio flows again - but only where unprompted speech is allowed
+right now."), and once more when audio flows again - also when you muted in between and the
+microphone works again after unmuting - but only where unprompted speech is allowed
 (not muted, no privacy zone, not in a quiet privacy mode, outside quiet hours); otherwise the health
 line is all you get. A microphone that keeps dropping out is announced once as "wackelt". A
 microphone that is closed on purpose (push-to-talk waiting, muted, privacy off) is silence, not a
@@ -378,6 +379,38 @@ model's first token) and the speech synthesis (`synth_ms`). Each turn is one str
 (`voice.turn_latency`, milliseconds only, never the words), and the request `voice.latency` returns
 P50/P95 over the last 50 turns. Nothing leaves the machine. Time since your last word is
 `total_ms` plus `endpoint_ms`, the silence the detector waits for (zero with push-to-talk).
+
+**A long answer is one stream, not a string of separate sentences.** The core hands the answer to
+the voice worker sentence by sentence, and the worker used to start synthesising a sentence only
+once the one before it had been heard to the end, so every sentence boundary was dead air as long
+as the engine's time to first audio. Now, while a sentence is heard, the sentences that are already
+waiting are synthesised ahead (`voice.tts.prefetch_sentences`, default 1, at most 2; 0 switches it
+off), into a buffer with a ceiling (`voice.tts.prefetch_buffer_s`, default 20 s of audio per
+sentence). It only runs while the machine has room: above `voice.tts.prefetch_cpu_ceiling` (default
+85 % system CPU load, so with a game running) a sentence is synthesised when its turn comes, as
+before. The output device keeps one stream open for a few seconds between sentences and plays
+silence in the gaps instead of closing and reopening the device, and the first and last 4 ms of each
+sentence are faded through silence (`voice.tts.edge_fade_ms`) so the seam does not click.
+Interrupting cancels everything that was prepared: the synthesis stops, the buffered audio is
+thrown away, nothing of the old answer is heard. The silence between the end of one sentence and
+the start of the next, for sentences that were already waiting, is measured too (`sentence_gap_ms`
+in `voice.latency`; budget: 95th percentile under 120 ms). When it stays over the budget for at
+least eight gaps, the voice health line says so ("speech pauses between sentences"). A callout
+whose prepared clip is not installed is still spoken from its words; the fallback happens before
+the first chunk only. A sentence may carry an optional style (`TtsRequest.style`: emphasis and
+tempo); the pipeline hands it to the engine unchanged, no engine uses it yet.
+
+**Talking over Nox.** A speech detector that fires is not enough to cut an answer off - a cough, a
+door, room noise or the tail of Nox's own voice coming back through the speakers also open
+segments, and one of them used to silence the whole turn. While Nox is speaking, a detected
+segment has to add up to `voice.barge_in_min_ms` (default 180 ms) of speech at or above
+`voice.barge_in_min_db` (default -38 dBFS: a voice at a headset or desk microphone is around -30 to
+-20, room noise below -45) before the answer is interrupted. Push-to-talk interrupts at once. The
+interruption is reported with the sentence it cut off (`tts.interrupted` carries the utterance id,
+whose first part is the turn's request id), and the core cancels the running turn only if that
+sentence belongs to it, so a report that arrives late cannot cancel the next turn. Removing Nox's
+own echo from the microphone signal is a separate step that is not built yet: a loud echo through
+loudspeakers can still pass the threshold, headphones avoid it.
 
 ### Profiles
 

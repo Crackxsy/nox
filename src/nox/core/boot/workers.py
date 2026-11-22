@@ -46,6 +46,9 @@ class WorkerProcess:
     registered: asyncio.Event = field(default_factory=asyncio.Event)
     #: What the worker last said about its microphone (voice worker only): `(status, reason)`.
     capture: tuple[HealthStatus, str] | None = None
+    #: What the worker last said about the silence between sentences (voice worker only):
+    #: `(95th percentile in ms, how many gaps it is over)`; None until there is a gap.
+    speech_gap: tuple[float, int] | None = None
 
 
 class WorkerSpeaker:
@@ -130,6 +133,10 @@ class WorkerSupervisor:
         worker.capture = report
         return True
 
+    def note_speech_gap(self, worker: WorkerProcess, p95_ms: float | None, gaps: int) -> None:
+        """Record the sentence-gap summary from a heartbeat (nothing to report: None)."""
+        worker.speech_gap = None if p95_ms is None or gaps <= 0 else (p95_ms, gaps)
+
     def spawn(self, service: str) -> None:
         if self._tokens is None:
             log.error("worker.spawn_before_ipc", service=service)
@@ -170,6 +177,7 @@ class WorkerSupervisor:
                 worker.client_id = None
                 worker.registered.clear()
                 worker.capture = None
+                worker.speech_gap = None
                 log.warning("worker.disconnected", service=worker.service, client=client_id)
                 return worker
         return None

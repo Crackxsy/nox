@@ -54,6 +54,8 @@ class FakeAudioInput:
         self.starts = 0
         #: When given, every `start()` and every attempt to open the device is stamped with it.
         self.clock: Callable[[], float] | None = None
+        #: Called inside every start(), e.g. to make something happen while a reopen is running.
+        self.on_start: Callable[[], None] | None = None
         self.start_times: list[float] = []
         self.open_attempts: list[float] = []
 
@@ -79,6 +81,8 @@ class FakeAudioInput:
         self.starts += 1
         if self.clock is not None:
             self.start_times.append(self.clock())
+        if self.on_start is not None:
+            self.on_start()
         if self.stopped:
             # Like the real input: a fresh start has a fresh queue, without the sentinel `stop()`
             # left in the old one.

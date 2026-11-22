@@ -176,3 +176,91 @@ async def test_a_heartbeat_from_a_worker_the_core_does_not_know_changes_nothing(
 async def test_an_old_heartbeat_without_microphone_fields_is_still_valid() -> None:
     beat = WorkerHeartbeat.model_validate({"load": 0.2, "status": "running"})
     assert (beat.capture, beat.capture_reason) == ("", "")
+
+
+# ---- pauses between sentences -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("p95_ms", "gaps", "status"),
+    [
+        (119.9, 50, HealthStatus.AVAILABLE),  # under the budget
+        (120.0, 50, HealthStatus.LIMITED),  # at it
+        (900.0, 8, HealthStatus.LIMITED),  # enough sentences to judge by
+        (900.0, 7, HealthStatus.AVAILABLE),  # one short of that
+    ],
+)
+async def test_pauses_between_sentences_over_the_budget_make_the_voice_limited(
+    p95_ms: float, gaps: int, status: HealthStatus
+) -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+    workers.note_capture(worker, "available", "capturing")
+    workers.note_speech_gap(worker, p95_ms, gaps)
+
+    got, reason = await voice_health(workers)
+
+    assert got is status
+    if status is HealthStatus.LIMITED:
+        assert reason == (f"speech pauses between sentences: p95 {p95_ms:g} ms (budget 120 ms)")
+
+
+async def test_a_broken_microphone_is_named_before_the_pauses() -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+    workers.note_capture(worker, "unavailable", "gone")
+    workers.note_speech_gap(worker, 900.0, 50)
+
+    assert await voice_health(workers) == (HealthStatus.LIMITED, "microphone: gone")
+
+
+def test_a_gap_report_without_numbers_clears_it() -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+    workers.note_speech_gap(worker, 80.0, 10)
+    assert worker.speech_gap == (80.0, 10)
+
+    workers.note_speech_gap(worker, None, 0)
+    assert worker.speech_gap is None
+    workers.note_speech_gap(worker, 80.0, 0)  # a number over no gaps is no number
+    assert worker.speech_gap is None
+
+
+async def test_the_pauses_are_forgotten_when_the_worker_disconnects() -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+    workers.note_speech_gap(worker, 900.0, 50)
+
+    workers.detach("worker:voice")
+
+    assert worker.speech_gap is None
+
+
+async def test_the_heartbeat_hands_the_pauses_to_the_health_line_without_refreshing_it() -> None:
+    workers = supervisor()
+    ready_voice_worker(workers)
+    core = Core(workers)
+    handlers = CoreHandlers(cast("Any", core))
+
+    await handlers.worker_heartbeat(
+        context(),
+        WorkerHeartbeat(
+            capture="available", capture_reason="capturing", speech_gap_p95_ms=400.0, speech_gaps=20
+        ),
+    )
+
+    assert core.spawned == 1  # the microphone report is new; the pauses alone would not be
+    got, _ = await voice_health(workers)
+    assert got is HealthStatus.LIMITED
+    await handlers.worker_heartbeat(
+        context(),
+        WorkerHeartbeat(
+            capture="available", capture_reason="capturing", speech_gap_p95_ms=410.0, speech_gaps=21
+        ),
+    )
+    assert core.spawned == 1  # ever-changing numbers must not trigger a probe on every beat
+
+
+async def test_an_old_heartbeat_without_pause_fields_is_still_valid() -> None:
+    beat = WorkerHeartbeat.model_validate({"load": 0.2, "status": "running"})
+    assert (beat.speech_gap_p95_ms, beat.speech_gaps) == (None, 0)

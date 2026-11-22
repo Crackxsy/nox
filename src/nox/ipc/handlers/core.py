@@ -157,6 +157,10 @@ class WorkerHeartbeat(BaseModel):
     #: from every worker that has no microphone and from a voice worker that is not capturing yet.
     capture: str = ""
     capture_reason: str = ""
+    #: The voice worker's 95th-percentile silence between two sentences of one answer (ms) and how
+    #: many gaps that is over; absent until a long enough answer was spoken.
+    speech_gap_p95_ms: float | None = None
+    speech_gaps: int = 0
 
 
 class FunkenTopRequest(BaseModel):
@@ -495,6 +499,8 @@ class CoreHandlers:
     async def worker_heartbeat(self, ctx: RequestContext, p: WorkerHeartbeat) -> dict[str, Any]:
         core = self._core
         worker = next((w for w in core.workers.all() if w.client_id == ctx.client_id), None)
+        if worker is not None:
+            core.workers.note_speech_gap(worker, p.speech_gap_p95_ms, p.speech_gaps)
         if worker is not None and core.workers.note_capture(worker, p.capture, p.capture_reason):
             # The microphone started or stopped working: the voice health tile says so now, not at
             # the next scheduled probe.
