@@ -128,8 +128,8 @@ package_exceptions:
     category: allow
     reason: >
       MIT (Microsoft). Inference runtime for the Kokoro and Supertonic TTS models (`voice-kokoro`
-      and `voice-supertonic` extras) and for openWakeWord (`voice` extra); used unmodified as a
-      PyPI wheel.
+      and `voice-supertonic` extras), for openWakeWord and the Silero speech detector (`voice`
+      extra); used unmodified as a PyPI wheel.
   - name: openwakeword
     ecosystem: python
     category: allow

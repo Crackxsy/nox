@@ -1352,6 +1352,7 @@ shell = [
 ]
 voice = [
     { name = "faster-whisper" },
+    { name = "onnxruntime" },
     { name = "openwakeword" },
     { name = "piper-tts" },
     { name = "sounddevice" },
@@ -1381,6 +1382,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4.1" },
     { name = "numpy", specifier = ">=2.5.3" },
     { name = "numpy", marker = "extra == 'rl'", specifier = ">=2.5.3" },
+    { name = "onnxruntime", marker = "extra == 'voice'", specifier = ">=1.31.0" },
     { name = "onnxruntime", marker = "extra == 'voice-kokoro'", specifier = ">=1.31.0" },
     { name = "onnxruntime", marker = "extra == 'voice-supertonic'", specifier = ">=1.31.0" },
     { name = "opencv-python-headless", marker = "extra == 'rl'", specifier = ">=5.0.0.93" },

@@ -1,10 +1,12 @@
 """Energy/zero-crossing voice activity detection and utterance segmentation in numpy.
 
-No third-party VAD (webrtcvad has no 3.13 wheels); the detector tracks an adaptive noise floor and
+This is the fallback detector: the default is the neural one in `nox.voice.vad_silero`, and this
+one takes over when its model or runtime is missing or fails. It tracks an adaptive noise floor and
 flags a 30 ms frame as speech when its RMS level rises clearly above that floor and the zero-
-crossing rate is in the range of voiced/fricative speech rather than broadband hiss. The segmenter
-turns the per-frame decisions into utterances with pre-roll, hangover and a hard maximum length. It
-also supports a forced (push-to-talk) segment that ignores the VAD entirely.
+crossing rate is in the range of voiced/fricative speech rather than broadband hiss. It cannot tell
+speech from other loud sound, which is exactly why it is not the default. The segmenter turns the
+per-frame decisions of any `Vad` into utterances with pre-roll, hangover and a hard maximum length.
+It also supports a forced (push-to-talk) segment that ignores the VAD entirely.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Protocol
 
 import numpy as np
 
@@ -34,6 +37,18 @@ def frame_zcr(frame: np.ndarray) -> float:
     return float(np.count_nonzero(signs[1:] != signs[:-1])) / float(frame.size - 1)
 
 
+class Vad(Protocol):
+    """A per-frame speech decision. Frames are float32 mono at the capture rate.
+
+    A detector keeps its own state between frames (noise floor, network state, hysteresis), so a
+    `Segmenter` owns one detector for the whole capture session and `reset` starts it afresh.
+    """
+
+    def is_speech(self, frame: np.ndarray) -> bool: ...
+
+    def reset(self) -> None: ...
+
+
 @dataclass
 class EnergyVad:
     """Per-frame speech decision with an adaptive noise floor.
@@ -53,9 +68,16 @@ class EnergyVad:
     floor_attack: float = 0.05  # how fast the floor rises towards a louder quiet level
     floor_release: float = 0.2  # how fast the floor drops towards a quieter level
     max_floor_db: float = -25.0  # the floor never rises above this; louder is always "speech"
+    #: A sound that counts as speech without a single pause for this many frames (5 s) is not a
+    #: sentence but a steady background - music, a fan, a game. Then the floor creeps towards
+    #: its level (`creep`) until it stops counting, so a segment cannot stay open forever.
+    steady_frames: int = 166
+    creep: float = 0.03
+    _run: int = field(default=0, init=False, repr=False)
 
     def reset(self) -> None:
         self.noise_floor_db = -60.0
+        self._run = 0
 
     def level(self, frame: np.ndarray) -> tuple[float, float]:
         return frame_rms_db(frame), frame_zcr(frame)
@@ -67,6 +89,10 @@ class EnergyVad:
             and rms_db > self.noise_floor_db + self.margin_db
             and self.zcr_min <= zcr <= self.zcr_max
         )
+        self._run = self._run + 1 if speech else 0
+        if speech and self._run > self.steady_frames:
+            self.noise_floor_db += (rms_db - self.noise_floor_db) * self.creep
+            self.noise_floor_db = min(self.noise_floor_db, self.max_floor_db)
         if not speech:
             # Update the floor only from non-speech frames (asymmetric smoothing).
             if rms_db < self.noise_floor_db:
@@ -103,7 +129,7 @@ class Segmenter:
     - `force_start`/`force_end` implement push-to-talk: every frame is collected until release.
     """
 
-    vad: EnergyVad = field(default_factory=EnergyVad)
+    vad: Vad = field(default_factory=EnergyVad)
     sample_rate: int = 16000
     frame_ms: int = 30
     start_frames: int = 3
@@ -134,6 +160,7 @@ class Segmenter:
         self._buffer = []
         self._active = False
         self._forced = False
+        self.vad.reset()
 
     def _ms(self, frames: int) -> int:
         return frames * self.frame_ms

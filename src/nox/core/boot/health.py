@@ -70,6 +70,9 @@ def core_health_checks(
         # reason says what is wrong, so the tile never claims a voice that cannot hear is fine.
         if worker.capture is not None and worker.capture[0] is not HealthStatus.AVAILABLE:
             return HealthStatus.LIMITED, f"microphone: {worker.capture[1]}"
+        # Working, with something worth knowing: it rides in the reason, the status stays available.
+        if worker.capture_hint:
+            return HealthStatus.AVAILABLE, f"worker registered; {worker.capture_hint}"
         return HealthStatus.AVAILABLE, "worker registered"
 
     async def tokens_check() -> tuple[HealthStatus, str]:

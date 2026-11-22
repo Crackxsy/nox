@@ -74,3 +74,43 @@ async def test_a_worker_in_safe_mode_does_not_report_its_stopped_microphone_as_a
 
     worker.request_stop()
     await task
+
+
+class FakeChain:
+    def __init__(self, note: str) -> None:
+        self.note = note
+
+    def notes(self) -> str:
+        return self.note
+
+
+async def test_the_heartbeat_carries_the_input_side_note(client: FakeIpcClient) -> None:
+    built = Built()
+    worker = VoiceWorker(
+        client=client, service="voice", pipeline_factory=built.factory, heartbeat_s=0.01
+    )
+    worker.capture_chain = FakeChain("speech detection: energy fallback (x)")
+    task = await start(worker)
+    await asyncio.sleep(0.05)
+
+    beats = [p for n, p in client.requests if n == "worker.heartbeat"]
+    assert beats[-1]["capture_hint"] == "speech detection: energy fallback (x)"
+    assert beats[-1]["capture"] == str(HealthStatus.AVAILABLE)
+
+    worker.request_stop()
+    await task
+
+
+async def test_a_worker_without_an_input_chain_sends_no_note(client: FakeIpcClient) -> None:
+    built = Built()
+    worker = VoiceWorker(
+        client=client, service="voice", pipeline_factory=built.factory, heartbeat_s=0.01
+    )
+    task = await start(worker)
+    await asyncio.sleep(0.05)
+
+    beats = [p for n, p in client.requests if n == "worker.heartbeat"]
+    assert beats and all("capture_hint" not in beat for beat in beats)
+
+    worker.request_stop()
+    await task

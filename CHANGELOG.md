@@ -9,6 +9,40 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Voice: the speech model is never downloaded by itself.** `faster-whisper` fetched its model
+  from Hugging Face on first use - unasked, unpinned, also in the privacy modes `offline` and
+  `private`. The engine now only reads from disk and reports a missing model with the command to
+  install it; `nox voice setup` downloads it, pinned to one commit of the model repository, only
+  after a yes and never in `offline`/`private` (`tiny`, `base`, `small` have pins). Older caches
+  keep working. The dashboard tile and the onboarding step still cover the TTS files only.
+- **Voice: the worker steps back from a game.** It runs at normal priority instead of above
+  normal, drops to below normal while a game is in the foreground (`voice.performance`), and
+  `voice.performance.cpu_threads` caps the speech-recognition threads. Frame-rate effect not
+  measured.
+- **Voice: the sentence ends after 400 ms of silence** (`voice.vad.end_silence_ms`, was 600 ms),
+  now that the detector does not flicker inside a sentence.
+- **Voice: Nox no longer takes its own voice for yours (echo protection, version 1).** Nox finds
+  out what it plays on - Windows: the audio endpoint's form factor from the registry (read only),
+  Linux: `pactl`, macOS: `system_profiler` (untested on real hardware), each backed by a guess from
+  the device name. While it speaks over loudspeakers (or an output it cannot identify), and for
+  400 ms afterwards, speech must be louder than -30 dBFS for 240 ms before it counts as the user -
+  dips inside a voice do not count against it, and a counted voice survives pauses of up to 300 ms
+  - so the echo of Nox no longer interrupts Nox, while a person talking over it still does.
+  Headphones and stream-only output change nothing. `voice.echo` has `mode` (`auto`, `off`,
+  `threshold`, `half_duplex`), `start_db`, `min_ms` and `tail_ms`. This is a threshold, not echo
+  cancellation (documented limits in the README); the voice health line says "headphones
+  recommended" for loudspeakers.
+- **Voice: a neural speech detector instead of a loudness threshold.** The capture loop decided
+  "speech" by loudness alone, so music, a game or a television opened segments like a voice. The
+  default is now Silero VAD (MIT, ONNX Runtime, about 0.1 ms per 32 ms block on one thread, budget
+  40 ms) with hysteresis (start 0.5, end 0.35; `voice.vad` in the configuration). On synthetic
+  test signals the energy detector called 97-100 % of the frames of music and game sound speech,
+  Silero 0 %, and Silero still hears speech at -45 dBFS. The model is the copy inside
+  `faster-whisper` (nothing is downloaded) and is only loaded when its SHA-256 is known; the
+  energy detector stays as the fallback and takes over by itself - with a note on the voice health
+  line - when the model or `onnxruntime` is missing, fails or misses the time budget. The `voice`
+  extra now names `onnxruntime` itself. The worker heartbeat carries an optional note about the
+  input side (`capture_hint`), shown with the voice health line without making it `limited`.
 - **Voice: the microphone is supervised and says when it is gone.** A capture loop that ends,
   fails or goes quiet while capture should be on is restarted with a growing delay (1, 2, 5, 10,
   then every 30 s, longer still for a microphone that keeps dropping out), the voice health line
@@ -45,6 +79,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   A `nox-reclaim` marker on the boot partition forgets the owner at the next boot (all pairings
   and tokens revoked, the PIN cleared; other data stays). `systemd-firstboot.service` is masked (it failed on headless first boots). The QEMU smoke boots
   twice (provisioned with portal and claim; fresh with the window expiring).
+
+### Fixed
+- **Voice: the request after "Nox" keeps its capital letters and punctuation.** "Nox, merk dir:
+  Treffen mit Anna am 3. Mai um 18:30 Uhr." reached the memory and the language model as "merk dir
+  treffen mit anna am 3 mai um 18 30 uhr", "3,5" as "3 5". The request is now cut from the
+  original transcript (the comment said so, a test fixed the opposite).
+- **Voice: a steady background no longer holds a segment open for ever.** The energy detector
+  (the fallback) only learned its noise floor from non-speech frames, so music or a fan counted as
+  speech without end; after 5 s without a pause the floor now creeps up to it.
+- **Docs: the wake word.** `USER_GUIDE.md` promised the wake word "Nox"; there is no trained model
+  yet, so hands-free listening transcribes everything and looks for "Nox" in the text. Said so.
 
 ### Changed
 - **The device side of the node code is cut along its responsibilities** (`nox.node.device`): the seven

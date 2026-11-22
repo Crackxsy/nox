@@ -46,6 +46,9 @@ class WorkerProcess:
     registered: asyncio.Event = field(default_factory=asyncio.Event)
     #: What the worker last said about its microphone (voice worker only): `(status, reason)`.
     capture: tuple[HealthStatus, str] | None = None
+    #: A note about the input side that is not a failure (loudspeakers: "headphones recommended",
+    #: the energy detector in use). Shown with the voice health line, never turns it `limited`.
+    capture_hint: str = ""
 
 
 class WorkerSpeaker:
@@ -115,19 +118,22 @@ class WorkerSupervisor:
         worker = self._workers.get(service)
         return worker.client_id if worker and worker.registered.is_set() else None
 
-    def note_capture(self, worker: WorkerProcess, status: str, reason: str) -> bool:
+    def note_capture(self, worker: WorkerProcess, status: str, reason: str, hint: str = "") -> bool:
         """Record the microphone state from a heartbeat; True when it differs from the last one.
 
         An empty or unknown status clears it: the worker is not reporting one (it has no
-        microphone, or has not started capturing), which is not a failure.
+        microphone, or has not started capturing), which is not a failure. The hint is kept only
+        alongside a status.
         """
         try:
             report = (HealthStatus(status), reason) if status else None
         except ValueError:
             report = None
-        if report == worker.capture:
+        note = hint if report is not None else ""
+        if report == worker.capture and note == worker.capture_hint:
             return False
         worker.capture = report
+        worker.capture_hint = note
         return True
 
     def spawn(self, service: str) -> None:
@@ -170,6 +176,7 @@ class WorkerSupervisor:
                 worker.client_id = None
                 worker.registered.clear()
                 worker.capture = None
+                worker.capture_hint = ""
                 log.warning("worker.disconnected", service=worker.service, client=client_id)
                 return worker
         return None

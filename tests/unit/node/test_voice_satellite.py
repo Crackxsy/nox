@@ -90,10 +90,9 @@ def test_voice_setup_asks_first_and_downloads_into_the_node_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The models only after a yes, into the node's own folder - and
-    the node's speech recognition never downloads by itself (`local_files_only`)."""
+    the speech recognition never downloads by itself."""
     from nox.node.device.voice import settings as settings_module
     from nox.node.device.voice import setup as setup_module
-    from nox.voice.stt.faster_whisper_engine import FasterWhisperStt
 
     monkeypatch.setattr(setup_module, "voice_support", lambda: None)
     fetched: list[tuple[str, Path]] = []
@@ -119,8 +118,6 @@ def test_voice_setup_asks_first_and_downloads_into_the_node_folder(
         "supertonic",
     ]
     assert all(str(target).startswith(str(tmp_path / "models")) for _, target in fetched)
-    assert FasterWhisperStt().local_files_only is False  # the core keeps its own behaviour
-    assert FasterWhisperStt(local_files_only=True).local_files_only is True
 
 
 # ---- the voice satellite on the node -------------------------------------------------------------

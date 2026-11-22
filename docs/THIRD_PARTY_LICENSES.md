@@ -69,7 +69,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | narwhals | 2.26.0 | MIT | allow | MIT |
 | nox | 0.5.0 | Apache-2.0 | allow | Apache-2.0 |
 | numpy | 2.5.3 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | allow | [package exception] Declared license expression is an SPDX AND of BSD-3-Clause, 0BSD, MIT, Zlib and CC0-1.0 for numpy's own code plus small vendored components; every component is permissive. Verified against numpy's LICENSE.txt (2026-09-14). |
-| onnxruntime | 1.31.0 | MIT License | allow | [package exception] MIT (Microsoft). Inference runtime for the Kokoro and Supertonic TTS models (`voice-kokoro` and `voice-supertonic` extras) and for openWakeWord (`voice` extra); used unmodified as a PyPI wheel. |
+| onnxruntime | 1.31.0 | MIT License | allow | [package exception] MIT (Microsoft). Inference runtime for the Kokoro and Supertonic TTS models (`voice-kokoro` and `voice-supertonic` extras), for openWakeWord and the Silero speech detector (`voice` extra); used unmodified as a PyPI wheel. |
 | opencv-python-headless | 5.0.0.93 | Apache 2.0 | allow | Apache 2.0 |
 | openwakeword | 0.6.0 | Apache Software License | allow | [package exception] Apache-2.0 (OSI classifier; the PyPI `license` field is empty). Tiny always-on wake-word detector in front of Whisper (#20), used unmodified with ONNX Runtime. Its pre-trained models are separate downloads and fall under the "Not covered" model section of this audit. |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause | allow | OR expression, using the 'Apache-2.0' alternative (Apache-2.0 OR BSD-2-Clause) |

@@ -131,7 +131,13 @@ cannot be turned off or hidden by configuration — if something is being captur
   flick an ear, and have their own pictures for sleeping, lying down and eating; a preview shows the
   one you picked. The five drawn shapes need no pictures at all. The change applies at once,
   without a restart.
-- **Voice**: push-to-talk (`ctrl+alt+space` by default) or the wake word "Nox"; local
+- **Voice**: push-to-talk (`ctrl+alt+space` by default; the microphone is closed until you hold
+  it). Hands-free listening (`voice.stt.listening_mode: continuous`) is an opt-in with a
+  limitation: there is no trained acoustic model for the word "Nox" yet, so every stretch of
+  speech the microphone hears is transcribed on this machine and only then checked for "Nox" in
+  the text - nothing is sent anywhere, but "nothing is transcribed unless you ask" holds for
+  push-to-talk only. A trained wake-word model is planned; until one exists, push-to-talk is the
+  default for a reason. Local
   speech-to-text (faster-whisper) and text-to-speech with Supertonic 3 (natural German and
   English, on the processor). Its model files (about 400 MB) are downloaded only when you say so:
   Dashboard → Settings → *Voice* (in German: *Stimme*) shows what is missing, the size and the

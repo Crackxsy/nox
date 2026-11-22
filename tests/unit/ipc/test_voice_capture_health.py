@@ -176,3 +176,68 @@ async def test_a_heartbeat_from_a_worker_the_core_does_not_know_changes_nothing(
 async def test_an_old_heartbeat_without_microphone_fields_is_still_valid() -> None:
     beat = WorkerHeartbeat.model_validate({"load": 0.2, "status": "running"})
     assert (beat.capture, beat.capture_reason) == ("", "")
+
+
+# ---- the note that is not a failure -----------------------------------------------------------
+
+
+async def test_a_note_about_the_input_side_rides_in_the_reason_without_limiting_the_voice() -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+    workers.note_capture(worker, "available", "capturing", "headphones recommended")
+
+    assert await voice_health(workers) == (
+        HealthStatus.AVAILABLE,
+        "worker registered; headphones recommended",
+    )
+
+
+async def test_a_failing_microphone_outranks_a_note() -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+    workers.note_capture(worker, "unavailable", "gone", "headphones recommended")
+
+    assert await voice_health(workers) == (HealthStatus.LIMITED, "microphone: gone")
+
+
+def test_a_changed_note_counts_as_a_change_and_a_cleared_state_drops_it() -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+
+    assert workers.note_capture(worker, "available", "capturing", "a") is True
+    assert workers.note_capture(worker, "available", "capturing", "a") is False
+    assert workers.note_capture(worker, "available", "capturing", "b") is True
+    assert workers.note_capture(worker, "available", "capturing") is True  # note withdrawn
+    assert worker.capture_hint == ""
+    assert workers.note_capture(worker, "available", "capturing", "a") is True
+    assert workers.note_capture(worker, "", "", "a") is True  # no status: no note either
+    assert worker.capture is None and worker.capture_hint == ""
+
+
+async def test_the_note_is_forgotten_when_the_worker_disconnects() -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+    workers.note_capture(worker, "available", "capturing", "a note")
+
+    workers.detach("worker:voice")
+
+    assert worker.capture_hint == ""
+
+
+async def test_the_heartbeat_handler_passes_the_note_on() -> None:
+    workers = supervisor()
+    worker = ready_voice_worker(workers)
+    core = Core(workers)
+    handlers = CoreHandlers(cast("Any", core))
+
+    await handlers.worker_heartbeat(
+        context(),
+        WorkerHeartbeat(capture="available", capture_reason="capturing", capture_hint="a note"),
+    )
+
+    assert worker.capture_hint == "a note"
+    assert core.spawned == 1
+
+
+def test_an_old_heartbeat_has_no_note() -> None:
+    assert WorkerHeartbeat.model_validate({"capture": "available"}).capture_hint == ""

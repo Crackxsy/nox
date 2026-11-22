@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
 _SPACES = re.compile(r"\s+")
+_WORD = re.compile(r"\S+")
 
 GREETINGS = frozenset({"hey", "he", "hallo", "hi", "ok", "okay", "ey", "yo", "also", "so"})
 WAKE_SPELLINGS = frozenset(
@@ -95,7 +96,14 @@ def is_wake_token(token: str, *, name: str = "nox", threshold: float = 0.75) -> 
 class WakeMatch:
     addressed: bool  # utterance starts with the wake word (after optional greeting)
     kill: bool  # kill phrase present anywhere ("Nox Notaus" ...)
-    remainder: str  # text after the wake word (original casing preserved best-effort)
+    #: Text after the wake word, exactly as transcribed: capitalisation, punctuation, digits
+    #: ("Treffen mit Anna am 3. Mai um 18:30 Uhr?"). Names and numbers must reach the memory and the
+    #: language model as Whisper wrote them.
+    remainder: str
+
+
+#: Characters between the wake word and the request that are not part of the request.
+_SEPARATORS = " \t\r\n,.:;!?-\u2013\u2014"
 
 
 class WakeWordMatcher:
@@ -106,7 +114,15 @@ class WakeWordMatcher:
         return normalize(text).split()
 
     def match(self, text: str) -> WakeMatch:
-        tokens = self._tokens(text)
+        # Every comparison token remembers the whitespace-separated word it came from, so the
+        # request can be cut from the ORIGINAL text.
+        words = list(_WORD.finditer(text))
+        tokens: list[str] = []
+        owner: list[int] = []
+        for index, word in enumerate(words):
+            for token in normalize(word.group()).split():
+                tokens.append(token)
+                owner.append(index)
         if not tokens:
             return WakeMatch(False, False, "")
         kill = self._has_kill_phrase(tokens)
@@ -115,9 +131,9 @@ class WakeWordMatcher:
             start += 1
         addressed = start < len(tokens) and is_wake_token(tokens[start], name=self.name)
         if addressed:
-            remainder = " ".join(tokens[start + 1 :])
+            remainder = text[words[owner[start]].end() :].lstrip(_SEPARATORS)
         else:
-            remainder = " ".join(tokens)
+            remainder = text.strip()
         return WakeMatch(addressed=addressed, kill=kill, remainder=remainder)
 
     def _has_kill_phrase(self, tokens: list[str]) -> bool:
