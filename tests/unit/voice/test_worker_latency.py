@@ -107,13 +107,25 @@ def test_the_configuration_reaches_the_pipeline() -> None:
             "barge_in": False,
             "barge_in_min_ms": 250,
             "barge_in_min_db": -30.0,
-            "tts": {"prefetch_sentences": 2, "prefetch_buffer_s": 12.5, "edge_fade_ms": 6.0},
+            "tts": {
+                "prefetch_sentences": 2,
+                "prefetch_buffer_s": 12.5,
+                "edge_fade_ms": 6.0,
+                "trim_silence": False,
+                "silence_threshold_db": -45.0,
+                "normalize_text": False,
+            },
         }
     )
 
     config = pipeline_config_from(voice)
 
     assert (config.barge_in, config.barge_in_min_ms, config.barge_in_min_db) == (False, 250, -30.0)
+    assert (config.trim_silence, config.silence_threshold_db, config.normalize_text) == (
+        False,
+        -45.0,
+        False,
+    )
     assert (config.prefetch_sentences, config.prefetch_buffer_s, config.edge_fade_ms) == (
         2,
         12.5,
@@ -131,4 +143,7 @@ def test_the_defaults_are_the_same_in_the_file_and_in_the_pipeline() -> None:
     assert config.barge_in_min_ms == PipelineConfig().barge_in_min_ms
     assert config.barge_in_min_db == PipelineConfig().barge_in_min_db
     assert config.edge_fade_ms == PipelineConfig().edge_fade_ms
+    assert config.trim_silence is PipelineConfig().trim_silence is True
+    assert config.silence_threshold_db == PipelineConfig().silence_threshold_db
+    assert config.normalize_text is PipelineConfig().normalize_text is True
     assert config.prefetch_buffer_s == PipelineConfig().prefetch_buffer_s

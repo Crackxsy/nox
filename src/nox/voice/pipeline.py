@@ -55,13 +55,14 @@ from nox.voice.capture_health import (
     CaptureNotice,
     CaptureSupervisor,
 )
-from nox.voice.edges import MAX_FADE_MS, fade_edges
+from nox.voice.edges import MAX_FADE_MS, SILENCE_THRESHOLD_DB, fade_edges, trim_silence
 from nox.voice.latency import LatencySummary, LatencyTracker, TurnTicket, noting_first_chunk
 from nox.voice.levels import pace_levels
 from nox.voice.prefetch import BYTES_PER_SAMPLE, MAX_LOOKAHEAD, PrefetchedSpeech
 from nox.voice.stt.wake_gate import GateDecision, WakeGate
 from nox.voice.stt.wake_word import WakeWordMatcher
 from nox.voice.tts.clips import ClipNotFoundError
+from nox.voice.tts.normalize import normalize_for_speech
 from nox.voice.vad import EnergyVad, Segmenter, SegmentEvent, SegmentKind
 
 log = get_logger(__name__)
@@ -94,6 +95,12 @@ class PipelineConfig(BaseModel):
     #: Fade of the first and last milliseconds of every sentence, so a stream that stays open
     #: between sentences has no click at the seam. 0 switches it off.
     edge_fade_ms: float = Field(default=4.0, ge=0.0, le=MAX_FADE_MS)
+    #: Cut the silence an engine leaves in front of and behind a sentence (`trim_silence`), so
+    #: the first sound is heard as early as it exists and sentences follow each other closely.
+    trim_silence: bool = True
+    silence_threshold_db: float = Field(default=SILENCE_THRESHOLD_DB, ge=-90.0, le=-20.0)
+    #: Write numbers, dates, units and abbreviations out in words before the engine reads them.
+    normalize_text: bool = True
     #: Talking over Nox: how much loud speech cuts the answer off, and how loud is loud
     #: (`nox.voice.barge_in` explains the defaults). 0 ms means any detected speech does.
     barge_in_min_ms: int = Field(default=DEFAULT_MIN_MS, ge=0, le=2000)
@@ -726,6 +733,13 @@ class DefaultVoicePipeline:
                 return  # interrupted before the first sample; `finally` reports it
             heard = speech.audio.chunks()
             streams.append(heard)
+            if self.config.trim_silence:
+                heard = trim_silence(
+                    heard,
+                    self._tts.sample_rate,
+                    threshold_db=self.config.silence_threshold_db,
+                )
+                streams.append(heard)
             if self.config.edge_fade_ms > 0:
                 heard = fade_edges(heard, self._tts.sample_rate, self.config.edge_fade_ms)
                 streams.append(heard)
@@ -789,7 +803,14 @@ class DefaultVoicePipeline:
     async def _synthesize(self, request: TtsRequest) -> AsyncIterator[bytes]:
         """The engine's audio for `request`. A prepared clip that is not installed is spoken from
         the request's own text instead of failing: callouts name a clip and carry their words, and
-        no clip ships with Nox, so the alternative to speaking the words is silence."""
+        no clip ships with Nox, so the alternative to speaking the words is silence.
+
+        The engine is given the words as they are said (numbers, dates and abbreviations written
+        out); every other field of the request, the style included, goes through unchanged."""
+        if self.config.normalize_text and request.normalize:
+            words = normalize_for_speech(request.text, request.language)
+            if words != request.text:
+                request = request.model_copy(update={"text": words})
         first = self._tts.synthesize(request)
         started = False
         try:

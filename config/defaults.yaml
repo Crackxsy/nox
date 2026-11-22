@@ -150,6 +150,9 @@ voice:
     prefetch_cpu_ceiling: 0.85   # look-ahead only while system CPU load is below this fraction,
                                  # so a game keeps its frames (the sentence then waits its turn)
     edge_fade_ms: 4              # fade of each sentence's first/last ms: no click at the seam
+    trim_silence: true           # cut the silence the engine leaves before/after each sentence
+    silence_threshold_db: -50    # what counts as silence there (dBFS)
+    normalize_text: true         # numbers, dates, units, abbreviations are said as words
   channels:
     private_device: ""           # default output device when empty
     stream_device: ""            # e.g. VB-Audio Cable input, empty = disabled

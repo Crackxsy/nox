@@ -19,6 +19,24 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the spot (synthesis stopped, buffered audio dropped). A callout's missing clip is still spoken
   from its words, before the first chunk only. `TtsRequest.style` (optional emphasis and tempo per
   sentence) is carried to the engine unchanged; no engine reads it yet and there is no new voice.
+- **Voice: the silence an engine leaves around a sentence is cut.** The default engine puts about
+  0.5 s of silence in front of a sentence and 0.6 to 0.7 s behind it; played one after another that
+  is more than a second of dead air per boundary. The first and last silence is removed at the
+  output (`voice.tts.trim_silence`, threshold `voice.tts.silence_threshold_db`, default -50 dBFS;
+  10 ms in front and 60 ms behind are kept, a pause inside the sentence is not touched). The turn
+  latency is therefore the time to the first *sound*; a test with an output that knows when the
+  first audible sample plays holds the two numbers together.
+- **Voice: one rule for where a sentence ends.** The orchestrator cut answers at every full stop
+  ("am 9. Mai", "z. B.", "Dr. Meier", "ca. 5" became several sentences, each with a pause and a
+  falling voice). It now uses the splitter of the engines (`nox.voice.tts.sentences`): abbreviations,
+  initials, dates and ordinals ("am 9. Mai", "am 22.11. um fünf"), list markers ("1.", "Schritt 2."),
+  decimals and thousands, closing quotes. Text fed in pieces gives the same sentences as the whole
+  text; a number followed by a full stop waits for the word after it.
+- **Voice: numbers, dates, units and abbreviations are said in words** (`nox.voice.tts.normalize`,
+  `voice.tts.normalize_text`, German with a small English table): dates, times, money, units,
+  percent, decimals, ordinals, "z. B." and the like; deterministic, local, unrecognised text stays
+  as it is. A request can opt out (`TtsRequest.normalize`). The text on screen and in events is
+  unchanged.
 - **Voice: the silence between sentences is measured.** `voice.latency` now returns
   `sentence_gap_ms` (P50/P95 over the last 100 gaps, for sentences that were already waiting),
   `sentence_gaps`, the budget (95th percentile under 120 ms) and whether it is met. The worker

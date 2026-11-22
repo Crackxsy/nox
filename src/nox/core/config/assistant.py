@@ -132,6 +132,13 @@ class TtsConfig(StrictSection):
     prefetch_cpu_ceiling: float = Field(default=0.85, gt=0.0, le=1.0)
     #: Fade of the first and last milliseconds of each sentence (no click between sentences).
     edge_fade_ms: float = Field(default=4.0, ge=0.0, le=20.0)
+    #: Cut the silence the engine leaves in front of and behind each sentence (about half a
+    #: second each on the default engine), so sentences follow each other closely.
+    trim_silence: bool = True
+    #: What counts as silence there, in dBFS.
+    silence_threshold_db: float = Field(default=-50.0, ge=-90.0, le=-20.0)
+    #: Write numbers, dates, units and abbreviations out in words before the engine reads them.
+    normalize_text: bool = True
 
 
 class VoiceChannelsConfig(StrictSection):

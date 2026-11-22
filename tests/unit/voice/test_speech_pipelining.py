@@ -128,7 +128,9 @@ def make(
         tts=engine,  # type: ignore[arg-type]
         emit=events,
         capture_allowed=lambda: True,
-        config=PipelineConfig(edge_fade_ms=0, **config),  # the fake engine's bytes are labels
+        config=PipelineConfig(
+            edge_fade_ms=0, trim_silence=False, **config
+        ),  # the fake engine's bytes are labels
         prefetch_allowed=allowed or (lambda: True),
     )
     return pipeline, out, engine, events
@@ -533,7 +535,7 @@ def timed(clock: VirtualClock, *, synth_s: float, audio_s: float, **config: Any)
         tts=SimTts(clock, synth_s=synth_s, audio_s=audio_s),  # type: ignore[arg-type]
         emit=Events(),
         capture_allowed=lambda: True,
-        config=PipelineConfig(edge_fade_ms=0, **config),
+        config=PipelineConfig(edge_fade_ms=0, trim_silence=False, **config),
         clock=clock,
         sleep=clock.sleep,
     )

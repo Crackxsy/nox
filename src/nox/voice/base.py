@@ -74,6 +74,9 @@ class TtsRequest(BaseModel):
     prepared_clip: str | None = None  # id of a pre-rendered clip (RL callouts) bypasses synthesis
     #: Optional per-sentence emphasis and tempo (`SentenceStyle`); absent = the voice as it is.
     style: SentenceStyle | None = None
+    #: Numbers, dates, units and abbreviations are written out before the engine reads the text
+    #: (`nox.voice.tts.normalize`). False: the engine gets the text exactly as it is.
+    normalize: bool = True
 
 
 class TtsEngine(Protocol):

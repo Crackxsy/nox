@@ -498,6 +498,9 @@ def pipeline_config_from(voice: VoiceConfig) -> PipelineConfig:
         prefetch_sentences=voice.tts.prefetch_sentences,
         prefetch_buffer_s=voice.tts.prefetch_buffer_s,
         edge_fade_ms=voice.tts.edge_fade_ms,
+        trim_silence=voice.tts.trim_silence,
+        silence_threshold_db=voice.tts.silence_threshold_db,
+        normalize_text=voice.tts.normalize_text,
         barge_in_min_ms=voice.barge_in_min_ms,
         barge_in_min_db=voice.barge_in_min_db,
     )

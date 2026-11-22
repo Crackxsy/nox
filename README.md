@@ -397,7 +397,22 @@ the start of the next, for sentences that were already waiting, is measured too 
 in `voice.latency`; budget: 95th percentile under 120 ms). When it stays over the budget for at
 least eight gaps, the voice health line says so ("speech pauses between sentences"). A callout
 whose prepared clip is not installed is still spoken from its words; the fallback happens before
-the first chunk only. A sentence may carry an optional style (`TtsRequest.style`: emphasis and
+the first chunk only.
+
+Three things in front of the engine decide how an answer sounds as much as the look-ahead does.
+The default engine puts about half a second of silence in front of a sentence and more than half a
+second behind it - more than a second of dead air at every boundary however well the next sentence
+was prepared - so the silence at both ends is cut (`voice.tts.trim_silence`, anything under
+`voice.tts.silence_threshold_db`, default -50 dBFS; 10 ms in front and 60 ms behind are kept, a pause
+inside a sentence never). That also makes the turn latency honest: the first chunk is now the first
+sound, not half a second of silence in front of it. The orchestrator and the engines cut text into
+sentences with one rule (`nox.voice.tts.sentences`): "am 9. Mai", "z. B.", "Dr. Meier", "ca. 5",
+"1.500 Euro" and "Schritt 1." stay in one piece, a closing quote stays with its sentence, a number
+followed by a full stop waits for the next word before it is let go. And what the engine reads is
+text written out in words (`nox.voice.tts.normalize`, `voice.tts.normalize_text`, German first):
+"22.11.2026" is the date, "14:30" a time, "1.500 Euro", "3,50 EUR", "4 °C", "50 %" and "5 km/h" are
+said with their units, "z. B." is "zum Beispiel", "am 9. Mai" is "am neunten Mai". Phone numbers and
+anything not recognised are left to the engine. The text shown on screen is the written one. A sentence may carry an optional style (`TtsRequest.style`: emphasis and
 tempo); the pipeline hands it to the engine unchanged, no engine uses it yet.
 
 **Talking over Nox.** A speech detector that fires is not enough to cut an answer off - a cough, a

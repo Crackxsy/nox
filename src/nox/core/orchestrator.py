@@ -39,6 +39,7 @@ from nox.core.state import StateManager
 from nox.core.toolloop import ActiveTurn, ToolEvent, ToolLoop
 from nox.security.taint import UNTRUSTED_CONVERSATIONS
 from nox.voice.base import Channel, TtsRequest
+from nox.voice.tts.sentences import split_stream
 
 log = get_logger(__name__)
 
@@ -1178,14 +1179,12 @@ class Orchestrator:
         dash) once it is long enough to be worth saying on its own: the listener hears the first
         words while the model is still writing the end of that sentence.
         """
-        parts = [p for p in _SENTENCE_END.split(buffer) if p is not None]
-        if final:
-            return [p.strip() for p in parts if p.strip()], ""
-        if len(parts) <= 1:
-            if first and len(buffer) >= FIRST_CLAUSE_MIN_CHARS:
-                cut = max(buffer.rfind(mark) for mark in _CLAUSE_MARKS)
-                if cut >= FIRST_CLAUSE_MIN_CHARS // 2:
-                    head = buffer[: cut + 1].strip()
-                    return [head], buffer[cut + 1 :].lstrip()
-            return [], buffer
-        return [p.strip() for p in parts[:-1] if p.strip()], parts[-1]
+        sentences, rest = split_stream(buffer, final=final)
+        if final or sentences:
+            return sentences, rest
+        if first and len(buffer) >= FIRST_CLAUSE_MIN_CHARS:
+            cut = max(buffer.rfind(mark) for mark in _CLAUSE_MARKS)
+            if cut >= FIRST_CLAUSE_MIN_CHARS // 2:
+                head = buffer[: cut + 1].strip()
+                return [head], buffer[cut + 1 :].lstrip()
+        return [], buffer

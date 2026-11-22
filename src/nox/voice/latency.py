@@ -9,6 +9,10 @@ impression:
     utterance ended -> transcribed -> transcript published -> first sentence handed to speech
     -> first audio chunk handed to the output device
 
+"First audio chunk" means the first sound: the output chain cuts the silence an engine puts in
+front of a sentence before the chunk is counted (`nox.voice.edges.trim_silence`), so the number is
+when the listener hears something, within the few milliseconds of lead that are kept.
+
 The model's own first-token time is not visible from the worker; it is part of `reply_ms` (the
 orchestrator's `TurnTimings` break it down). Only voice turns are measured: a turn exists from the
 moment an addressed transcript is published, and ends at the first sound that follows. Everything is
