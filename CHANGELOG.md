@@ -9,6 +9,22 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **A test workshop for the stream code** (`tests/workshop/`, `tests/unit/workshop/`; test support
+  only, nothing ships): a fake OBS that speaks obs-websocket v5 (hello, authentication with its
+  close codes, subscriptions per event category, request statuses) with a small stateful OBS
+  behind it (scenes, sources, filters, stream / record / replay-buffer outputs) and scripted
+  failures (a refused request, an answer that never comes, a connection cut in the middle of a
+  request, refused connections, a server that never says hello); a fake Twitch chat server with
+  the login, `CAP`, `JOIN`, `ROOMSTATE`, `PING`, chat lines with the full tag set, user notices,
+  `RECONNECT`, Twitch's send rules (budget per window, no identical message twice) and failures
+  (refused login, refused or cut connections, a connection that goes quiet); two recordings of
+  event shapes with invented content that can be replayed, and a check that keeps recordings
+  free of real names, links, addresses and credentials. Over 150 new tests hold `nox.stream.obs_ws`,
+  the OBS plugin, the Twitch chat client and the Twitch plugin to those fakes (login, wrong
+  password, recovery, request matching, timeouts, cuts in the middle of a request, reconnects and
+  the wait between attempts, notices, the plugin's send budget against Twitch's, health reasons),
+  and the fakes themselves to the specifications with clients that share no code with Nox. No
+  product behaviour changed. Guide: `tests/workshop/README.md`.
 - **Voice: the microphone is supervised and says when it is gone.** A capture loop that ends,
   fails or goes quiet while capture should be on is restarted with a growing delay (1, 2, 5, 10,
   then every 30 s, longer still for a microphone that keeps dropping out), the voice health line
