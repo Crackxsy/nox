@@ -9,6 +9,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Voice: a neural speech detector instead of a loudness threshold.** The capture loop decided
+  "speech" by loudness alone, so music, a game or a television opened segments like a voice. The
+  default is now Silero VAD (MIT, ONNX Runtime, about 0.1 ms per 32 ms block on one thread, budget
+  40 ms) with hysteresis (start 0.5, end 0.35; `voice.vad` in the configuration). On synthetic
+  test signals the energy detector called 97-100 % of the frames of music and game sound speech,
+  Silero 0 %, and Silero still hears speech at -45 dBFS. The model is the copy inside
+  `faster-whisper` (nothing is downloaded) and is only loaded when its SHA-256 is known; the
+  energy detector stays as the fallback and takes over by itself - with a note on the voice health
+  line - when the model or `onnxruntime` is missing, fails or misses the time budget. The `voice`
+  extra now names `onnxruntime` itself. The worker heartbeat carries an optional note about the
+  input side (`capture_hint`), shown with the voice health line without making it `limited`.
 - **Voice: the microphone is supervised and says when it is gone.** A capture loop that ends,
   fails or goes quiet while capture should be on is restarted with a growing delay (1, 2, 5, 10,
   then every 30 s, longer still for a microphone that keeps dropping out), the voice health line

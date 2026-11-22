@@ -1,10 +1,12 @@
 """Energy/zero-crossing voice activity detection and utterance segmentation in numpy.
 
-No third-party VAD (webrtcvad has no 3.13 wheels); the detector tracks an adaptive noise floor and
+This is the fallback detector: the default is the neural one in `nox.voice.vad_silero`, and this
+one takes over when its model or runtime is missing or fails. It tracks an adaptive noise floor and
 flags a 30 ms frame as speech when its RMS level rises clearly above that floor and the zero-
-crossing rate is in the range of voiced/fricative speech rather than broadband hiss. The segmenter
-turns the per-frame decisions into utterances with pre-roll, hangover and a hard maximum length. It
-also supports a forced (push-to-talk) segment that ignores the VAD entirely.
+crossing rate is in the range of voiced/fricative speech rather than broadband hiss. It cannot tell
+speech from other loud sound, which is exactly why it is not the default. The segmenter turns the
+per-frame decisions of any `Vad` into utterances with pre-roll, hangover and a hard maximum length.
+It also supports a forced (push-to-talk) segment that ignores the VAD entirely.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Protocol
 
 import numpy as np
 
@@ -32,6 +35,18 @@ def frame_zcr(frame: np.ndarray) -> float:
         return 0.0
     signs = np.signbit(frame)
     return float(np.count_nonzero(signs[1:] != signs[:-1])) / float(frame.size - 1)
+
+
+class Vad(Protocol):
+    """A per-frame speech decision. Frames are float32 mono at the capture rate.
+
+    A detector keeps its own state between frames (noise floor, network state, hysteresis), so a
+    `Segmenter` owns one detector for the whole capture session and `reset` starts it afresh.
+    """
+
+    def is_speech(self, frame: np.ndarray) -> bool: ...
+
+    def reset(self) -> None: ...
 
 
 @dataclass
@@ -103,7 +118,7 @@ class Segmenter:
     - `force_start`/`force_end` implement push-to-talk: every frame is collected until release.
     """
 
-    vad: EnergyVad = field(default_factory=EnergyVad)
+    vad: Vad = field(default_factory=EnergyVad)
     sample_rate: int = 16000
     frame_ms: int = 30
     start_frames: int = 3
@@ -134,6 +149,7 @@ class Segmenter:
         self._buffer = []
         self._active = False
         self._forced = False
+        self.vad.reset()
 
     def _ms(self, frames: int) -> int:
         return frames * self.frame_ms

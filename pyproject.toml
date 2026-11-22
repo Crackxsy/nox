@@ -53,7 +53,15 @@ dependencies = [
 
 [project.optional-dependencies]
 shell = ["PySide6>=6.11.2", "pynput>=1.8.2"]
-voice = ["faster-whisper>=1.2.1", "sounddevice>=0.5.6", "piper-tts>=1.8.0", "openwakeword>=0.6"]
+# onnxruntime runs the Silero speech detector (`nox.voice.vad_silero`); faster-whisper and
+# openwakeword already pull it in, it is named here because Nox imports it itself.
+voice = [
+    "faster-whisper>=1.2.1",
+    "sounddevice>=0.5.6",
+    "piper-tts>=1.8.0",
+    "openwakeword>=0.6",
+    "onnxruntime>=1.31.0",
+]
 # Kokoro TTS (#21): permissively licensed model + ONNX runtime, but `kokoro-onnx` still pulls
 # GPL-3.0 `phonemizer`/espeak-ng for grapheme-to-phoneme - see NOTICE and
 # docs/license_policy.yaml before shipping a bundled build with this extra.

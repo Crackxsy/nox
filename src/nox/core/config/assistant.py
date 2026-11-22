@@ -129,10 +129,48 @@ class VoiceChannelsConfig(StrictSection):
     routing: Literal["private", "stream", "both", "mute"] = "private"
 
 
+class VadConfig(StrictSection):
+    """Which detector tells speech from other sound, and how sure it must be."""
+
+    #: `silero` is the neural detector (MIT, bundled with the voice extra); it falls back to
+    #: `energy` - loudness only, which calls any loud sound speech - when its model or runtime is
+    #: missing or too slow, and the voice health line says so.
+    engine: Literal["silero", "energy"] = "silero"
+    #: A Silero model file, relative to `<models_dir>/silero` or absolute. Empty = the copy that
+    #: ships with faster-whisper. Only builds whose SHA-256 Nox knows are loaded.
+    model: str = ""
+    #: Speech starts at this probability and ends below `threshold_off` (hysteresis).
+    threshold: float = Field(default=0.5, gt=0.0, lt=1.0)
+    threshold_off: float = Field(default=0.35, gt=0.0, lt=1.0)
+    #: Time allowed for one 32 ms block (measured: about 0.1 ms). A detector that misses it for
+    #: 25 blocks in a row is replaced by the energy detector.
+    budget_ms: float = Field(default=40.0, gt=0.0, le=500.0)
+
+    @model_validator(mode="after")
+    def _off_below_on(self) -> VadConfig:
+        return require_ordered(self, "threshold_off", "threshold")
+
+
+class EchoConfig(StrictSection):
+    """What to do about Nox hearing its own voice from loudspeakers (`nox.voice.echo`)."""
+
+    #: `auto`: nothing for headphones, the threshold rule for loudspeakers and unknown outputs.
+    #: `half_duplex`: while Nox speaks the detector hears nothing (push-to-talk still works).
+    mode: Literal["auto", "off", "threshold", "half_duplex"] = "auto"
+    #: While Nox speaks, speech must be this loud (dBFS) ...
+    start_db: float = Field(default=-30.0, ge=-90.0, le=0.0)
+    #: ... for this long in a row to count as the user.
+    min_ms: int = Field(default=240, ge=0, le=2000)
+    #: The rule stays on this long after Nox stops (the room still rings).
+    tail_ms: int = Field(default=400, ge=0, le=3000)
+
+
 class VoiceConfig(StrictSection):
     stt: SttConfig = Field(default_factory=SttConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
     channels: VoiceChannelsConfig = Field(default_factory=VoiceChannelsConfig)
+    vad: VadConfig = Field(default_factory=VadConfig)
+    echo: EchoConfig = Field(default_factory=EchoConfig)
     barge_in: bool = True
     #: Root for the voice model files (`<models_dir>/piper`, `/kokoro`, `/openwakeword`). Empty
     #: resolves to `<paths.data_dir>/models`. The voice worker only ever receives this section of

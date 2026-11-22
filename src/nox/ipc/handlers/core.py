@@ -157,6 +157,8 @@ class WorkerHeartbeat(BaseModel):
     #: from every worker that has no microphone and from a voice worker that is not capturing yet.
     capture: str = ""
     capture_reason: str = ""
+    #: A note about the input side that is not a failure, for the voice health line.
+    capture_hint: str = ""
 
 
 class FunkenTopRequest(BaseModel):
@@ -495,7 +497,9 @@ class CoreHandlers:
     async def worker_heartbeat(self, ctx: RequestContext, p: WorkerHeartbeat) -> dict[str, Any]:
         core = self._core
         worker = next((w for w in core.workers.all() if w.client_id == ctx.client_id), None)
-        if worker is not None and core.workers.note_capture(worker, p.capture, p.capture_reason):
+        if worker is not None and core.workers.note_capture(
+            worker, p.capture, p.capture_reason, p.capture_hint
+        ):
             # The microphone started or stopped working: the voice health tile says so now, not at
             # the next scheduled probe.
             assert core.health is not None

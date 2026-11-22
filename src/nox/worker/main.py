@@ -40,6 +40,7 @@ from nox.ipc.errors import IpcError
 from nox.ipc.protocol import Envelope
 from nox.voice._logging import get_logger
 from nox.voice.base import Transcript, TtsRequest, VoicePipeline
+from nox.voice.capture_chain import build_capture_chain
 from nox.voice.pipeline import DefaultVoicePipeline, Emit, PipelineConfig
 from nox.voice.stt.wake_gate import WakeGate
 from nox.worker.heartbeat import heartbeat_loop
@@ -132,6 +133,8 @@ class VoiceWorker:
         #: The audio output the pipeline plays through, once built (`run_worker` sets it); the
         #: live device switch in `voice.devices.set` acts on it.
         self.audio_output: Any = None
+        #: The input side (speech detector) the pipeline factory built; None until then.
+        self.capture_chain: Any = None
         self.connect_deadline_s = connect_deadline_s
         self.connect_backoff_s = connect_backoff_s
         self._ran_once = False
@@ -357,7 +360,11 @@ class VoiceWorker:
         if pipeline is None or not self._pipeline_started or self.status.status != "running":
             return {}
         status, reason = pipeline.capture_health()
-        return {"capture": str(status), "capture_reason": reason}
+        report = {"capture": str(status), "capture_reason": reason}
+        chain = self.capture_chain
+        if chain is not None:
+            report["capture_hint"] = chain.notes()
+        return report
 
     async def run(self) -> None:
         # connect -> worker.register -> apply the core's config -> only then build and load the
@@ -669,17 +676,29 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
     def factory(emit: Emit, capture_allowed: Callable[[], bool], cfg: VoiceConfig) -> VoicePipeline:
         if devices.audio_in is None or devices.audio_out is None:
             raise RuntimeError("pipeline factory called before the audio devices were built")
-        return DefaultVoicePipeline(
+        pipeline_config = pipeline_config_from(cfg)
+        chain = build_capture_chain(
+            cfg,
+            sample_rate=devices.audio_in.sample_rate,
+            end_silence_ms=pipeline_config.end_silence_ms,
+            max_utterance_ms=pipeline_config.max_utterance_ms,
+            min_utterance_ms=pipeline_config.min_utterance_ms,
+            frame_ms=getattr(devices.audio_in, "frame_ms", 30),
+        )
+        pipeline = DefaultVoicePipeline(
             audio_in=devices.audio_in,
             audio_out=devices.audio_out,
             stt=worker.stt,
             tts=worker.tts,
             emit=emit,
             capture_allowed=capture_allowed,
-            config=pipeline_config_from(cfg),
+            config=pipeline_config,
+            segmenter=chain.segmenter,
             wake_gate=build_wake_gate(cfg),
             input_devices=input_device_names,
         )
+        worker.capture_chain = chain
+        return pipeline
 
     client = IpcClient(
         hub_url,
@@ -750,6 +769,15 @@ async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
         events.append((name, payload))
         echo(f"  event {name} {payload if name != E.VOICE_TRANSCRIPT_READY else payload['text']!r}")
 
+    selftest_config = pipeline_config_from(voice_cfg)
+    chain = build_capture_chain(
+        voice_cfg,
+        sample_rate=audio_in.sample_rate,
+        end_silence_ms=selftest_config.end_silence_ms,
+        max_utterance_ms=selftest_config.max_utterance_ms,
+        min_utterance_ms=selftest_config.min_utterance_ms,
+    )
+    echo(f"  speech detection: {chain.vad.health()[1]}")
     pipeline = DefaultVoicePipeline(
         audio_in=audio_in,
         audio_out=audio_out,
@@ -757,7 +785,8 @@ async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
         tts=tts,
         emit=emit,
         capture_allowed=lambda: True,
-        config=pipeline_config_from(voice_cfg),
+        config=selftest_config,
+        segmenter=chain.segmenter,
         wake_gate=gate,
     )
     echo("== tts ==")

@@ -355,6 +355,20 @@ immediately and never becomes an event or reaches a language model.
 until you hold push-to-talk) and `continuous`, which keeps it open behind the wake-word gate for
 hands-free use. Change it in the dashboard under Einstellungen.
 
+**Telling speech from other sound.** What decides that "someone is talking" used to be loudness
+alone, so music, a game or a television opened a segment just as a voice did. The default is now
+the [Silero VAD](https://github.com/snakers4/silero-vad) network (MIT, ONNX Runtime, about 1.2 MB):
+it says whether a 32 ms block *sounds like speech*, with a start threshold of 0.5 and an end
+threshold of 0.35 so one sentence is not cut in pieces (`voice.vad`). On synthetic test signals the
+energy detector called 97-100 % of the frames of music and game sound "speech" and Silero 0 %,
+while it still hears speech at -45 dBFS; one block costs about 0.1 ms on one CPU thread against a
+budget of 40 ms. The model is not downloaded: Nox uses the copy inside the `faster-whisper`
+package, and only loads a file whose SHA-256 it knows. If the model, `onnxruntime` or the time
+budget fails, Nox switches to the energy detector by itself and the voice health line says so
+("speech detection: energy fallback (...)"). `voice.vad.engine: energy` chooses it deliberately.
+This detector only decides where an utterance starts and ends; whether it is addressed to Nox is
+still the wake-word gate's job.
+
 **When the microphone goes away.** A headset that is unplugged, a driver reset or a sleep/wake cycle
 used to leave Nox deaf without a sign. The capture loop now runs under a supervisor: if the input
 fails or stops delivering audio while capture is meant to be on, it is closed and opened again after

@@ -63,3 +63,13 @@ Supertonic 3 is Nox's default text-to-speech engine (`voice.tts.engine: superton
   * Supertonic being the default does not remove Piper: Piper is the fallback whenever Supertonic
     cannot load, so a bundled build that includes the `voice` extra keeps the GPL-3.0 obligations
     described above.
+
+Silero VAD speech detector (`voice` extra) - model licence: MIT
+------------------------------------------------------------------------------------------
+The default speech detector (`voice.vad.engine: silero`) runs the Silero VAD network
+(Silero Team, https://github.com/snakers4/silero-vad, MIT License, copyright (c) 2020-present
+Silero Team) on ONNX Runtime. Nox does not download or redistribute it: it uses the copy that the
+`faster-whisper` package (MIT) ships as `silero_vad_v6.onnx` (about 1.2 MB), or a file the user
+puts under <models_dir>/silero/. Before ONNX Runtime parses it, its SHA-256 must be one of the
+builds Nox knows (`nox.voice.vad_silero.KNOWN_MODEL_SHA256`). A bundled build that ships the file
+must carry Silero's MIT notice (copyright and permission notice) with it.
