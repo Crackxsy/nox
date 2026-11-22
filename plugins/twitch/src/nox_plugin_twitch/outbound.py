@@ -19,7 +19,11 @@ judges what is *said*. This module decides what a line may *do* in Twitch chat:
   (another bot's command) or a backslash, however it is spelled or padded. No path of Nox's own
   needs a leading `!`: his command answers are plain sentences.
 - `@everyone`-style mass mentions lose their `@`, and a line pings at most `MAX_MENTIONS` people.
+  Only an `@` that starts a word is a mention (`name@host` and `end.@name` are not).
 - A line is cut to `MAX_OUTBOUND_CHARS` characters.
+- The link and command-prefix rules are applied twice: to the cleaned line and again to the text
+  that would actually be sent (after the mention cap and the cut), because removing an `@` can
+  glue a word to what follows it ("foo dot @com" becomes "foo dot com").
 
 A refused line is not repaired or replaced: nothing is sent, and the caller reports why. The reason
 is a short code, never the text.
@@ -103,7 +107,9 @@ _LOOKALIKES = str.maketrans(
     }
 )
 
-_MENTION_RE = re.compile(r"[@\uff20\ufe6b](\w{1,25})")
+#: An `@` starts a mention only at the start of a word: not inside "name@host" and not right after
+#: a dot ("end.@name"), where Twitch pings nobody and where dropping the `@` would glue two words.
+_MENTION_RE = re.compile(r"(?<![\w.])[@\uff20\ufe6b](\w{1,25})")
 _MASS_MENTIONS = frozenset({"everyone", "here", "channel", "all"})
 
 
@@ -125,13 +131,9 @@ def filter_outbound(text: str) -> OutboundResult:
     if not cleaned:
         return OutboundResult("", BLOCKED_EMPTY)
 
-    probe = _fold(cleaned)
-    if not probe:
-        return OutboundResult("", BLOCKED_EMPTY)
-    if probe[0] in _COMMAND_PREFIXES:
-        return OutboundResult("", BLOCKED_COMMAND_PREFIX)
-    if any(pattern.search(probe) for pattern in _LINK_PATTERNS):
-        return OutboundResult("", BLOCKED_LINK)
+    reason = _refusal(cleaned)
+    if reason:
+        return OutboundResult("", reason)
 
     capped = _cap_mentions(cleaned)
     if capped != cleaned:
@@ -140,7 +142,24 @@ def filter_outbound(text: str) -> OutboundResult:
     if len(cleaned) > MAX_OUTBOUND_CHARS:
         cleaned = cleaned[: MAX_OUTBOUND_CHARS - 1].rstrip() + "\u2026"
         changes.append("truncated")
+
+    # The rules judge the line that would go out, not only the one that came in.
+    reason = _refusal(cleaned)
+    if reason:
+        return OutboundResult("", reason)
     return OutboundResult(cleaned, changes=tuple(changes))
+
+
+def _refusal(text: str) -> str:
+    """The reason `text` may not be sent, or "" when it may (empty, command prefix, link)."""
+    probe = _fold(text)
+    if not probe:
+        return BLOCKED_EMPTY
+    if probe[0] in _COMMAND_PREFIXES:
+        return BLOCKED_COMMAND_PREFIX
+    if any(pattern.search(probe) for pattern in _LINK_PATTERNS):
+        return BLOCKED_LINK
+    return ""
 
 
 def _drop_invisible(text: str) -> str:
@@ -157,6 +176,17 @@ def _drop_invisible(text: str) -> str:
 
 def _collapse_white_space(text: str) -> str:
     return " ".join(text.split())
+
+
+def matching_variants(text: str) -> tuple[str, ...]:
+    """The forms of `text` a word list is matched against, for a checker that gets the text as it
+    is written (the moderation gate): lower-cased as is; composed (NFKC: full-width letters and
+    ligatures plain, a letter plus a combining mark one letter, so umlauts in a list still match);
+    and folded (see `_fold`: accents gone, look-alike letters Latin). Invisible characters are
+    removed from the last two."""
+    visible = _drop_invisible(text)
+    forms = (text.lower(), unicodedata.normalize("NFKC", visible).lower(), _fold(visible))
+    return tuple(dict.fromkeys(forms))
 
 
 def _fold(text: str) -> str:

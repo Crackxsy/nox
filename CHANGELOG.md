@@ -426,6 +426,19 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `check-image.sh` and the QEMU boot test check all of it, including an SSH on/off round trip.
 
 ### Fixed
+- **Twitch chat: the rules judge what is really sent, and the limits count every attempt.** The link
+  and command-prefix checks now also run on the text after the mention cap and the cut, so a line
+  like "@a @b foo dot @com" (the third mention loses its `@` and the words become a domain) is
+  refused; an `@` counts as a mention only at the start of a word (`name@host` and `end.@name` do
+  not). The moderation gate sees through look-alike Cyrillic and Greek letters, full-width forms,
+  accents, combining marks and invisible characters, like the output filter does. Nox's own bot
+  account is ignored like other bots (chat lines and notices alike, a notice with no login never
+  matches it), so he cannot answer or pay himself. The answer limits (`stream.relevance`:
+  channel cooldown, replies per minute and the new per-viewer `viewer_cooldown_s`, default 30 s)
+  now count every attempt, also one the plugin refused (output filter, moderation gate, send rate
+  limit) or that came back empty - before, a chatter whose answers were always refused kept the model
+  busy call after call. New tests pin the one-line cap (400 characters), reply detection on its
+  own, ignored notices and a connection lost in the middle of a reply (one write, no retry).
 - **A used-up Claude plan limit is handled instead of failing every turn.** Claude Code reports a
   refused request in its stream (`rate_limit_event`) and in the error that ends it; Nox read the
   event and ignored it, so each request ran into the same error and the provider was only kept out

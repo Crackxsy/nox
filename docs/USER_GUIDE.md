@@ -174,8 +174,11 @@ cannot be turned off or hidden by configuration — if something is being captur
     model. Whatever Nox writes passes a fixed filter first: no links or web addresses, no line
     that starts like a chat command (`/`, `.`, `!`), no `@everyone`-style mass mentions and at
     most two `@` mentions per line, no invisible characters; a line that breaks one of these is not
-    sent (the log says which rule, never the text). That includes the `!streamplan` text: leave
-    links out of it.
+    sent (the log says which rule, never the text). The rules are checked on the line as it would
+    go out, and a swapped-in look-alike letter does not get past the moderation check either. That
+    includes the `!streamplan` text: leave links out of it. Nox never answers himself (his own
+    account is ignored like another bot's), and each viewer gets at most one answer attempt per
+    30 seconds, counted even when the answer was refused.
   - **Rocket League:** the chat keeps working while the game is in the foreground. It is the one
     network connection the `rocket_league` profile allows (`irc.chat.twitch.tv:6697`, plus the local
     OBS websocket); nothing else leaves the machine.

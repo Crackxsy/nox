@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 
+from .outbound import matching_variants
+
 _PROTECTED_GROUPS = (
     "jews",
     "muslims",
@@ -139,11 +141,14 @@ class ModerationGate:
         self._blocklist = [b.strip().lower() for b in blocklist if b.strip()]
 
     def check(self, text: str) -> tuple[bool, str]:
-        lowered = text.lower()
+        """Every rule is tried on each form `matching_variants` gives: the text as written, its
+        composed form and its folded form, so a look-alike letter, a full-width spelling or an
+        invisible character inside a word does not get it past a list."""
+        variants = matching_variants(text)
         for reason, predicate in _HARD_EXCLUSIONS:
-            if predicate(lowered):
+            if any(predicate(variant) for variant in variants):
                 return False, reason
         for word in self._blocklist:
-            if word in lowered:
+            if any(word in variant for variant in variants):
                 return False, f"blocklist:{word}"
         return True, ""

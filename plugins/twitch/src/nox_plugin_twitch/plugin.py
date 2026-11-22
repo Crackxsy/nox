@@ -190,10 +190,15 @@ class TwitchPlugin:
             "twitch.disconnected", {"reason": reason, "backoff_s": self.client.backoff_s}
         )
 
+    async def _is_ignored(self, login: str) -> bool:
+        """Another bot, or Nox's own account: never answered, never paid, never able to trigger a
+        command - two bots reacting to each other's `!` lines is a loop, and so is Nox answering
+        what Nox said."""
+        name = login.lower()
+        return name in self._ignored or (bool(name) and name == await self._bot_login())
+
     async def _on_privmsg(self, tags: ChatTags, login: str, _channel: str, text: str) -> None:
-        if login.lower() in self._ignored:
-            # Another bot (or Nox's own account): never answered, never paid, never able to
-            # trigger a command - two bots reacting to each other's `!` lines is a loop.
+        if await self._is_ignored(login):
             return
         self._chat_event_id += 1
         chat_event_id = self._chat_event_id
@@ -247,7 +252,7 @@ class TwitchPlugin:
         self, tags: dict[str, str], login: str, _channel: str, _text: str
     ) -> None:
         """Subscriptions, gifted subs and raids earn Funken (`msg-id` says which)."""
-        if login.lower() in self._ignored:
+        if await self._is_ignored(login):
             return
         kind = tags.get("msg-id", "")
         user_id = tags.get("user-id", "") or login

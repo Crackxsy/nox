@@ -56,7 +56,18 @@ def audit(bus: FakeBus) -> SqliteAuditLog:
 
 
 @pytest.fixture
-def engine(audit: SqliteAuditLog, bus: FakeBus) -> DefaultPermissionEngine:
+def confirm_timeout_s() -> float:
+    """How long an unanswered confirmation waits before it denies. Short, so the test that wants
+    the denial is quick; a test that answers the confirmation overrides it with a long one, so a
+    pause of the whole process (a garbage collection, a busy runner) cannot expire the grant
+    before the answer arrives."""
+    return 0.2
+
+
+@pytest.fixture
+def engine(
+    audit: SqliteAuditLog, bus: FakeBus, confirm_timeout_s: float
+) -> DefaultPermissionEngine:
     profile = Profile(
         id="test", description="", rules=[], cloud_allowed=True, memory_writes_allowed=True
     )
@@ -67,7 +78,7 @@ def engine(audit: SqliteAuditLog, bus: FakeBus) -> DefaultPermissionEngine:
         audit=audit,
         bus=bus,
         initial_profile="test",
-        confirm_timeout_s=0.2,
+        confirm_timeout_s=confirm_timeout_s,
     )
 
 
@@ -147,6 +158,7 @@ async def test_create_story_is_medium_risk_and_requires_confirm(executor: ToolEx
     assert result.decision == Decision.DENY.value
 
 
+@pytest.mark.parametrize("confirm_timeout_s", [30.0])
 async def test_update_status_confirmed_writes_and_syncs_state(
     executor: ToolExecutor,
     bus: FakeBus,

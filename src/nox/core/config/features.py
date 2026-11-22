@@ -100,6 +100,9 @@ class RelevanceConfig(StrictSection):
     #: to the relevance classifier upstream.
     threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     channel_cooldown_s: float = Field(default=20.0, ge=0.0)
+    #: One viewer gets at most one answer attempt per this many seconds, so one chatter cannot use
+    #: up the channel's whole budget (or keep the model busy) alone.
+    viewer_cooldown_s: float = Field(default=30.0, ge=0.0)
     max_replies_per_minute: int = Field(default=6, ge=1)
 
 
