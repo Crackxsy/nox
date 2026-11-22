@@ -68,9 +68,16 @@ class EnergyVad:
     floor_attack: float = 0.05  # how fast the floor rises towards a louder quiet level
     floor_release: float = 0.2  # how fast the floor drops towards a quieter level
     max_floor_db: float = -25.0  # the floor never rises above this; louder is always "speech"
+    #: A sound that counts as speech without a single pause for this many frames (5 s) is not a
+    #: sentence but a steady background - music, a fan, a game. Then the floor creeps towards
+    #: its level (`creep`) until it stops counting, so a segment cannot stay open forever.
+    steady_frames: int = 166
+    creep: float = 0.03
+    _run: int = field(default=0, init=False, repr=False)
 
     def reset(self) -> None:
         self.noise_floor_db = -60.0
+        self._run = 0
 
     def level(self, frame: np.ndarray) -> tuple[float, float]:
         return frame_rms_db(frame), frame_zcr(frame)
@@ -82,6 +89,10 @@ class EnergyVad:
             and rms_db > self.noise_floor_db + self.margin_db
             and self.zcr_min <= zcr <= self.zcr_max
         )
+        self._run = self._run + 1 if speech else 0
+        if speech and self._run > self.steady_frames:
+            self.noise_floor_db += (rms_db - self.noise_floor_db) * self.creep
+            self.noise_floor_db = min(self.noise_floor_db, self.max_floor_db)
         if not speech:
             # Update the floor only from non-speech frames (asymmetric smoothing).
             if rms_db < self.noise_floor_db:

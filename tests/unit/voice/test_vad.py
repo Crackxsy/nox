@@ -76,3 +76,35 @@ def test_segmenter_forced_ptt_ignores_vad() -> None:
     assert end is not None and end.kind == SegmentKind.END and end.forced
     assert end.audio is not None and 990 <= end.duration_ms <= 1010
     assert seg.force_end() is None
+
+
+def test_a_steady_background_stops_counting_as_speech_instead_of_holding_the_segment_open() -> None:
+    """Constant music: loud, tonal, never a pause. It used to be speech for ever."""
+    vad = EnergyVad()
+    music = tone(30, freq=330.0, amp=0.1)  # about -23 dBFS
+    decisions = [vad.is_speech(music) for _ in range(166 + 120)]
+    assert all(decisions[:166])  # at first it is indistinguishable from speech
+    assert not decisions[-1]  # then the floor has caught up with it
+    assert decisions.index(False) > 166  # not a frame before the steady-state limit
+
+
+def test_speech_with_pauses_never_triggers_the_creep() -> None:
+    vad = EnergyVad()
+    word, pause = tone(600, amp=0.2), noise(150, amp=0.001)
+    floors = []
+    for _ in range(30):  # 22 s of talking in short phrases
+        for f in frames_of(word):
+            assert vad.is_speech(f)
+        for f in frames_of(pause):
+            vad.is_speech(f)
+        floors.append(vad.noise_floor_db)
+    assert max(floors) < -45  # the floor never learned the voice
+
+
+def test_the_run_counter_restarts_with_a_reset() -> None:
+    vad = EnergyVad()
+    for _ in range(100):
+        vad.is_speech(tone(30, amp=0.2))
+    vad.reset()
+    assert vad._run == 0
+    assert vad.noise_floor_db == -60.0

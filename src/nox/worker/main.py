@@ -133,8 +133,10 @@ class VoiceWorker:
         #: The audio output the pipeline plays through, once built (`run_worker` sets it); the
         #: live device switch in `voice.devices.set` acts on it.
         self.audio_output: Any = None
-        #: The input side (speech detector) the pipeline factory built; None until then.
+        #: The input side (speech detector, echo rule) the pipeline factory built; None until then.
         self.capture_chain: Any = None
+        #: Sets the process priority; a test replaces it.
+        self.priority_setter: Callable[[str], bool] = apply_priority
         self.connect_deadline_s = connect_deadline_s
         self.connect_backoff_s = connect_backoff_s
         self._ran_once = False
@@ -193,6 +195,7 @@ class VoiceWorker:
         self.client.on(E.SECURITY_PANIC, self._on_panic)
         self.client.on(E.PRIVACY_CAPTURE_CHANGED, self._on_capture_changed)
         self.client.on(E.SYSTEM_STOPPING, self._on_system_stopping)
+        self.client.on(E.SYSTEM_MODE_CHANGED, self._on_mode_changed)
 
     def _pipeline_ready(self) -> VoicePipeline:
         """The pipeline is only built in `run`, after `worker.register`/config are settled."""
@@ -284,10 +287,12 @@ class VoiceWorker:
         output = self.audio_output
         if output is None or not hasattr(output, "set_devices"):
             return {"ok": False, "reason": "no audio output in this worker"}
+        private = str(payload.get("private_device", ""))
         output.set_devices(
-            private_device=str(payload.get("private_device", "")),
-            stream_device=str(payload.get("stream_device", "")),
+            private_device=private, stream_device=str(payload.get("stream_device", ""))
         )
+        if self.capture_chain is not None:
+            self.capture_chain.guard.set_device(private)
         return {"ok": True}
 
     # ---- inbound events --------------------------------------------------------------------------
@@ -313,6 +318,14 @@ class VoiceWorker:
 
     async def _on_system_stopping(self, _env: Envelope) -> None:
         self._stop.set()
+
+    async def _on_mode_changed(self, env: Envelope) -> None:
+        """A game came to the foreground or left it: step back from it, or return to normal."""
+        perf = self.voice_config.performance
+        game = bool(env.payload.get("game_running", False))
+        level = perf.game_priority if game else perf.priority
+        if self.priority_setter(level):
+            log.info("worker.priority", level=level, game=game)
 
     # ---- lifecycle -------------------------------------------------------------------------------
 
@@ -371,7 +384,9 @@ class VoiceWorker:
         # engines -> worker.ready. Health reports us `limited` ("worker starting") in between.
         self._register_handlers()
         await self._connect_with_retry()
-        await self.client.subscribe(["security.*", "privacy.*", "system.stopping"])
+        await self.client.subscribe(
+            ["security.*", "privacy.*", "system.stopping", "system.mode_changed"]
+        )
         await self.register()
         self._ran_once = True
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="worker-heartbeat")
@@ -406,7 +421,9 @@ class VoiceWorker:
 
     async def _reregister(self) -> None:
         try:
-            await self.client.subscribe(["security.*", "privacy.*", "system.stopping"])
+            await self.client.subscribe(
+                ["security.*", "privacy.*", "system.stopping", "system.mode_changed"]
+            )
             await self.register()
             if self.status.status == "running":
                 await self.client.request("worker.ready", {"service": self.service})
@@ -457,16 +474,26 @@ class VoiceWorker:
 # ---- process wiring ----------------------------------------------------------------------------
 
 
-def raise_priority() -> None:
-    """Above-normal priority for the audio path (Process Model). Never touches other processes."""
+def apply_priority(level: str) -> bool:
+    """Set this process's Windows priority class (`below_normal`, `normal`, `above_normal`).
+
+    Never touches other processes; elsewhere (and on any error) it does nothing and says False.
+    """
     if sys.platform != "win32":
-        return
+        return False
     try:
         import psutil
 
-        psutil.Process().nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+        classes = {
+            "below_normal": psutil.BELOW_NORMAL_PRIORITY_CLASS,
+            "normal": psutil.NORMAL_PRIORITY_CLASS,
+            "above_normal": psutil.ABOVE_NORMAL_PRIORITY_CLASS,
+        }
+        psutil.Process().nice(classes[level])
     except Exception as exc:  # noqa: BLE001 - priority is best effort
-        log.warning("worker.priority_failed", error=str(exc))
+        log.warning("worker.priority_failed", level=level, error=str(exc))
+        return False
+    return True
 
 
 def process_load() -> float | None:
@@ -490,6 +517,7 @@ def pipeline_config_from(voice: VoiceConfig) -> PipelineConfig:
         language=voice.stt.language,
         barge_in=voice.barge_in,
         listening_mode=voice.stt.listening_mode,
+        end_silence_ms=voice.vad.end_silence_ms,
     )
 
 
@@ -538,6 +566,7 @@ def build_components(voice: VoiceConfig, *, service: str) -> dict[str, Any]:
             device=voice.stt.device,
             models_dir=str(engine_models_dir("faster-whisper", voice.models_dir)),
             vocabulary=(voice.stt.wake_word, *voice.stt.vocabulary),
+            cpu_threads=voice.performance.cpu_threads,
         )
     if "tts" in caps:
         if voice.tts.engine == "kokoro":
@@ -697,6 +726,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
             wake_gate=build_wake_gate(cfg),
             input_devices=input_device_names,
         )
+        chain.bind_speaking(lambda: pipeline.speaking)
         worker.capture_chain = chain
         return pipeline
 
@@ -789,6 +819,7 @@ async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
         segmenter=chain.segmenter,
         wake_gate=gate,
     )
+    chain.bind_speaking(lambda: pipeline.speaking)
     echo("== tts ==")
     t0 = time.perf_counter()
     await pipeline.say(
@@ -940,7 +971,7 @@ def main(argv: list[str] | None = None) -> int:
         voice_cfg = voice_cfg.model_copy(
             update={"tts": voice_cfg.tts.model_copy(update={"engine": args.tts_engine})}
         )
-    raise_priority()
+    apply_priority(voice_cfg.performance.priority)
     if args.selftest:
         return asyncio.run(run_selftest(voice_cfg))
     token = os.environ.get("NOX_WORKER_TOKEN", "")

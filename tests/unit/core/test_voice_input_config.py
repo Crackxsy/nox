@@ -49,3 +49,53 @@ def test_the_off_threshold_may_not_be_above_the_on_threshold() -> None:
 def test_nonsense_in_the_detector_section_is_rejected(bad: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         VoiceConfig.model_validate({"vad": bad})
+
+
+# ---- the echo rule ------------------------------------------------------------------------------
+
+
+def test_the_shipped_echo_rule_is_automatic_with_a_threshold_and_a_tail() -> None:
+    echo = shipped().echo
+    assert (echo.mode, echo.start_db, echo.min_ms, echo.tail_ms) == ("auto", -30.0, 240, 400)
+
+
+def test_the_code_defaults_for_the_echo_rule_match_the_shipped_file() -> None:
+    assert VoiceConfig().echo == shipped().echo
+
+
+@pytest.mark.parametrize("mode", ["auto", "off", "threshold", "half_duplex"])
+def test_every_echo_mode_is_accepted(mode: str) -> None:
+    assert VoiceConfig.model_validate({"echo": {"mode": mode}}).echo.mode == mode
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"mode": "aec"},
+        {"start_db": 1},
+        {"start_db": -91},
+        {"min_ms": -1},
+        {"min_ms": 2001},
+        {"tail_ms": -1},
+        {"tail_ms": 3001},
+        {"unknown_key": 1},
+    ],
+)
+def test_nonsense_in_the_echo_section_is_rejected(bad: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        VoiceConfig.model_validate({"echo": bad})
+
+
+def test_the_sentence_ends_after_400_ms_of_silence_and_the_pipeline_gets_it() -> None:
+    from nox.worker.main import pipeline_config_from
+
+    assert shipped().vad.end_silence_ms == 400
+    assert pipeline_config_from(VoiceConfig()).end_silence_ms == 400
+    custom = VoiceConfig.model_validate({"vad": {"end_silence_ms": 650}})
+    assert pipeline_config_from(custom).end_silence_ms == 650
+
+
+@pytest.mark.parametrize("bad", [99, 3001])
+def test_the_end_of_speech_silence_is_bounded(bad: int) -> None:
+    with pytest.raises(ValidationError):
+        VoiceConfig.model_validate({"vad": {"end_silence_ms": bad}})

@@ -54,3 +54,30 @@ async def test_devices_set_without_an_output_says_so() -> None:
     assert reply["ok"] is False
     worker.request_stop()
     await task
+
+
+class _Guard:
+    def __init__(self) -> None:
+        self.devices: list[str] = []
+
+    def set_device(self, device: str) -> None:
+        self.devices.append(device)
+
+
+class _Chain:
+    def __init__(self) -> None:
+        self.guard = _Guard()
+
+
+async def test_devices_set_tells_the_echo_rule_which_output_to_look_at() -> None:
+    client = FakeIpcClient()
+    worker = VoiceWorker(client=client, service="voice", pipeline_factory=spy_factory)
+    worker.audio_output = _Output()
+    worker.capture_chain = _Chain()
+    task = await run_worker(worker)
+    await client.deliver_request(
+        "voice.devices.set", {"private_device": "Desk Headset", "stream_device": ""}
+    )
+    assert worker.capture_chain.guard.devices == ["Desk Headset"]
+    worker.request_stop()
+    await task

@@ -83,7 +83,12 @@ async def test_register_heartbeat_and_shutdown(client: FakeIpcClient) -> None:
     )
     task = await run_worker(worker)
     assert client.connected
-    assert set(client.subscriptions) == {"security.*", "privacy.*", "system.stopping"}
+    assert set(client.subscriptions) == {
+        "security.*",
+        "privacy.*",
+        "system.stopping",
+        "system.mode_changed",
+    }
     name, payload = client.requests[0]
     assert name == "worker.register"
     assert payload["service"] == "voice" and payload["capabilities"] == list(SERVICES["voice"])
@@ -325,5 +330,5 @@ def test_main_refuses_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
     from nox.worker.main import main
 
     monkeypatch.delenv("NOX_WORKER_TOKEN", raising=False)
-    monkeypatch.setattr("nox.worker.main.raise_priority", lambda: None)
+    monkeypatch.setattr("nox.worker.main.apply_priority", lambda level: True)
     assert main(["--service", "voice"]) == 2

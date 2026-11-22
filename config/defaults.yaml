@@ -158,6 +158,7 @@ voice:
     threshold: 0.5               # speech starts at this probability ...
     threshold_off: 0.35          # ... and ends below this one (hysteresis)
     budget_ms: 40                # allowed time per block; 25 misses in a row -> energy detector
+    end_silence_ms: 400          # silence that ends your sentence (raise to 600 for energy)
   echo:                          # Nox hearing its own voice from loudspeakers
     mode: auto                   # auto | off | threshold | half_duplex. auto: headphones and
                                  # stream-only output change nothing; loudspeakers (and outputs
@@ -165,6 +166,11 @@ voice:
     start_db: -30                # while Nox speaks, speech must be this loud (dBFS) ...
     min_ms: 240                  # ... for this long in a row to count as you interrupting
     tail_ms: 400                 # the rule stays on this long after Nox stops
+  performance:                   # how hard the voice worker presses on the machine
+    priority: normal             # below_normal | normal | above_normal (Windows priority class)
+    game_priority: below_normal  # while a game is in the foreground
+    cpu_threads: 0               # speech recognition threads; 0 = physical cores, at most 8. Read
+                                 # when the model loads (next start of the voice service)
   barge_in: true
 
 ai:
