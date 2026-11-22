@@ -14,6 +14,7 @@ import pytest
 from nox.core.config import VoiceConfig
 from nox.core.events import E, HealthStatus
 from nox.voice.base import TtsRequest, VoicePipeline
+from nox.voice.latency import LatencySummary, LatencyTracker
 from nox.voice.pipeline import DefaultVoicePipeline, PipelineConfig
 from nox.worker.main import SERVICES, VoiceWorker, decode_audio_ref, parse_args
 from tests.unit.voice.conftest import (
@@ -60,6 +61,9 @@ class SpyPipeline:
 
     def capture_health(self) -> tuple[HealthStatus, str]:
         return HealthStatus.AVAILABLE, "spy pipeline"
+
+    def latency_summary(self) -> LatencySummary:
+        return LatencyTracker().summary()
 
 
 def spy_factory(emit: Any, capture_allowed: Any, _config: Any = None) -> VoicePipeline:

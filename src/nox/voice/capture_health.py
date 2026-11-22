@@ -160,9 +160,11 @@ class CaptureMonitor:
     def frame(self) -> CaptureNotice | None:
         """A frame arrived while capture was meant to be active: audio flows again.
 
-        Called for every frame, so the healthy case is a single comparison.
+        Called for every frame, so the healthy case is a single comparison. A microphone that was
+        announced as gone and then closed on purpose (`settle`) is not forgotten: its first frame
+        after it is opened again is the recovery the user is waiting to hear about.
         """
-        if self.state is CaptureState.LISTENING:
+        if self.state is CaptureState.LISTENING and not self._announced_deaf:
             return None
         notice = CaptureNotice.RECOVERED if self._announced_deaf else None
         failures = self.failures
@@ -183,6 +185,14 @@ class CaptureMonitor:
         self._announced_deaf = self._announced_unstable = self._relapse = False
         self._recovered_at = None
         self._failures_before_recovery = 0
+
+    def settle(self) -> None:
+        """Capture was closed on purpose while it was down (muted, privacy off, push-to-talk
+        released): nothing is failing any more, and the retry bookkeeping starts over - but a
+        user who was told "I cannot hear you" is still owed the word that it works again."""
+        announced_deaf = self._announced_deaf
+        self.reset()
+        self._announced_deaf = announced_deaf
 
     def health(self) -> tuple[HealthStatus, str]:
         """`unavailable` with the reason while capture is down, `available` otherwise."""
@@ -338,7 +348,7 @@ class CaptureSupervisor:
         off): nobody is asking it to work, so there is nothing to retry and nothing to report.
         The input is put in its closed state; the next time capture is wanted, it either works
         or fails again, and that is reported afresh."""
-        self._monitor.reset()
+        self._monitor.settle()
         log.info("voice.capture_closed_while_down")
         try:
             await self._reopen()

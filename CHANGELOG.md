@@ -9,6 +9,45 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Voice: a long answer is one continuous stream.** While a sentence is heard, the sentences
+  already waiting are synthesised ahead (`voice.tts.prefetch_sentences`, default 1, at most 2; a
+  bounded buffer per sentence, `voice.tts.prefetch_buffer_s`; only while the system CPU load is
+  under `voice.tts.prefetch_cpu_ceiling`, default 85 %, so a game keeps its frames). The output
+  device keeps one stream open between sentences and plays silence in the gaps instead of opening
+  and closing the device per sentence; the first and last 4 ms of a sentence are faded
+  (`voice.tts.edge_fade_ms`) so the seam does not click. An interruption cancels the look-ahead on
+  the spot (synthesis stopped, buffered audio dropped). A callout's missing clip is still spoken
+  from its words, before the first chunk only. `TtsRequest.style` (optional emphasis and tempo per
+  sentence) is carried to the engine unchanged; no engine reads it yet and there is no new voice.
+- **Voice: the silence an engine leaves around a sentence is cut.** The default engine puts about
+  0.5 s of silence in front of a sentence and 0.6 to 0.7 s behind it; played one after another that
+  is more than a second of dead air per boundary. The first and last silence is removed at the
+  output (`voice.tts.trim_silence`, threshold `voice.tts.silence_threshold_db`, default -50 dBFS;
+  10 ms in front and 60 ms behind are kept, a pause inside the sentence is not touched). The turn
+  latency is therefore the time to the first *sound*; a test with an output that knows when the
+  first audible sample plays holds the two numbers together.
+- **Voice: one rule for where a sentence ends.** The orchestrator cut answers at every full stop
+  ("am 9. Mai", "z. B.", "Dr. Meier", "ca. 5" became several sentences, each with a pause and a
+  falling voice). It now uses the splitter of the engines (`nox.voice.tts.sentences`): abbreviations,
+  initials, dates and ordinals ("am 9. Mai", "am 22.11. um fünf"), list markers ("1.", "Schritt 2."),
+  decimals and thousands, closing quotes. Text fed in pieces gives the same sentences as the whole
+  text; a number followed by a full stop waits for the word after it.
+- **Voice: numbers, dates, units and abbreviations are said in words** (`nox.voice.tts.normalize`,
+  `voice.tts.normalize_text`, German with a small English table): dates, times, money, units,
+  percent, decimals, ordinals, "z. B." and the like; deterministic, local, unrecognised text stays
+  as it is. A request can opt out (`TtsRequest.normalize`). The text on screen and in events is
+  unchanged.
+- **Voice: the silence between sentences is measured.** `voice.latency` now returns
+  `sentence_gap_ms` (P50/P95 over the last 100 gaps, for sentences that were already waiting),
+  `sentence_gaps`, the budget (95th percentile under 120 ms) and whether it is met. The worker
+  heartbeat carries the 95th percentile, and the voice health line turns `limited` ("speech pauses
+  between sentences") when it is over the budget for at least eight gaps. A test runs the pipeline
+  on a virtual clock and holds it to the budget with the look-ahead, and shows what it costs
+  without.
+- **Voice: noise and echo no longer end an answer.** Talking over Nox needs
+  `voice.barge_in_min_ms` (default 180 ms) of speech at or above `voice.barge_in_min_db` (default
+  -38 dBFS) after the detector fires; a cough, room noise or a quiet echo leaves the answer
+  playing. Push-to-talk still interrupts at once. Set `barge_in_min_ms: 0` for the old behaviour.
 - **Voice: the microphone is supervised and says when it is gone.** A capture loop that ends,
   fails or goes quiet while capture should be on is restarted with a growing delay (1, 2, 5, 10,
   then every 30 s, longer still for a microphone that keeps dropping out), the voice health line
@@ -426,6 +465,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `check-image.sh` and the QEMU boot test check all of it, including an SSH on/off round trip.
 
 ### Fixed
+- **A late barge-in report cannot cancel the next turn.** `tts.interrupted` is matched to the turn
+  by the sentence it names (the utterance id starts with the turn's request id); an interruption of
+  an earlier turn's sentence, of a notice or of nothing is ignored, and a cancellation decided for
+  a turn that has ended spares the one that followed (`Orchestrator.active_request_id`).
+- **The kill-switch path cannot hang on the microphone.** `stop()` waits for the device lock only
+  up to two seconds (a reopen stuck in the driver), then closes the input anyway, and a reopen that
+  finishes after the stop leaves it closed.
+- **"Ich höre dich wieder." after a mute.** A user who was told that Nox cannot hear them, then
+  muted, is told again when the microphone works after unmuting (it was forgotten with the mute).
 - **A used-up Claude plan limit is handled instead of failing every turn.** Claude Code reports a
   refused request in its stream (`rate_limit_event`) and in the error that ends it; Nox read the
   event and ignored it, so each request ran into the same error and the provider was only kept out

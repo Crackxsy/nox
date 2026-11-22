@@ -39,6 +39,7 @@ from nox.core.state import StateManager
 from nox.core.toolloop import ActiveTurn, ToolEvent, ToolLoop
 from nox.security.taint import UNTRUSTED_CONVERSATIONS
 from nox.voice.base import Channel, TtsRequest
+from nox.voice.tts.sentences import split_stream
 
 log = get_logger(__name__)
 
@@ -300,6 +301,9 @@ class Orchestrator:
     clock: Callable[[], float] = time.monotonic
 
     _active: asyncio.Task[Turn] | None = None
+    #: The request id of the turn in `_active`: the first part of every utterance id it speaks
+    #: (`_speak`), which is how a `tts.interrupted` is matched to the turn it belongs to.
+    _active_request_id: str | None = None
     voice_turn: asyncio.Task[None] | None = None
     _unsubs: list[Callable[[], None]] = field(default_factory=list)
     #: Cancellations started by a barge-in event, held so they are not collected mid-run.
@@ -396,15 +400,26 @@ class Orchestrator:
         try:
             if self._safe_mode:
                 raise RuntimeError("safe mode: AI requests are disabled until resume")
+            request_id = uuid.uuid4().hex
             task = asyncio.create_task(
-                self._run(text, language, speak, on_chunk, channel, note=context_note)
+                self._run(
+                    text,
+                    language,
+                    speak,
+                    on_chunk,
+                    channel,
+                    note=context_note,
+                    request_id=request_id,
+                )
             )
             self._active = task
+            self._active_request_id = request_id
             try:
                 return await _unwound(task)
             finally:
                 if self._active is task:
                     self._active = None
+                    self._active_request_id = None
         finally:
             self._slot.release()
 
@@ -511,13 +526,36 @@ class Orchestrator:
         (`new_input`, kill, stop) carry other reasons and would otherwise come back as events.
         The cancel runs in a task of its own: this handler runs inside the delivery of the
         worker's event, and `cancel` waits on the worker (see `_on_transcript`).
+
+        The event names the sentence it cut off, and that sentence has to be one of the running
+        turn's: the worker reports an interruption for every sentence it drops, and such a report
+        can arrive after the user has already moved on and a newer turn has started. That turn did
+        not say anything that was interrupted, and must not be cancelled for it.
         """
         turn = self._active
         if ev.payload.get("reason") != "barge_in" or turn is None or turn.done():
             return
+        if not self._speech_is_of_active_turn(ev.payload.get("utterance_id")):
+            log.debug(
+                "orchestrator.barge_in_of_another_turn", utterance=ev.payload.get("utterance_id")
+            )
+            return
         task = asyncio.create_task(self._cancel_turn(turn, "barge_in"), name="nox-barge-in-cancel")
         self._barge_cancels.add(task)
         task.add_done_callback(self._barge_cancels.discard)
+
+    @property
+    def active_request_id(self) -> str | None:
+        """The request id of the turn that is running, or None between turns."""
+        return self._active_request_id
+
+    def _speech_is_of_active_turn(self, utterance_id: object) -> bool:
+        """Whether `utterance_id` (`<request id>:<suffix>`, see `_speak`) belongs to the running
+        turn. An id without a turn in front of it - a capture notice, a proactive remark - never
+        does."""
+        if self._active_request_id is None or not isinstance(utterance_id, str):
+            return False
+        return utterance_id.partition(":")[0] == self._active_request_id
 
     async def _cancel_turn(self, turn: asyncio.Task[Turn], reason: str) -> None:
         """Cancel `turn` unless a newer one has taken its place meanwhile."""
@@ -546,9 +584,10 @@ class Orchestrator:
         channel: str = DEFAULT_CHANNEL,
         *,
         note: str = "",
+        request_id: str | None = None,
     ) -> Turn:
         started = time.perf_counter()
-        request_id = uuid.uuid4().hex
+        request_id = request_id or uuid.uuid4().hex
         speak_enabled = self.config.speak if speak is None else speak
         # A node's voice satellite: words from a room, not necessarily the owner's. Neither
         # the preset nor the mode shortcut runs on them (only presets the owner marked
@@ -1140,14 +1179,12 @@ class Orchestrator:
         dash) once it is long enough to be worth saying on its own: the listener hears the first
         words while the model is still writing the end of that sentence.
         """
-        parts = [p for p in _SENTENCE_END.split(buffer) if p is not None]
-        if final:
-            return [p.strip() for p in parts if p.strip()], ""
-        if len(parts) <= 1:
-            if first and len(buffer) >= FIRST_CLAUSE_MIN_CHARS:
-                cut = max(buffer.rfind(mark) for mark in _CLAUSE_MARKS)
-                if cut >= FIRST_CLAUSE_MIN_CHARS // 2:
-                    head = buffer[: cut + 1].strip()
-                    return [head], buffer[cut + 1 :].lstrip()
-            return [], buffer
-        return [p.strip() for p in parts[:-1] if p.strip()], parts[-1]
+        sentences, rest = split_stream(buffer, final=final)
+        if final or sentences:
+            return sentences, rest
+        if first and len(buffer) >= FIRST_CLAUSE_MIN_CHARS:
+            cut = max(buffer.rfind(mark) for mark in _CLAUSE_MARKS)
+            if cut >= FIRST_CLAUSE_MIN_CHARS // 2:
+                head = buffer[: cut + 1].strip()
+                return [head], buffer[cut + 1 :].lstrip()
+        return [], buffer

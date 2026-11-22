@@ -62,7 +62,9 @@ def _pipeline(tts: ClipTts) -> tuple[DefaultVoicePipeline, Recorder, FakeAudioOu
         tts=tts,  # type: ignore[arg-type]
         emit=rec,
         capture_allowed=lambda: True,
-        config=PipelineConfig(),
+        config=PipelineConfig(
+            edge_fade_ms=0, trim_silence=False
+        ),  # the fake engine's bytes are labels, not audio
         segmenter=Segmenter(sample_rate=16000, end_silence_ms=300, min_segment_ms=200),
     )
     return pipeline, rec, out

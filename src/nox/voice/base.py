@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Protocol
 
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from nox.core.events import HealthStatus
 from nox.voice.latency import LatencySummary
@@ -47,6 +47,23 @@ class SttEngine(Protocol):
     async def unload(self) -> None: ...
 
 
+class SentenceStyle(BaseModel):
+    """How one sentence is meant to be said, on top of the voice and the rate.
+
+    A hook for what comes later (a sentence that is stressed, one that is said quickly in passing):
+    the speech pipeline carries it from the request to the engine unchanged, and an engine that can
+    use it reads it from `TtsRequest.style`. No engine does yet, so setting it changes nothing
+    audible today - and this is not a new voice.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: -1 (calm, flat) to +1 (stressed); 0 is the voice as it is.
+    emphasis: float = Field(default=0.0, ge=-1.0, le=1.0)
+    #: A factor on the request's `rate` for this sentence alone (1.0 = unchanged).
+    tempo: float = Field(default=1.0, ge=0.25, le=4.0)
+
+
 class TtsRequest(BaseModel):
     utterance_id: str
     text: str
@@ -55,6 +72,11 @@ class TtsRequest(BaseModel):
     rate: float = 1.0
     channel: Channel = Channel.PRIVATE
     prepared_clip: str | None = None  # id of a pre-rendered clip (RL callouts) bypasses synthesis
+    #: Optional per-sentence emphasis and tempo (`SentenceStyle`); absent = the voice as it is.
+    style: SentenceStyle | None = None
+    #: Numbers, dates, units and abbreviations are written out before the engine reads the text
+    #: (`nox.voice.tts.normalize`). False: the engine gets the text exactly as it is.
+    normalize: bool = True
 
 
 class TtsEngine(Protocol):

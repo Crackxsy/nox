@@ -8,7 +8,7 @@ nothing. The privacy side is pinned too - a restart must never open a device the
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 import pytest
@@ -57,6 +57,7 @@ class Rig:
         *,
         capture_allowed: Callable[[], bool] = lambda: True,
         input_devices: Callable[[], list[str]] | None = None,
+        device_lock_wait: Callable[[float], Awaitable[None]] | None = None,
         **config: Any,
     ) -> None:
         self.time = FakeTime()
@@ -79,6 +80,7 @@ class Rig:
             clock=self.time,
             sleep=self.time.sleep,
             input_devices=input_devices,
+            **({"device_lock_wait": device_lock_wait} if device_lock_wait else {}),
         )
 
     async def until(self, condition: Callable[[], bool], *, steps: int = 5000) -> None:
@@ -540,3 +542,188 @@ async def test_stop_waits_for_a_device_that_is_being_opened_and_closes_it(rig: R
     await stopping
 
     assert rig.audio_in.enabled is False and rig.audio_in.stopped
+
+
+# ---- stopping closes the device under the lock, and never hangs on it --------------------------
+
+
+async def test_stop_closes_the_input_while_holding_the_device_lock(rig: Rig) -> None:
+    """Both closing calls happen under the lock: a reopen that is just opening the device is
+    waited for, so no stream is left open behind a stopped pipeline."""
+    await rig.pipeline.start()
+    seen: list[tuple[str, bool]] = []
+    set_enabled, stop = rig.audio_in.set_enabled, rig.audio_in.stop
+
+    async def spy_set_enabled(value: bool) -> None:
+        seen.append((f"set_enabled({value})", rig.pipeline._device_lock.locked()))  # noqa: SLF001
+        await set_enabled(value)
+
+    async def spy_stop() -> None:
+        seen.append(("stop", rig.pipeline._device_lock.locked()))  # noqa: SLF001
+        await stop()
+
+    rig.audio_in.set_enabled = spy_set_enabled  # type: ignore[method-assign]
+    rig.audio_in.stop = spy_stop  # type: ignore[method-assign]
+
+    await rig.pipeline.stop()
+
+    assert seen == [("set_enabled(False)", True), ("stop", True)]
+    assert rig.pipeline._device_lock.locked() is False  # noqa: SLF001 - and it was given back
+
+
+async def test_stop_does_not_wait_for_ever_on_a_device_that_hangs_while_opening() -> None:
+    """The kill switch calls `stop`. A reopen stuck inside the device driver holds the lock for
+    as long as the driver takes - the kill switch must not take as long."""
+    give_up = asyncio.Event()
+
+    async def wait(_seconds: float) -> None:
+        await give_up.wait()
+
+    rig = Rig(device_lock_wait=wait)
+    await rig.pipeline.start()
+    await rig.pipeline._device_lock.acquire()  # noqa: SLF001 - the stuck reopen
+    stopping = asyncio.create_task(rig.pipeline.stop())
+    await settle()
+    assert not stopping.done()  # it does wait for a while ...
+
+    give_up.set()  # ... and then stops waiting
+    await asyncio.wait_for(stopping, 1)
+
+    assert rig.audio_in.enabled is False and rig.audio_in.stopped
+    assert rig.pipeline._device_lock.locked() is True  # noqa: SLF001 - not its lock to release
+    rig.pipeline._device_lock.release()  # noqa: SLF001
+
+
+async def test_a_holder_that_lets_go_in_time_is_waited_for_in_full() -> None:
+    gone = asyncio.Event()
+
+    async def wait(_seconds: float) -> None:
+        await gone.wait()  # never ends in this test
+
+    rig = Rig(device_lock_wait=wait)
+    await rig.pipeline.start()
+    await rig.pipeline._device_lock.acquire()  # noqa: SLF001
+    stopping = asyncio.create_task(rig.pipeline.stop())
+    await settle()
+    rig.pipeline._device_lock.release()  # noqa: SLF001
+    await asyncio.wait_for(stopping, 1)
+
+    assert rig.audio_in.stopped and rig.pipeline._device_lock.locked() is False  # noqa: SLF001
+
+
+async def test_a_reopen_that_finishes_after_stop_leaves_the_input_closed(rig: Rig) -> None:
+    await rig.pipeline.start()
+    await rig.pipeline.stop()
+
+    await rig.pipeline._reopen_capture()  # noqa: SLF001 - the slow reopen, finishing late
+
+    assert rig.audio_in.enabled is False
+
+
+# ---- a failure is neither lost nor counted twice -----------------------------------------------
+
+
+async def test_a_failure_noted_while_waiting_is_not_held_against_the_device_that_came_back() -> (
+    None
+):
+    """It was reported before the reopen and is already part of the retry delay: once the reopen
+    works, it must not send the supervisor round again."""
+    rig = Rig()
+    rig.audio_in.open_error = OSError("no input device")
+    await rig.pipeline.start()
+    await rig.until(lambda: rig.time.now >= 0.5)  # inside the first retry delay
+
+    rig.pipeline._supervisor.report_open_failure("the device flickered")  # noqa: SLF001
+    rig.audio_in.open_error = None
+    await rig.until(lambda: rig.audio_in.starts == 2)
+    await rig.feed(120)  # audio keeps flowing, for a minute of fake time and more
+
+    assert rig.time.now > 30
+    assert rig.audio_in.starts == 2  # one restart; not a second one for the same trouble
+    assert rig.pipeline.capture_health() == (HealthStatus.AVAILABLE, "capturing")
+    await rig.pipeline.stop()
+
+
+async def test_a_failure_during_the_reopen_itself_is_not_lost() -> None:
+    rig = Rig()
+    rig.audio_in.open_error = OSError("no input device")
+    await rig.pipeline.start()
+    await rig.until(lambda: rig.time.now >= 0.5)
+    rig.audio_in.open_error = None
+    rig.audio_in.on_start = lambda: rig.pipeline._supervisor.report_open_failure(  # noqa: SLF001
+        "the device dropped while it was being opened"
+    )
+
+    await rig.until(lambda: rig.audio_in.starts == 2)
+    rig.audio_in.on_start = None
+    await rig.until(lambda: rig.audio_in.starts >= 3 or rig.time.now > 20)
+
+    # Picked up at once (the second retry delay, two seconds), not left to the three-second
+    # stall watchdog and the longer wait that follows it.
+    assert rig.audio_in.starts == 3 and rig.time.now <= 4.0
+    await rig.pipeline.stop()
+
+
+# ---- "I can hear you again" after a mute --------------------------------------------------------
+
+
+async def test_the_user_who_was_told_nox_is_deaf_is_told_when_it_hears_again_after_a_mute() -> None:
+    rig = Rig()
+    rig.audio_in.open_error = OSError("no input device")
+    await rig.pipeline.start()
+    await rig.until(lambda: rig.notices() == ["deaf"])
+    await rig.pipeline.set_muted(True)  # the user mutes: the episode is closed on purpose
+    await rig.until(lambda: rig.pipeline.capture_health()[0] is HealthStatus.AVAILABLE)
+    assert rig.notices() == ["deaf"]  # nothing flows while muted: nothing to announce
+
+    rig.audio_in.open_error = None  # the headset was plugged in meanwhile
+    await rig.pipeline.set_muted(False)
+    await rig.feed(10)
+
+    assert rig.notices() == ["deaf", "recovered"]
+    await rig.feed(30)
+    assert rig.notices() == ["deaf", "recovered"]  # once
+    await rig.pipeline.stop()
+
+
+async def test_a_mute_that_hides_a_microphone_that_is_still_broken_does_not_announce_again() -> (
+    None
+):
+    rig = Rig()
+    rig.audio_in.open_error = OSError("no input device")
+    await rig.pipeline.start()
+    await rig.until(lambda: rig.notices() == ["deaf"])
+    await rig.pipeline.set_muted(True)
+    await rig.until(lambda: rig.pipeline.capture_health()[0] is HealthStatus.AVAILABLE)
+
+    await rig.pipeline.set_muted(False)  # still no microphone
+    await rig.run_for(sum(RETRY_BACKOFF_S))
+
+    assert rig.notices() == ["deaf"]  # the user knows; it is not said again
+    assert rig.pipeline.capture_health()[0] is HealthStatus.UNAVAILABLE
+    await rig.pipeline.stop()
+
+
+def test_the_monitor_owes_the_recovery_notice_across_a_settle_but_not_across_a_reset() -> None:
+    monitor = CaptureMonitor()
+    for _ in range(DEAF_AFTER_FAILURES):
+        monitor.failure("gone")
+
+    monitor.settle()
+    assert monitor.state is CaptureState.LISTENING and monitor.failures == 0
+    assert monitor.frame() is CaptureNotice.RECOVERED
+    assert monitor.frame() is None
+
+    for _ in range(DEAF_AFTER_FAILURES):
+        monitor.failure("gone")
+    monitor.reset()  # a fresh start forgets what was said
+    assert monitor.frame() is None
+
+
+def test_a_settle_without_a_deaf_notice_owes_nothing() -> None:
+    monitor = CaptureMonitor()
+    monitor.failure("one hiccup")
+
+    monitor.settle()
+
+    assert monitor.frame() is None

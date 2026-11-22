@@ -2,8 +2,10 @@
 
 Output: one PortAudio callback stream per target device - the private headphones and, when
 configured, a virtual audio cable for the stream. `both` writes the same PCM to both devices and
-`mute` consumes and discards it. `stop` aborts the streams, which drops buffered audio immediately,
-well inside the barge-in budget.
+`mute` consumes and discards it. The streams stay open for a few seconds after a sentence, so the
+sentences of one answer are one continuous stream (silence fills the gaps) instead of a device that
+is opened and closed per sentence. `stop` aborts the streams, which drops buffered audio
+immediately, well inside the barge-in budget.
 
 Input: 16 kHz mono float32 frames of 30 ms. The capture stream exists only while `enabled` is True,
 so a closed gate means no open device and no microphone indicator, not merely discarded frames.
@@ -148,7 +150,13 @@ def block_level(pcm: np.ndarray, frames: int) -> float:
 
 
 class _DevicePlayer:
-    """One callback-driven int16 mono output stream fed from a byte buffer."""
+    """One callback-driven int16 mono output stream fed from a byte buffer.
+
+    The stream stays open between utterances and plays silence while the buffer is empty, so a
+    sentence that follows another one starts without opening a device (which costs tens of
+    milliseconds and is heard as a pause). `idle` says that everything fed so far has been handed
+    to the device; `close` is the only way the stream ends, apart from a device that fails.
+    """
 
     def __init__(self, device: int | None, sample_rate: int, volume: float) -> None:
         self.device = device
@@ -156,9 +164,14 @@ class _DevicePlayer:
         self.volume = volume
         self._buf = bytearray()
         self._lock = threading.Lock()
-        self._eof = False
-        self._drained = threading.Event()
+        #: Set while the buffer is empty and the device has taken everything fed before.
+        self._idle = threading.Event()
+        self._idle.set()
         self._stream: Any = None
+        #: An utterance is being fed: an empty buffer now means the synthesis fell behind.
+        self._expecting = False
+        #: The stream ended on its own (device gone) or was aborted: it cannot be reused.
+        self.dead = False
         self.underruns = 0
         #: RMS loudness (0..1) of the block the device took last. Written by the audio thread,
         #: read by the pipeline's level pacer; a float assignment is atomic, no lock needed.
@@ -173,19 +186,26 @@ class _DevicePlayer:
             device=self.device,
             callback=self._callback,
             latency="low",
-            finished_callback=self._drained.set,
+            finished_callback=self._finished,
         )
         self._stream.start()
 
+    def _finished(self) -> None:
+        """The stream stopped: whoever waits for it to drain must not wait for ever."""
+        self.dead = True
+        self._idle.set()
+
     def _callback(self, outdata: np.ndarray, frames: int, _time: Any, status: Any) -> None:
-        sd = _sd()
         if status and status.output_underflow:
             self.underruns += 1
         need = frames * 2
         with self._lock:
             chunk = bytes(self._buf[:need])
             del self._buf[:need]
-            eof = self._eof and not self._buf
+            if not chunk:
+                self._idle.set()
+                if self._expecting:
+                    self.underruns += 1
         if chunk:
             pcm = np.frombuffer(chunk, dtype=np.int16)
             if self.volume != 1.0:
@@ -196,41 +216,59 @@ class _DevicePlayer:
         else:
             outdata.fill(0)
             self.level = 0.0
-        if eof:
-            raise sd.CallbackStop
+
+    def begin_utterance(self) -> None:
+        with self._lock:
+            self._expecting = True
+
+    def end_utterance(self) -> None:
+        with self._lock:
+            self._expecting = False
 
     def feed(self, pcm: bytes) -> None:
         with self._lock:
             self._buf.extend(pcm)
-
-    def end_of_input(self) -> None:
-        """Mark the buffer complete; the callback raises `CallbackStop` once it has drained."""
-        with self._lock:
-            self._eof = True
+            self._idle.clear()
 
     def wait_drained(self, timeout: float) -> bool:
-        return self._drained.wait(timeout)
+        """Block until the device has taken everything fed so far (or `timeout` ran out)."""
+        return self._idle.wait(timeout)
 
     def abort(self) -> None:
+        """Drop what is buffered and stop the stream at once; the player cannot be reused."""
         with self._lock:
             self._buf.clear()
-            self._eof = True
+            self._expecting = False
+        self.dead = True
         if self._stream is not None:
             try:
                 self._stream.abort(ignore_errors=True)
             finally:
-                self._drained.set()
+                self._idle.set()
+        else:
+            self._idle.set()
 
     def close(self) -> None:
-        if self._stream is not None:
-            try:
-                self._stream.close(ignore_errors=True)
-            finally:
-                self._stream = None
+        """Let the device play out what it holds, then release it."""
+        stream, self._stream = self._stream, None
+        if stream is None:
+            return
+        try:
+            if not self.dead:
+                stream.stop(ignore_errors=True)
+        finally:
+            stream.close(ignore_errors=True)
+            self.dead = True
 
 
 class SoundDeviceOutput:
-    """AudioOutput backed by sounddevice; devices are chosen by name substring at construction."""
+    """AudioOutput backed by sounddevice; devices are chosen by name substring at construction.
+
+    One output stream per target device stays open between sentences (`linger_s`), so the sentences
+    of one answer are one continuous stream with silence where nothing is playing, not a series
+    of streams that are opened and closed. The streams are closed after `linger_s` of silence,
+    when the target devices or the sample rate change, and on `stop` and `close`.
+    """
 
     def __init__(
         self,
@@ -239,12 +277,19 @@ class SoundDeviceOutput:
         stream_device: str = "",
         volume: float = 0.8,
         drain_timeout_s: float = 30.0,
+        linger_s: float = 3.0,
     ) -> None:
         self._private_name = private_device
         self._stream_name = stream_device
         self.volume = volume
         self._drain_timeout_s = drain_timeout_s
+        self._linger_s = linger_s
         self._players: list[_DevicePlayer] = []
+        #: The (targets, sample rate) the open players were opened for.
+        self._session_key: tuple[tuple[int | None, ...], int] | None = None
+        self._linger_task: asyncio.Task[None] | None = None
+        #: An utterance is being fed right now (as opposed to an idle open stream).
+        self._busy = False
         #: Incremented by every `stop()`. An utterance that started under an older generation is
         #: cancelled, so a stop arriving while it was still queued is not lost.
         self._stop_generation = 0
@@ -286,6 +331,11 @@ class SoundDeviceOutput:
         """The configured (private, stream) device settings."""
         return self._private_name, self._stream_name
 
+    @property
+    def streams_open(self) -> int:
+        """How many output streams are open right now, playing or waiting for the next sentence."""
+        return len(self._players)
+
     async def _resolve(self, name: str) -> int | None:
         """Device index for a configured name, resolved once and then cached.
 
@@ -315,6 +365,57 @@ class SoundDeviceOutput:
             return [stream]
         return [private, stream] if stream != private else [private]
 
+    async def _release_players(self) -> None:
+        """Close the open streams (letting them play out what they hold). Call under the lock."""
+        players, self._players = self._players, []
+        self._session_key = None
+        for p in players:
+            await asyncio.to_thread(p.close)
+
+    async def _players_for(
+        self, targets: list[int | None], sample_rate: int
+    ) -> list[_DevicePlayer]:
+        """The open streams for these targets: the ones left from the sentence before when they
+        are the same and still alive, otherwise new ones. Call under the lock."""
+        key = (tuple(targets), sample_rate)
+        if self._players and self._session_key == key and not any(p.dead for p in self._players):
+            return self._players
+        await self._release_players()
+        players = [_DevicePlayer(dev, sample_rate, self.volume) for dev in targets]
+        try:
+            for p in players:
+                await asyncio.to_thread(p.open)
+        except BaseException:
+            for p in players:
+                await asyncio.to_thread(p.close)
+            raise
+        self._players = players
+        self._session_key = key
+        return players
+
+    def _cancel_linger(self) -> None:
+        task, self._linger_task = self._linger_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _arm_linger(self) -> None:
+        """Close the streams after `linger_s` of silence, unless another sentence comes first."""
+        self._cancel_linger()
+        if self._players:
+            self._linger_task = asyncio.create_task(self._linger_close(), name="audio-linger")
+
+    async def _linger_close(self) -> None:
+        await asyncio.sleep(self._linger_s)
+        async with self._lock:
+            if not self._busy:
+                await self._release_players()
+
+    async def close(self) -> None:
+        """Close the output streams (shutdown, or a device change that must take effect now)."""
+        self._cancel_linger()
+        async with self._lock:
+            await self._release_players()
+
     async def play(
         self,
         pcm_chunks: AsyncIterator[bytes],
@@ -327,6 +428,7 @@ class SoundDeviceOutput:
         # must cancel it, instead of being cleared away when it finally starts.
         generation = self._stop_generation
         async with self._lock:
+            self._cancel_linger()
 
             def cancelled() -> bool:
                 return self._stop_generation != generation
@@ -340,24 +442,27 @@ class SoundDeviceOutput:
                     if cancelled():
                         break
                 return
-            players = [_DevicePlayer(dev, sample_rate, self.volume) for dev in targets]
-            self._players = players
+            players: list[_DevicePlayer] = []
+            finished = False
+            self._busy = True
             try:
+                players = await self._players_for(targets, sample_rate)
                 for p in players:
-                    await asyncio.to_thread(p.open)
+                    p.begin_utterance()
                 async for chunk in pcm_chunks:
                     if cancelled():
                         break
                     for p in players:
                         p.feed(chunk)
+                for p in players:
+                    p.end_utterance()
                 if not cancelled():
-                    for p in players:
-                        p.end_of_input()
                     for p in players:
                         drained = await asyncio.to_thread(p.wait_drained, self._drain_timeout_s)
                         if not drained:
                             log.warning("audio.drain_timeout", utterance_id=utterance_id)
                             p.abort()
+                finished = not cancelled() and not any(p.dead for p in players)
                 log.debug(
                     "audio.play_done",
                     utterance_id=utterance_id,
@@ -366,15 +471,20 @@ class SoundDeviceOutput:
                     stopped=cancelled(),
                 )
             finally:
-                for p in players:
-                    await asyncio.to_thread(p.close)
-                self._players = []
+                self._busy = False
+                if finished:
+                    self._arm_linger()
+                else:
+                    # Cut off, failed or a dead device: nothing worth keeping open.
+                    await self._release_players()
 
     async def stop(self, *, reason: str) -> None:
         t0 = time.perf_counter()
         self._stop_generation += 1
         self.last_stop_reason = reason
-        players = list(self._players)
+        # Only an utterance that is being fed is cut off; an idle stream that is kept open for the
+        # next sentence has nothing to abort and stays usable.
+        players = list(self._players) if self._busy else []
         for p in players:
             await asyncio.to_thread(p.abort)
         self.last_stop_latency_ms = (time.perf_counter() - t0) * 1000.0

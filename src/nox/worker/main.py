@@ -41,6 +41,7 @@ from nox.ipc.protocol import Envelope
 from nox.voice._logging import get_logger
 from nox.voice.base import Transcript, TtsRequest, VoicePipeline
 from nox.voice.pipeline import DefaultVoicePipeline, Emit, PipelineConfig
+from nox.voice.prefetch import ResourceGate, system_cpu_load
 from nox.voice.stt.wake_gate import WakeGate
 from nox.worker.heartbeat import heartbeat_loop
 
@@ -357,7 +358,12 @@ class VoiceWorker:
         if pipeline is None or not self._pipeline_started or self.status.status != "running":
             return {}
         status, reason = pipeline.capture_health()
-        return {"capture": str(status), "capture_reason": reason}
+        report: dict[str, Any] = {"capture": str(status), "capture_reason": reason}
+        gap = pipeline.latency_summary()
+        if gap.sentence_gap_ms is not None:
+            report["speech_gap_p95_ms"] = gap.sentence_gap_ms.p95
+            report["speech_gaps"] = gap.sentence_gaps
+        return report
 
     async def run(self) -> None:
         # connect -> worker.register -> apply the core's config -> only then build and load the
@@ -444,6 +450,12 @@ class VoiceWorker:
             self._heartbeat_task.cancel()
             await asyncio.gather(self._heartbeat_task, return_exceptions=True)
             self._heartbeat_task = None
+        output = self.audio_output
+        if output is not None and hasattr(output, "close"):
+            try:
+                await output.close()  # the output streams that were kept open between sentences
+            except Exception as exc:  # noqa: BLE001 - the process is ending; the system closes them
+                log.debug("worker.output_close_failed", error=f"{type(exc).__name__}: {exc}")
         await self.client.close()
 
 
@@ -483,6 +495,14 @@ def pipeline_config_from(voice: VoiceConfig) -> PipelineConfig:
         language=voice.stt.language,
         barge_in=voice.barge_in,
         listening_mode=voice.stt.listening_mode,
+        prefetch_sentences=voice.tts.prefetch_sentences,
+        prefetch_buffer_s=voice.tts.prefetch_buffer_s,
+        edge_fade_ms=voice.tts.edge_fade_ms,
+        trim_silence=voice.tts.trim_silence,
+        silence_threshold_db=voice.tts.silence_threshold_db,
+        normalize_text=voice.tts.normalize_text,
+        barge_in_min_ms=voice.barge_in_min_ms,
+        barge_in_min_db=voice.barge_in_min_db,
     )
 
 
@@ -679,6 +699,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
             config=pipeline_config_from(cfg),
             wake_gate=build_wake_gate(cfg),
             input_devices=input_device_names,
+            prefetch_allowed=ResourceGate(cfg.tts.prefetch_cpu_ceiling, system_cpu_load).free,
         )
 
     client = IpcClient(

@@ -42,7 +42,13 @@ async def heartbeat_loop(
     optional fields the core understands (the voice worker reports its microphone state this way).
     """
     while not stop.is_set():
-        payload: dict[str, Any] = {**extra(), "status": status()}
+        payload: dict[str, Any] = {"status": status()}
+        try:
+            # A report that cannot be built must cost the beat its extras, never the beat: a core
+            # that hears nothing marks the worker unavailable after three missed heartbeats.
+            payload = {**extra(), **payload}
+        except Exception as exc:  # noqa: BLE001 - the heartbeat outlives a broken report
+            log.warning(log_event.replace("failed", "extra_failed"), error=str(exc), **log_context)
         current_load = load()
         if current_load is not None:
             payload["load"] = float(current_load)
