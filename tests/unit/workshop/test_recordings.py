@@ -37,7 +37,7 @@ from tests.workshop.recordings import (
 
 pytestmark = pytest.mark.timeout(30)
 
-ALL_RECORDINGS = sorted(path.stem for path in RECORDINGS_DIR.glob("*.jsonl"))
+ALL_RECORDINGS = sorted(path.stem for path in RECORDINGS_DIR.glob("*.ndjson"))
 
 
 # -- the files ----------------------------------------------------------------------------------
@@ -61,7 +61,7 @@ def test_a_recording_starts_with_a_note_saying_it_is_invented(name: str) -> None
 
 @pytest.fixture
 def bad_recording(tmp_path: Path) -> Iterator[Path]:
-    path = tmp_path / "bad.jsonl"
+    path = tmp_path / "bad.ndjson"
     yield path
 
 

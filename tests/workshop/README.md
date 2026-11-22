@@ -10,7 +10,7 @@ beyond `127.0.0.1`. Nothing under `src/nox` imports from here: this is test supp
 |---|---|---|
 | Fake OBS | `fake_obs/` | An obs-websocket v5 server with a small stateful OBS behind it |
 | Fake Twitch chat | `fake_twitch.py` | The IRC side of Twitch chat, with Twitch's send rules |
-| Recordings | `recordings/*.jsonl`, `recordings.py` | Event shapes of a chat evening and an OBS session, invented content |
+| Recordings | `recordings/*.ndjson`, `recordings.py` | Event shapes of a chat evening and an OBS session, invented content |
 | Raw clients | `raw_clients.py` | Protocol clients that share no code with Nox, for testing the fakes |
 | Contract tests | `tests/unit/workshop/` | Nox's clients and plugins against the fakes |
 
@@ -91,7 +91,7 @@ async with FakeTwitchIrc() as irc:
 
 ## Recordings (`recordings/`, `recordings.py`)
 
-A recording is a JSON Lines file: a `note`, then `server` entries, each with a `seq`. A Twitch
+A recording is a newline-delimited JSON file (`.ndjson`): a `note`, then `server` entries, each with a `seq`. A Twitch
 entry holds one IRC `line`, an OBS entry one `event` (`eventType`, `eventData`). Replay sends the
 `server` entries in order, as fast as the receiver reads them: `irc.send_lines(irc_lines(name))`,
 `obs.replay_events(obs_events(name))`. A recording has no timing, so a replay never depends on how
@@ -105,8 +105,8 @@ list what it must produce in a replay test, and keep the content made up.
 
 | File | Holds |
 |---|---|
-| `twitch_chat_evening.jsonl` | `ROOMSTATE`, plain, emote, bits, reply, action and umlaut chat lines, another bot's command, sub, resub, a mass gift with its single gifts, a raid, a ritual notice, `CLEARCHAT`, `CLEARMSG`, a slow-mode notice, `PING` |
-| `obs_stream_session.jsonl` | scene changes, mute, going live (STARTING, STARTED), recording, going offline (STOPPING, STOPPED), `ExitStarted` |
+| `twitch_chat_evening.ndjson` | `ROOMSTATE`, plain, emote, bits, reply, action and umlaut chat lines, another bot's command, sub, resub, a mass gift with its single gifts, a raid, a ritual notice, `CLEARCHAT`, `CLEARMSG`, a slow-mode notice, `PING` |
+| `obs_stream_session.ndjson` | scene changes, mute, going live (STARTING, STARTED), recording, going offline (STOPPING, STOPPED), `ExitStarted` |
 
 ## The contract tests (`tests/unit/workshop/`)
 

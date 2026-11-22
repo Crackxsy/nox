@@ -1,7 +1,7 @@
 """Recorded event shapes and how to play them back.
 
-A recording is a JSON Lines file under `recordings/`. Every line is one object with a `seq` and a
-`dir`:
+A recording is a newline-delimited JSON file (`.ndjson`) under `recordings/`. Every line is one
+object with a `seq` and a `dir`:
 
 - `{"dir": "note", "text": ...}` - a comment about the recording (where the shape comes from);
 - `{"dir": "server", "line": "<one IRC line>"}` - what a Twitch chat server sent (Twitch);
@@ -34,8 +34,8 @@ _LOGIN_IN_LINE = re.compile(r"(?:^|[; ]):?(\w+)!\1@\1\.tmi\.twitch\.tv|[;@]login
 
 
 def load(source: str | Path) -> list[dict[str, Any]]:
-    """Every entry of a recording, in order: `recordings/<name>.jsonl` for a name, or a file."""
-    path = source if isinstance(source, Path) else RECORDINGS_DIR / f"{source}.jsonl"
+    """Every entry of a recording, in order: `recordings/<name>.ndjson` for a name, or a file."""
+    path = source if isinstance(source, Path) else RECORDINGS_DIR / f"{source}.ndjson"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
