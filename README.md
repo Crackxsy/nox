@@ -56,7 +56,7 @@ Nox is **pre-1.0**. Honest state of the `develop` branch (the latest release is 
 | --- | --- |
 | Core, supervisor, kill switch, privacy modes/zones, permission engine, audit chain | Works |
 | Local IPC hub, desktop shell (pet window, tray, hotkeys), dashboard | Works |
-| Voice: push-to-talk, wake word, local STT (faster-whisper) + TTS (Supertonic 3 by default, Piper as the fallback, Kokoro) | Works, needs the `voice` extras and a model download (one click in the dashboard); see [Voice](#voice-microphone-and-speech) |
+| Voice: push-to-talk, hands-free listening with the wake word in the transcript (no trained "Nox" model yet), local STT (faster-whisper) + TTS (Supertonic 3 by default, Piper as the fallback, Kokoro) | Works, needs the `voice` extras and a model download (`nox voice setup`; the voice files also with one click in the dashboard); see [Voice](#voice-microphone-and-speech) |
 | AI routing: Claude Code CLI → Ollama → deterministic rules fallback | Works; each provider reports its real health |
 | Memory: SQLite + `sqlite-vec`, vault indexing | Works; first start indexes the whole vault once |
 | Twitch chat bot, OBS scene control, Funken ledger, dashboard Stream page | Works (stream and rocket_league profiles) |
@@ -368,6 +368,43 @@ budget fails, Nox switches to the energy detector by itself and the voice health
 ("speech detection: energy fallback (...)"). `voice.vad.engine: energy` chooses it deliberately.
 This detector only decides where an utterance starts and ends; whether it is addressed to Nox is
 still the wake-word gate's job.
+
+**Where the words go.** Silero decides *where* you speak; the sentence ends after `voice.vad.end_silence_ms`
+(default 400 ms, was 600). What comes after "Nox" reaches Nox as Whisper wrote it - capital letters,
+commas, "18:30", "3,5" - not lower-cased and stripped (names and numbers used to be mangled before
+the memory or the language model saw them).
+
+**The speech model never downloads itself.** `faster-whisper` used to fetch the model from Hugging
+Face on first use, without asking, without a pin, also in the privacy modes `offline` and
+`private`. Now the engine only reads from disk. `nox voice setup` fetches it - pinned to one
+commit of the model repository, only after a yes, and never in `offline`/`private` - and a missing
+model is reported with that command. Models of an older install (faster-whisper's own cache layout
+under the models folder) keep working. `base`, `small` and `tiny` have pins; for `medium` and
+`large-v3-turbo` place the files in `<models_dir>/faster-whisper/whisper-<size>/` yourself. The
+dashboard tile and the onboarding step still cover the voice (TTS) files only.
+
+**Quiet next to a game.** The voice worker runs at normal priority (it used to run above normal)
+and at `below_normal` while a game is in the foreground (`voice.performance.priority` and
+`game_priority`, Windows priority classes). Speech recognition uses at most 8 CPU threads, fewer
+with `voice.performance.cpu_threads` (read when the model loads). The effect on frame rates is
+not measured.
+
+**Nox hearing itself.** Through loudspeakers the microphone picks up Nox's own voice, and a speech
+detector cannot tell it from yours: Nox would interrupt itself. At start Nox looks at what it plays
+on - Windows reads the endpoint's form factor (what the sound settings use for the device icon, read
+only from the registry), Linux asks PulseAudio/PipeWire (`pactl`), macOS `system_profiler` (this one
+is untested on real hardware), and a words-in-the-name guess backs each of them. Headphones, a
+headset and stream-only or muted output change nothing. For loudspeakers and for an output it cannot
+identify, speech has to be louder than `voice.echo.start_db` (default -30 dBFS) for
+`voice.echo.min_ms` (240 ms, short dips inside a voice do not count against it) before it counts as
+you, while Nox speaks and for `voice.echo.tail_ms` (400 ms) afterwards; the room's echo of a
+normally played voice is quieter than a person at the microphone, so an interruption still works.
+`voice.echo.mode: half_duplex` hears nothing while Nox speaks (push-to-talk still works), `off`
+switches the rule off. This is a threshold, not echo cancellation: a very loud output or a
+microphone next to the speaker defeats it, and speaking quietly over loud speakers is not heard.
+Until real echo cancellation exists the voice health line says "headphones recommended" whenever
+the output is not headphones; the device is looked at again when Nox starts speaking (at most every
+30 s) and when the output device is changed in the settings.
 
 **When the microphone goes away.** A headset that is unplugged, a driver reset or a sleep/wake cycle
 used to leave Nox deaf without a sign. The capture loop now runs under a supervisor: if the input
