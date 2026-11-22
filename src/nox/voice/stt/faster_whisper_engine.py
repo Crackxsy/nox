@@ -10,6 +10,9 @@ Dutch.
 The vocabulary goes in as the initial prompt: the words Whisper should expect in a conversation
 with Nox. Measured on eight German commands, it took `small` from 4/8 to 8/8 exact transcripts
 ("Lass uns striam" -> "Lass uns streamen"). Audio never leaves memory.
+
+The model is never downloaded from here: a missing one raises `WhisperModelMissingError`, which
+says how to install it (`nox voice setup`, after a yes).
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from nox.core.events import HealthStatus
 from nox.voice._logging import get_logger
 from nox.voice.audio import resample_linear
 from nox.voice.base import Transcript
-from nox.voice.models import engine_models_dir
+from nox.voice.models import WHISPER_SIZES_MB, engine_models_dir
 
 log = get_logger(__name__)
 
@@ -35,6 +38,10 @@ WHISPER_RATE = 16000
 
 #: How sure Whisper must be before `auto` leaves the preferred language for another one.
 SWITCH_CONFIDENCE = 0.8
+
+
+class WhisperModelMissingError(FileNotFoundError):
+    """The speech model is not on disk. Nox never fetches it by itself: it asks first."""
 
 
 def initial_prompt_for(vocabulary: tuple[str, ...]) -> str | None:
@@ -57,12 +64,8 @@ class FasterWhisperStt:
         cpu_threads: int = 0,
         beam_size: int = 1,
         vocabulary: tuple[str, ...] = (),
-        local_files_only: bool = False,
     ) -> None:
         self.model_size = model_size
-        #: True on a node: the model must already be in `models_dir` (`nox node voice setup`);
-        #: nothing is ever downloaded by itself there.
-        self.local_files_only = local_files_only
         self.device = device
         self.compute_type = compute_type
         self.models_dir = models_dir or str(engine_models_dir("faster-whisper"))
@@ -88,17 +91,27 @@ class FasterWhisperStt:
 
         Path(self.models_dir).mkdir(parents=True, exist_ok=True)
         t0 = time.perf_counter()
-        # A model fetched by `nox node voice setup` lies in a plain folder (a pinned revision).
+        # A model fetched by `nox voice setup` lies in a plain folder (a pinned revision).
         pinned = Path(self.models_dir) / f"whisper-{self.model_size}"
         source = str(pinned) if (pinned / "model.bin").is_file() else self.model_size
-        self._model = WhisperModel(
-            source,
-            device=self.device,
-            compute_type=self.compute_type,
-            download_root=self.models_dir,
-            cpu_threads=self.cpu_threads,
-            local_files_only=self.local_files_only,
-        )
+        try:
+            # Never a download from here: the model arrives through `nox voice setup`, after the
+            # user's yes and outside the privacy modes that allow nothing. A cache from an older
+            # install (faster-whisper's own layout under `models_dir`) is still found.
+            self._model = WhisperModel(
+                source,
+                device=self.device,
+                compute_type=self.compute_type,
+                download_root=self.models_dir,
+                cpu_threads=self.cpu_threads,
+                local_files_only=True,
+            )
+        except FileNotFoundError as exc:
+            raise WhisperModelMissingError(
+                f"the speech model {self.model_size!r} is not installed in {self.models_dir}; "
+                "install it with `nox voice setup` (it asks first, about "
+                f"{WHISPER_SIZES_MB.get(self.model_size, '?')} MB)"
+            ) from exc
         self.load_time_ms = (time.perf_counter() - t0) * 1000.0
 
     async def load(self) -> None:

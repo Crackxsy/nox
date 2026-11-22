@@ -422,6 +422,46 @@ def download_supertonic(
     return code
 
 
+#: The speech-recognition models Nox can fetch, each pinned to one commit of its Hugging Face
+#: repository (Systran/faster-whisper-<size>, MIT), so the files are exactly the ones this release
+#: was checked with, whatever `main` becomes. Read from the repositories' heads on 2026-11-12;
+#: moved on purpose, with a release. Sizes are the approximate download.
+WHISPER_REVISIONS: dict[str, str] = {
+    "tiny": "d90ca5fe260221311c53c58e660288d3deb8d356",
+    "base": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
+    "small": "536b0662742c02347bc0e980a01041f333bce120",
+}
+WHISPER_SIZES_MB: dict[str, int] = {"tiny": 75, "base": 145, "small": 480}
+
+
+def whisper_folder(directory: Path, model: str) -> Path:
+    """Where a downloaded model lives: `<faster-whisper models dir>/whisper-<model>`."""
+    return directory / f"whisper-{model}"
+
+
+def whisper_installed(directory: Path, model: str) -> bool:
+    """The model is on disk, either as a pinned download or in faster-whisper's own cache layout
+    (`models--Systran--faster-whisper-<model>/snapshots/<rev>/model.bin`)."""
+    if (whisper_folder(directory, model) / "model.bin").is_file():
+        return True
+    cache = directory / f"models--Systran--faster-whisper-{model}" / "snapshots"
+    return cache.is_dir() and any(cache.glob("*/model.bin"))
+
+
+def download_whisper(model: str, directory: Path) -> None:
+    """faster-whisper's own download, pinned to `WHISPER_REVISIONS`, into the plain folder
+    `whisper-<model>` below `directory` - which the speech engine prefers over its cache.
+    User-initiated only; raises on a model without a pin and on any failure."""
+    from faster_whisper.utils import download_model  # noqa: PLC0415 - the extra `voice`
+
+    revision = WHISPER_REVISIONS.get(model)
+    if revision is None:
+        raise ValueError(f"no pinned revision for the model {model!r}")
+    folder = whisper_folder(directory, model)
+    folder.mkdir(parents=True, exist_ok=True)
+    download_model(model, output_dir=str(folder), revision=revision)
+
+
 def download_engine(
     engine: str,
     target_dir: Path,

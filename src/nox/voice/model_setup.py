@@ -30,13 +30,17 @@ from typing import Any
 
 from nox.voice.models import (
     DOWNLOADABLE_ENGINES,
+    WHISPER_REVISIONS,
+    WHISPER_SIZES_MB,
     CancelFn,
     DownloadProgress,
     ProgressFn,
     download_engine,
+    download_whisper,
     engine_files,
     files_size,
     models_root,
+    whisper_installed,
 )
 
 __all__ = [
@@ -53,6 +57,7 @@ __all__ = [
     "privacy_cancel",
     "run_onboarding_voice_step",
     "run_voice_setup",
+    "run_whisper_setup",
     "texts",
 ]
 
@@ -236,6 +241,26 @@ TEXTS: dict[str, dict[str, str]] = {
         "progress": "  {pct:>3} %  ({done} von {total} MB)",
         "done": "Fertig. Nox spricht mit der neuen Stimme ab dem nächsten Start.",
         "failed": "Der Download ist fehlgeschlagen (Code {code}). Bis dahin spricht Nox mit Piper.",
+        "whisper_intro": (
+            "Spracherkennung (Whisper {model}): etwa {mb} MB von Hugging Face "
+            "(Revision {revision}), nach {dir}"
+        ),
+        "whisper_unpinned": (
+            "Für das Modell „{model}“ lädt Nox nichts herunter (keine festgelegte Revision). "
+            "Lege die Dateien selbst nach {dir} ab."
+        ),
+        "whisper_present": "Das Whisper-Modell ist schon da ({dir}).",
+        "whisper_blocked": (
+            "Whisper nicht heruntergeladen: Im Privatsphäre-Modus „{mode}“ lädt Nox nichts aus "
+            "dem Netz. Ohne dieses Modell versteht Nox nichts."
+        ),
+        "whisper_ask": "Whisper jetzt herunterladen (etwa {mb} MB)?",
+        "whisper_declined": (
+            "Whisper nicht heruntergeladen. Ohne dieses Modell versteht Nox nichts; "
+            "später mit `nox voice setup`."
+        ),
+        "whisper_done": "Whisper ist da.",
+        "whisper_failed": "Der Whisper-Download ist fehlgeschlagen: {error}",
     },
     "en": {
         "intro": "Voice model {engine}: {files} files, about {mb} MB, into {dir}",
@@ -257,6 +282,26 @@ TEXTS: dict[str, dict[str, str]] = {
         "progress": "  {pct:>3} %  ({done} of {total} MB)",
         "done": "Done. Nox speaks with the new voice from its next start.",
         "failed": "The download failed (code {code}). Until then Nox speaks with Piper.",
+        "whisper_intro": (
+            "Speech recognition (Whisper {model}): about {mb} MB from Hugging Face "
+            "(revision {revision}), into {dir}"
+        ),
+        "whisper_unpinned": (
+            "Nox downloads nothing for the model {model!r} (no pinned revision). "
+            "Place the files in {dir} yourself."
+        ),
+        "whisper_present": "The Whisper model is already there ({dir}).",
+        "whisper_blocked": (
+            "Whisper not downloaded: privacy mode {mode!r} allows no downloads. Without this "
+            "model Nox cannot understand speech."
+        ),
+        "whisper_ask": "Download Whisper now (about {mb} MB)?",
+        "whisper_declined": (
+            "Whisper not downloaded. Without this model Nox cannot understand speech; "
+            "later with `nox voice setup`."
+        ),
+        "whisper_done": "Whisper is in place.",
+        "whisper_failed": "The Whisper download failed: {error}",
     },
 }
 
@@ -347,6 +392,54 @@ def run_voice_setup(
         )
     echo(t["done"] if code == 0 else t["failed"].format(code=code))
     return 0 if code == 0 else 1
+
+
+WhisperDownloadFn = Callable[[str, Path], None]
+
+
+def run_whisper_setup(
+    *,
+    model: str,
+    directory: Path,
+    privacy_mode: str,
+    language: str | None,
+    echo: Callable[[str], None],
+    confirm: Callable[[str], bool] | None = None,
+    download: WhisperDownloadFn = download_whisper,
+) -> int:
+    """Fetch the speech-recognition model, pinned to a revision, only after a yes.
+
+    `directory` is the faster-whisper models folder. 0 when the model is there afterwards, was
+    already, or the user said no (an honest "no" is not an error); 1 when a privacy mode forbids
+    the download or it failed. The download itself cannot be stopped half way, so the privacy mode
+    is checked before it starts, not during.
+    """
+    t = texts(language)
+    if model not in WHISPER_REVISIONS:
+        echo(t["whisper_unpinned"].format(model=model, dir=directory))
+        return 0
+    if whisper_installed(directory, model):
+        echo(t["whisper_present"].format(dir=directory))
+        return 0
+    mb = WHISPER_SIZES_MB[model]
+    echo(
+        t["whisper_intro"].format(
+            model=model, mb=mb, revision=WHISPER_REVISIONS[model][:10], dir=directory
+        )
+    )
+    if not download_allowed(privacy_mode):
+        echo(t["whisper_blocked"].format(mode=privacy_mode))
+        return 1
+    if confirm is not None and not confirm(t["whisper_ask"].format(mb=mb)):
+        echo(t["whisper_declined"])
+        return 0
+    try:
+        download(model, directory)
+    except Exception as exc:  # noqa: BLE001 - reported, nothing half-claimed
+        echo(t["whisper_failed"].format(error=f"{type(exc).__name__}: {str(exc)[:200]}"))
+        return 1
+    echo(t["whisper_done"])
+    return 0
 
 
 def run_onboarding_voice_step(

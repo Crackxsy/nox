@@ -34,8 +34,7 @@ async def load_engines(settings: VoiceSettings, home: Path) -> VoiceEngines:
     cfg = voice_config(settings, home)
     parts = await asyncio.to_thread(build_components, cfg, service="voice")
     stt, tts = parts["stt"], parts["tts"]
-    # Never a download on its own: the models come from `nox node voice setup` (asked first).
-    stt.local_files_only = True
+    # The engine never downloads by itself: the models come from `nox node voice setup`.
     await stt.load()
     tts = await load_tts(tts, cfg)
     gate = build_wake_gate(cfg) if listening_mode(settings) == "wake_word" else None

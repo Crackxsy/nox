@@ -880,21 +880,30 @@ def voice_download_supertonic(
 def voice_setup(
     yes: bool = typer.Option(False, "--yes", "-y", help="do not ask before the download"),
 ) -> None:
-    """Download the configured TTS engine's model files, with progress (asks first)."""
+    """Download the speech-recognition model and the configured TTS engine's files (asks first)."""
     from nox.entrypoints import build_config
-    from nox.voice.model_setup import configured_models_root, run_voice_setup
+    from nox.voice.model_setup import configured_models_root, run_voice_setup, run_whisper_setup
 
     config = build_config(None, None)
     root = configured_models_root(config.voice.models_dir, config.paths.data_dir)
+    ask = None if yes else (lambda question: typer.confirm(question, default=True))
+    whisper_code = run_whisper_setup(
+        model=str(config.voice.stt.model),
+        directory=root / "faster-whisper",
+        privacy_mode=config.privacy.mode,
+        language=config.identity.ui_language,
+        echo=typer.echo,
+        confirm=ask,
+    )
     code = run_voice_setup(
         configured_engine=config.voice.tts.engine,
         root=root,
         privacy_mode=config.privacy.mode,
         language=config.identity.ui_language,
         echo=typer.echo,
-        confirm=None if yes else (lambda question: typer.confirm(question, default=True)),
+        confirm=ask,
     )
-    raise typer.Exit(code)
+    raise typer.Exit(whisper_code or code)
 
 
 @voice_app.command("selftest")

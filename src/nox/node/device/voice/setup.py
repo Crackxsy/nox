@@ -7,6 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from nox.node.device.voice.settings import VoiceSettings, voice_config, voice_support
+from nox.voice.models import WHISPER_REVISIONS as WHISPER_REVISIONS  # noqa: PLC0414 - re-export
+from nox.voice.models import download_whisper
 
 
 def _models_missing(exc: BaseException) -> bool:
@@ -16,28 +18,10 @@ def _models_missing(exc: BaseException) -> bool:
     return any(hint in name for name in names for hint in hints) or "missing" in str(exc)
 
 
-#: The Hugging Face revision of each faster-whisper model `nox node voice setup` fetches - a commit,
-#: so the files are exactly the ones this release was checked with, whatever `main` becomes.
-#: Read from the repositories' heads on 2026-11-12; moved on purpose, with a release.
-WHISPER_REVISIONS = {
-    "tiny": "d90ca5fe260221311c53c58e660288d3deb8d356",
-    "base": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
-    "small": "536b0662742c02347bc0e980a01041f333bce120",
-}
-
-
 def _download_whisper(model: str, target: Path) -> None:
-    """faster-whisper's own download, pinned to `WHISPER_REVISIONS`, into a plain folder
-    `<target>/whisper-<model>` - which the speech engine prefers over its cache
-    (`FasterWhisperStt._load_sync`)."""
-    from faster_whisper.utils import download_model  # noqa: PLC0415 - the extra `voice`
-
-    revision = WHISPER_REVISIONS.get(model)
-    if revision is None:
-        raise ValueError(f"no pinned revision for the model {model!r}")
-    folder = target / f"whisper-{model}"
-    folder.mkdir(parents=True, exist_ok=True)
-    download_model(model, output_dir=str(folder), revision=revision)
+    """The pinned download (`nox.voice.models.download_whisper`) into `<target>/whisper-<model>`,
+    which the speech engine prefers over its cache (`FasterWhisperStt._load_sync`)."""
+    download_whisper(model, target)
 
 
 def _download_tts(engine: str, target: Path, echo: Callable[[str], None]) -> int:
