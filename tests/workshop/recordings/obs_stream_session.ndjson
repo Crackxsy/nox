@@ -1,0 +1,12 @@
+{"seq": 0, "dir": "note", "text": "Invented OBS session: the events obs-websocket 5.x sends around a short stream and recording; scene and file names are made up."}
+{"seq": 1, "dir": "server", "event": {"eventType": "CurrentProgramSceneChanged", "eventData": {"sceneName": "Live", "sceneUuid": "00000000-0000-4000-8000-0000000000a1"}}}
+{"seq": 2, "dir": "server", "event": {"eventType": "InputMuteStateChanged", "eventData": {"inputName": "Studio Microphone", "inputUuid": "00000000-0000-4000-8000-0000000000b1", "inputMuted": false}}}
+{"seq": 3, "dir": "server", "event": {"eventType": "StreamStateChanged", "eventData": {"outputActive": true, "outputState": "OBS_WEBSOCKET_OUTPUT_STARTING"}}}
+{"seq": 4, "dir": "server", "event": {"eventType": "StreamStateChanged", "eventData": {"outputActive": true, "outputState": "OBS_WEBSOCKET_OUTPUT_STARTED"}}}
+{"seq": 5, "dir": "server", "event": {"eventType": "RecordStateChanged", "eventData": {"outputActive": true, "outputState": "OBS_WEBSOCKET_OUTPUT_STARTED", "outputPath": null}}}
+{"seq": 6, "dir": "server", "event": {"eventType": "SceneListChanged", "eventData": {"scenes": [{"sceneIndex": 1, "sceneName": "Start"}, {"sceneIndex": 0, "sceneName": "Live"}]}}}
+{"seq": 7, "dir": "server", "event": {"eventType": "CurrentProgramSceneChanged", "eventData": {"sceneName": "Pause", "sceneUuid": "00000000-0000-4000-8000-0000000000a2"}}}
+{"seq": 8, "dir": "server", "event": {"eventType": "StreamStateChanged", "eventData": {"outputActive": false, "outputState": "OBS_WEBSOCKET_OUTPUT_STOPPING"}}}
+{"seq": 9, "dir": "server", "event": {"eventType": "StreamStateChanged", "eventData": {"outputActive": false, "outputState": "OBS_WEBSOCKET_OUTPUT_STOPPED"}}}
+{"seq": 10, "dir": "server", "event": {"eventType": "RecordStateChanged", "eventData": {"outputActive": false, "outputState": "OBS_WEBSOCKET_OUTPUT_STOPPED", "outputPath": "recordings/example-session.mkv"}}}
+{"seq": 11, "dir": "server", "event": {"eventType": "ExitStarted", "eventData": {}}}
