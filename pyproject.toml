@@ -41,7 +41,7 @@ dependencies = [
     "argon2-cffi>=23.1",
     # Calendar feeds (`nox.day`): iCalendar parsing and RRULE expansion. BSD-2-Clause and
     # BSD-3-Clause/Apache-2.0 - chosen over recurring-ical-events, which is LGPL.
-    "icalendar>=6.0",
+    "icalendar>=7.3.0",
     "python-dateutil>=2.9",
     # Network access (`nox.lan`): the per-install certificate authority and the server
     # certificate the home network sees. Apache-2.0 OR BSD-3-Clause.
